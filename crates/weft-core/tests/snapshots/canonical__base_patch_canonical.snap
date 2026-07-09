@@ -1,0 +1,5 @@
+---
+source: crates/weft-core/tests/canonical.rs
+expression: base.canonical_json()
+---
+{"depends_on":[],"when":null,"ops":[{"op":"create_file","path":"README.md","content":[["# ",{"answer":"project_name"}],"","Scaffolded by weft."],"mode":420},{"op":"create_file","path":[{"answer":"project_name"},"/__init__.py"],"content":[],"mode":420}]}

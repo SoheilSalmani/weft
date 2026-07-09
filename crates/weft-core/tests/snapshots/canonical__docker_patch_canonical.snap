@@ -1,0 +1,5 @@
+---
+source: crates/weft-core/tests/canonical.rs
+expression: docker.canonical_json()
+---
+{"depends_on":["0728bd79daf430aec0de50e4fc458b4424a4d63eb0d1abd0318e4943b8dd2ef0"],"when":"use_docker","ops":[{"op":"create_file","path":"Dockerfile","content":["FROM python:3.12-slim"],"mode":420},{"op":"modify_file","path":"README.md","hunks":[{"context_before":["Scaffolded by weft."],"removed":[],"added":["","Ships with Docker."],"context_after":[]}]}]}
