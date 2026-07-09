@@ -8,6 +8,7 @@
 pub mod id;
 pub mod patch;
 pub mod question;
+pub mod render;
 pub mod segment;
 pub mod task;
 pub mod tree;

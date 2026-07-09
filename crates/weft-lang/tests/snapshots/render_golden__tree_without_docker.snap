@@ -1,0 +1,14 @@
+---
+source: crates/weft-lang/tests/render_golden.rs
+expression: show_tree(&tree)
+---
+=== README.md (mode 644)
+# My App
+
+Scaffolded by weft.
+=== pyproject.toml (mode 644)
+[project]
+name = "my-app"
+=== scripts/run.sh (mode 755)
+#!/bin/sh
+exec app

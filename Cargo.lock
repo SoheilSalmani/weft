@@ -2123,6 +2123,7 @@ dependencies = [
 name = "weft-lang"
 version = "0.1.0"
 dependencies = [
+ "insta",
  "starlark",
  "thiserror 2.0.18",
  "weft-core",

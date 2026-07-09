@@ -1,0 +1,18 @@
+---
+source: crates/weft-lang/tests/render_golden.rs
+expression: show_tree(&tree)
+---
+=== Dockerfile (mode 644)
+FROM python:3.12-slim
+=== README.md (mode 644)
+# My App
+
+Scaffolded by weft.
+
+Ships with Docker.
+=== pyproject.toml (mode 644)
+[project]
+name = "my-app"
+=== scripts/run.sh (mode 755)
+#!/bin/sh
+exec app

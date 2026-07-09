@@ -3,6 +3,29 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## M2 — Deterministic render
+
+- `weft_core::render` implements `resolve_answers` (when-gating in question
+  declaration order, provided-value type checks, Starlark defaults) and
+  `render(patches, answers, eval) -> Tree`.
+- **Core stays Starlark-free:** core defines an `ExprEval` trait; `weft-lang`
+  implements it (`StarlarkEval`). Core tests use a stub evaluator; the
+  golden-tree tests live in `weft-lang` where the real evaluator is available.
+- **Determinism:** patches apply in topological order with ties broken by
+  patch id, so the input ordering of the patch list never matters (covered by
+  a test that reverses the input and compares tree hashes).
+- **`when`-skipped patches skip their dependents transitively** rather than
+  erroring; a dependent's ops usually target files the skipped patch created.
+- Hunk application requires the rendered pattern (`context_before + removed +
+  context_after`) to match at exactly one position: zero matches and multiple
+  matches are distinct, clean errors. A fully-empty pattern means "append at
+  end of file".
+- Rendered paths are validated: relative, `/`-separated, no `..`/`.`/empty
+  components — answer values cannot escape the destination tree.
+- `starlark` 0.14 changed module construction to a scoped
+  `Module::with_temp_heap` API; evaluation happens inside that scope.
+  Secrets are never injected into the Starlark environment.
+
 ## M1 — Data model + serialization
 
 - All plan types implemented in `weft-core` with serde round-trips.

@@ -9,3 +9,6 @@ description = "Starlark evaluation for Weft conditions, defaults, and derived va
 weft-core.workspace = true
 starlark.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
