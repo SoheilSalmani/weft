@@ -3,6 +3,30 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## M6 — Hardening
+
+- `weft check` now validates: duplicate question ids, Starlark parse of every
+  `default`/`when` (questions, patches, tasks), choice lists non-empty,
+  preset files parse + reference declared non-secret questions, task graph
+  (duplicate ids, unknown deps, cycles, glob syntax, `answer:` refs), and
+  `Segment::Answer` references inside patch ops against declared questions.
+- **Commutation smoke test:** for every pair of patches with no dependency
+  path between them, render `prelude + [p, q]` and `prelude + [q, p]`
+  (prelude = topo order of the union of their ancestor closures) via a new
+  `render_ordered` core entry point that skips the self-sorting `render`
+  does — necessary because `render` itself is order-independent by
+  construction and would hide non-commutation. Trees must hash identically;
+  a failing order (e.g. both patches create the same file) also counts as
+  non-commuting.
+- Render + commutation checks need concrete answers; they resolve from
+  defaults plus `--answer/--answers-file/--preset` on `check`, and are
+  skipped with an explanatory note when unanswered questions remain.
+- `miette` skipped (plan marked it optional): errors already carry
+  patch names/ids, paths, and hunk indices via thiserror/anyhow context.
+- README written with the 5-minute tutorial driving the fixture template
+  through new → record → commit → new-with-different-answers → update →
+  check.
+
 ## M5 — `weft update` + task graph
 
 - `weft_core::merge` implements a diff3-flavored line merge: each side's

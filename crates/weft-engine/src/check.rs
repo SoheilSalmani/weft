@@ -1,0 +1,336 @@
+//! `weft check`: full template validation — manifest sanity, expression
+//! parsing, patch graph structure, and (when answers are resolvable) a full
+//! render plus a commutation smoke test over independent patch pairs.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use anyhow::{bail, Result};
+use camino::Utf8PathBuf;
+use weft_core::{AnswerId, AnswerKind, Op, Patch, PatchId, Segment, TaskInput, TemplatePath};
+use weft_lang::StarlarkEval;
+
+use crate::interact::NonInteractive;
+use crate::template::Template;
+use crate::{answers, tasks};
+
+pub struct CheckOptions {
+    pub template: Utf8PathBuf,
+    /// Optional answers to enable the render + commutation checks.
+    pub presets: Vec<String>,
+    pub answers: Vec<String>,
+    pub answers_file: Option<Utf8PathBuf>,
+}
+
+#[derive(Default)]
+pub struct CheckReport {
+    pub issues: Vec<String>,
+    pub notes: Vec<String>,
+}
+
+pub fn run(opts: &CheckOptions) -> Result<CheckReport> {
+    let template = Template::load(&opts.template)?;
+    let mut report = CheckReport::default();
+    let issue = |report: &mut CheckReport, msg: String| report.issues.push(msg);
+
+    let questions = &template.manifest.questions;
+    let declared: BTreeSet<&AnswerId> = questions.iter().map(|q| &q.id).collect();
+
+    // Questions
+    let mut seen = BTreeSet::new();
+    for q in questions {
+        if !seen.insert(&q.id) {
+            issue(&mut report, format!("duplicate question id `{}`", q.id));
+        }
+        for (what, expr) in [("default", &q.default), ("when", &q.when)] {
+            if let Some(expr) = expr {
+                if let Err(e) = weft_lang::parse_expr(expr.as_str()) {
+                    issue(
+                        &mut report,
+                        format!("question `{}`: {what} does not parse: {e}", q.id),
+                    );
+                }
+            }
+        }
+        if let AnswerKind::Choice { choices } = &q.kind {
+            if choices.is_empty() {
+                issue(&mut report, format!("question `{}` has no choices", q.id));
+            }
+        }
+    }
+
+    // Presets
+    let mut preset_names = BTreeSet::new();
+    for decl in &template.manifest.presets {
+        if !preset_names.insert(&decl.name) {
+            issue(
+                &mut report,
+                format!("duplicate preset name `{}`", decl.name),
+            );
+        }
+        match template.preset(&decl.name) {
+            Err(e) => issue(&mut report, format!("preset `{}`: {e:#}", decl.name)),
+            Ok(set) => {
+                for (id, _) in set.iter() {
+                    if !declared.contains(id) {
+                        issue(
+                            &mut report,
+                            format!("preset `{}` answers unknown question `{id}`", decl.name),
+                        );
+                    }
+                    if questions
+                        .iter()
+                        .any(|q| q.id == *id && matches!(q.kind, AnswerKind::Secret { .. }))
+                    {
+                        issue(
+                            &mut report,
+                            format!("preset `{}` sets secret question `{id}`", decl.name),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Tasks (topo_order validates duplicate ids, unknown deps, cycles)
+    if let Err(e) = tasks::topo_order(&template.manifest.tasks) {
+        issue(&mut report, format!("{e:#}"));
+    }
+    for task in &template.manifest.tasks {
+        for input in &task.inputs {
+            match input {
+                TaskInput::Glob(pattern) => {
+                    if globset::Glob::new(pattern).is_err() {
+                        issue(
+                            &mut report,
+                            format!("task `{}`: invalid glob {pattern:?}", task.id),
+                        );
+                    }
+                }
+                TaskInput::Answer(id) => {
+                    if !declared.contains(id) {
+                        issue(
+                            &mut report,
+                            format!("task `{}`: unknown answer input `{id}`", task.id),
+                        );
+                    }
+                }
+                TaskInput::Task(_) => {} // validated by topo_order
+            }
+        }
+        if let Some(when) = &task.when {
+            if let Err(e) = weft_lang::parse_expr(when.as_str()) {
+                issue(
+                    &mut report,
+                    format!("task `{}`: when does not parse: {e}", task.id),
+                );
+            }
+        }
+    }
+
+    // Patches: graph structure was validated at load; check expressions and
+    // answer references inside segments.
+    for patch in &template.patches {
+        let name = &template.id_to_name[&patch.id];
+        if let Some(when) = &patch.when {
+            if let Err(e) = weft_lang::parse_expr(when.as_str()) {
+                issue(
+                    &mut report,
+                    format!("patch `{name}`: when does not parse: {e}"),
+                );
+            }
+        }
+        for id in answer_refs(patch) {
+            if !declared.contains(&id) {
+                issue(
+                    &mut report,
+                    format!("patch `{name}` references unknown answer `{id}`"),
+                );
+            }
+        }
+    }
+
+    // Render + commutation checks need concrete answers.
+    match resolve_check_answers(&template, opts) {
+        Err(e) => report.notes.push(format!(
+            "render/commutation checks skipped (answers unavailable: {e:#}); \
+             pass --answer/--answers-file/--preset to enable them"
+        )),
+        Ok(resolved) => {
+            let eval = StarlarkEval;
+            match weft_core::render::render(&template.patches, &resolved, &eval) {
+                Err(e) => issue(&mut report, format!("full render failed: {e}")),
+                Ok(tree) => report
+                    .notes
+                    .push(format!("render ok ({} files)", tree.len())),
+            }
+            check_commutation(&template, &resolved, &mut report);
+        }
+    }
+
+    Ok(report)
+}
+
+/// Every pair of patches with no dependency path between them must commute:
+/// applying `…A B` and `…B A` has to produce byte-identical trees.
+fn check_commutation(
+    template: &Template,
+    resolved: &weft_core::AnswerSet,
+    report: &mut CheckReport,
+) {
+    let eval = StarlarkEval;
+    let patches = &template.patches;
+    let by_id: BTreeMap<PatchId, &Patch> = patches.iter().map(|p| (p.id, p)).collect();
+
+    let ancestors = |id: PatchId| -> BTreeSet<PatchId> {
+        let mut out = BTreeSet::new();
+        let mut stack = vec![id];
+        while let Some(cur) = stack.pop() {
+            if out.insert(cur) {
+                stack.extend(&by_id[&cur].depends_on);
+            }
+        }
+        out
+    };
+
+    let mut pairs_checked = 0usize;
+    for (i, p) in patches.iter().enumerate() {
+        let p_anc = ancestors(p.id);
+        for q in &patches[i + 1..] {
+            let q_anc = ancestors(q.id);
+            if p_anc.contains(&q.id) || q_anc.contains(&p.id) {
+                continue; // ordered by dependency; nothing to prove
+            }
+            // Shared prelude: all ancestors of either, minus the pair itself.
+            let prelude_ids: BTreeSet<PatchId> = p_anc
+                .union(&q_anc)
+                .copied()
+                .filter(|id| *id != p.id && *id != q.id)
+                .collect();
+            let prelude: Vec<&Patch> = match weft_core::render::patch_order(
+                &prelude_ids
+                    .iter()
+                    .map(|id| (*by_id[id]).clone())
+                    .collect::<Vec<_>>(),
+            ) {
+                Ok(order) => {
+                    let ids: Vec<PatchId> = order.iter().map(|p| p.id).collect();
+                    ids.iter().map(|id| by_id[id]).collect()
+                }
+                Err(e) => {
+                    report
+                        .issues
+                        .push(format!("commutation prelude failed: {e}"));
+                    continue;
+                }
+            };
+            let mut order_pq = prelude.clone();
+            order_pq.push(p);
+            order_pq.push(q);
+            let mut order_qp = prelude;
+            order_qp.push(q);
+            order_qp.push(p);
+
+            let name_p = &template.id_to_name[&p.id];
+            let name_q = &template.id_to_name[&q.id];
+            let render =
+                |order: &[&Patch]| weft_core::render::render_ordered(order, resolved, &eval);
+            match (render(&order_pq), render(&order_qp)) {
+                (Ok(t1), Ok(t2)) => {
+                    if t1.hash() != t2.hash() {
+                        report.issues.push(format!(
+                            "independent patches `{name_p}` and `{name_q}` do not commute: \
+                             applying them in either order produces different trees; \
+                             add an explicit dependency between them"
+                        ));
+                    }
+                }
+                (Err(e), _) | (_, Err(e)) => {
+                    report.issues.push(format!(
+                        "independent patches `{name_p}` and `{name_q}` do not commute: \
+                         one application order fails: {e}"
+                    ));
+                }
+            }
+            pairs_checked += 1;
+        }
+    }
+    report.notes.push(format!(
+        "commutation ok for {pairs_checked} independent pair(s)"
+    ));
+}
+
+/// Collect every `Segment::Answer` id used in a patch's ops.
+fn answer_refs(patch: &Patch) -> BTreeSet<AnswerId> {
+    let mut out = BTreeSet::new();
+    let visit_path = |path: &TemplatePath, out: &mut BTreeSet<AnswerId>| {
+        for seg in &path.0 {
+            if let Segment::Answer(id) = seg {
+                out.insert(id.clone());
+            }
+        }
+    };
+    let visit_lines = |lines: &[weft_core::Line], out: &mut BTreeSet<AnswerId>| {
+        for line in lines {
+            for seg in &line.0 {
+                if let Segment::Answer(id) = seg {
+                    out.insert(id.clone());
+                }
+            }
+        }
+    };
+    for op in &patch.ops {
+        match op {
+            Op::CreateFile { path, content, .. } => {
+                visit_path(path, &mut out);
+                visit_lines(&content.0, &mut out);
+            }
+            Op::ModifyFile { path, hunks } => {
+                visit_path(path, &mut out);
+                for hunk in hunks {
+                    visit_lines(&hunk.context_before, &mut out);
+                    visit_lines(&hunk.removed, &mut out);
+                    visit_lines(&hunk.added, &mut out);
+                    visit_lines(&hunk.context_after, &mut out);
+                }
+            }
+            Op::DeleteFile { path } | Op::SetMode { path, .. } => visit_path(path, &mut out),
+            Op::RenamePath { from, to } => {
+                visit_path(from, &mut out);
+                visit_path(to, &mut out);
+            }
+        }
+    }
+    out
+}
+
+fn resolve_check_answers(template: &Template, opts: &CheckOptions) -> Result<weft_core::AnswerSet> {
+    let provided = answers::layered_answers(
+        template,
+        &opts.presets,
+        opts.answers_file.as_deref(),
+        &opts.answers,
+    )?;
+    answers::gather(
+        template,
+        &provided,
+        &weft_core::AnswerSet::new(),
+        &StarlarkEval,
+        &mut NonInteractive,
+    )
+}
+
+/// CLI-facing: print the report, fail if any issues were found.
+pub fn finish(template_name: &str, report: &CheckReport) -> Result<()> {
+    for note in &report.notes {
+        eprintln!("check: {note}");
+    }
+    if report.issues.is_empty() {
+        println!("ok: template `{template_name}` passed all checks");
+        Ok(())
+    } else {
+        for issue in &report.issues {
+            eprintln!("error: {issue}");
+        }
+        bail!("check failed with {} issue(s)", report.issues.len())
+    }
+}

@@ -8,6 +8,7 @@
 
 pub mod abstraction;
 pub mod answers;
+pub mod check;
 pub mod commit;
 pub mod diff;
 pub mod fsio;

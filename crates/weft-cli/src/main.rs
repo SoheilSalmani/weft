@@ -101,11 +101,21 @@ enum Command {
         #[command(subcommand)]
         command: PresetsCommand,
     },
-    /// Validate the template manifest and patch graph.
+    /// Validate the template: manifest, expressions, patch graph, and (when
+    /// answers are available) a full render plus patch commutation.
     Check {
         /// Template directory (defaults to `.`).
         #[arg(default_value = ".")]
         template: Utf8PathBuf,
+        /// Apply a named preset for the render/commutation checks (repeatable).
+        #[arg(long = "preset")]
+        presets: Vec<String>,
+        /// Answer a question inline as KEY=VALUE (repeatable).
+        #[arg(long = "answer")]
+        answers: Vec<String>,
+        /// TOML file with answers.
+        #[arg(long = "answers-file")]
+        answers_file: Option<Utf8PathBuf>,
     },
 }
 
@@ -162,7 +172,11 @@ fn main() -> anyhow::Result<()> {
             };
             let mut interaction = auto_interaction(non_interactive);
             let report = weft_engine::update::run(&opts, interaction.as_mut())?;
-            weft_engine::update::finish(&report)
+            if opts.dry_run {
+                Ok(())
+            } else {
+                weft_engine::update::finish(&report)
+            }
         }
         Command::Record {
             template,
@@ -215,16 +229,21 @@ fn main() -> anyhow::Result<()> {
                 Ok(())
             }
         },
-        Command::Check { template } => {
-            let template = Template::load(&template)?;
-            println!(
-                "ok: template `{}` with {} question(s), {} patch(es), {} task(s)",
-                template.manifest.template.name,
-                template.manifest.questions.len(),
-                template.patches.len(),
-                template.manifest.tasks.len()
-            );
-            Ok(())
+        Command::Check {
+            template,
+            presets,
+            answers,
+            answers_file,
+        } => {
+            let name = Template::load(&template)?.manifest.template.name;
+            let opts = weft_engine::check::CheckOptions {
+                template,
+                presets,
+                answers,
+                answers_file,
+            };
+            let report = weft_engine::check::run(&opts)?;
+            weft_engine::check::finish(&name, &report)
         }
     }
 }

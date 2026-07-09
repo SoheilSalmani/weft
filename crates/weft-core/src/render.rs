@@ -260,9 +260,21 @@ pub fn render(
     eval: &dyn ExprEval,
 ) -> Result<Tree, RenderError> {
     let order = patch_order(patches)?;
+    render_ordered(&order, answers, eval)
+}
+
+/// Render with an explicit, caller-chosen application order (must be a valid
+/// linear extension of the dependency DAG — not verified here). Used by
+/// `weft check` to prove that independent patches commute: applying them in
+/// both orders must produce identical trees.
+pub fn render_ordered(
+    order: &[&Patch],
+    answers: &AnswerSet,
+    eval: &dyn ExprEval,
+) -> Result<Tree, RenderError> {
     let mut skipped: BTreeSet<PatchId> = BTreeSet::new();
     let mut tree = Tree::new();
-    for patch in order {
+    for &patch in order {
         if patch.depends_on.iter().any(|d| skipped.contains(d)) {
             skipped.insert(patch.id);
             continue;

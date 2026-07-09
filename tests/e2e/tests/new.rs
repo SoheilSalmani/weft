@@ -139,7 +139,10 @@ fn check_validates_fixture_template() {
     weft()
         .arg("check")
         .arg(hello_template())
+        .arg("--answer")
+        .arg("project_name=x")
         .assert()
         .success()
-        .stdout(predicates::str::contains("2 patch(es)"));
+        .stdout(predicates::str::contains("passed all checks"))
+        .stderr(predicates::str::contains("render ok"));
 }
