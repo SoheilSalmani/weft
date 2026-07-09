@@ -1,0 +1,166 @@
+---
+title: Tutorial
+description: The full weft loop — scaffold, record, commit, update — in ten minutes.
+---
+
+# Tutorial
+
+This walks the complete authoring and consumption loop against the fixture
+template. Every command here is exercised by the e2e test suite, so it works
+exactly as shown.
+
+## Setup
+
+```sh
+cargo build --release
+alias weft="$PWD/target/release/weft"
+
+mkdir -p /tmp/weft-tutorial && cd /tmp/weft-tutorial
+cp -r <weft-repo>/fixtures/templates/hello tpl
+```
+
+The template contains:
+
+```
+tpl/
+├── weft.toml                 # 3 questions, 1 preset, 1 task
+├── presets/no-docker.toml    # a partial answer-set: use_docker = false
+└── patches/
+    ├── base.json             # creates README.md + pyproject.toml
+    └── docker.json           # depends on base, gated on use_docker
+```
+
+## 1. Scaffold
+
+```sh
+weft new tpl app --answer "project_name=My Shop"
+```
+
+```sh
+cat app/README.md
+# # My Shop
+#
+# Scaffolded by weft.
+#
+# Ships with Docker.
+
+cat app/pyproject.toml | head -2
+# [project]
+# name = "my-shop"        ← derived by a Starlark default
+```
+
+Try the preset — presets are just layered partial answer-sets:
+
+```sh
+weft new tpl slim --preset no-docker --answer "project_name=Slim"
+ls slim                       # no Dockerfile, no docker line in README
+```
+
+## 2. Make a local edit in the app
+
+So we can later prove `update` preserves user changes:
+
+```sh
+echo "My local notes." >> app/README.md
+```
+
+## 3. Record a template change
+
+`weft record` renders a pinned base state into a scratch worktree. You edit
+*that* — your app, your shell, your dirty checkout never leak into the
+recording.
+
+```sh
+weft record --template tpl --answer "project_name=My Shop"
+# prints: tpl/.weft-record/worktree
+```
+
+Edit the worktree like any directory of files:
+
+```sh
+printf 'lint:\n\truff check my-shop\n' > tpl/.weft-record/worktree/Makefile
+```
+
+Note we typed the *concrete* value `my-shop` — no placeholder syntax.
+
+## 4. Commit with value abstraction
+
+```sh
+weft commit --template tpl --name add-makefile --yes
+# committed patch `add-makefile` with 1 op(s) to `hello`
+```
+
+Commit diffed the worktree against the base, recognized that `my-shop` is the
+current value of `package_name`, and stored the reference instead of the
+literal:
+
+```sh
+grep -o '"answer":[^}]*' tpl/patches/add-makefile.json
+# "answer":"package_name"
+```
+
+Interactively, each proposed abstraction asks for confirmation; `--yes`
+accepts all exact matches. Before writing anything, commit **replays the
+patch against the base and requires a byte-identical worktree** — ambiguous
+hunk contexts are rejected instead of persisted.
+
+## 5. Prove the abstraction
+
+Scaffold with different answers; the recorded patch adapts:
+
+```sh
+weft new tpl other --answer "project_name=Acme Store"
+cat other/Makefile
+# lint:
+#         ruff check acme-store
+```
+
+## 6. Update the existing app
+
+```sh
+weft update app --dry-run
+# dry run: update Makefile
+
+weft update app
+cat app/Makefile              # ruff check my-shop
+tail -1 app/README.md         # My local notes.   ← local edit survived
+weft update app               # update complete (0 file(s) written) — idempotent
+```
+
+## 7. See a conflict (on purpose)
+
+Change the same line on both sides:
+
+```sh
+sed -i '' 's/Scaffolded by weft./Scaffolded by ME./' app/README.md
+
+weft record --template tpl --answer "project_name=My Shop"
+sed -i '' 's/Scaffolded by weft./Scaffolded by TEMPLATE./' \
+    tpl/.weft-record/worktree/README.md
+weft commit --template tpl --name rebrand --yes
+
+weft update app               # exits nonzero
+grep -A4 '<<<<<<<' app/README.md
+# <<<<<<< local
+# Scaffolded by ME.
+# =======
+# Scaffolded by TEMPLATE.
+# >>>>>>> template
+```
+
+Nothing was clobbered; resolve the markers and move on. Tasks are skipped on
+a conflicted update and reported, so nothing runs against a half-merged tree.
+
+## 8. Validate the template
+
+```sh
+weft check tpl --answer project_name=x
+# check: render ok (4 files)
+# check: commutation ok for N independent pair(s)
+# ok: template `hello` passed all checks
+```
+
+`check` parses every Starlark expression, validates the manifest, preset, and
+task graph, verifies every answer reference in every patch, and — when
+answers are available — renders the full template and proves that every pair
+of independent patches commutes by applying them in both orders.

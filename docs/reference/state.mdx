@@ -1,0 +1,84 @@
+---
+title: State files
+description: .weft/state.toml in scaffolded projects and .weft-record/ recording sessions.
+---
+
+# State files
+
+## `.weft/state.toml` (scaffolded projects)
+
+Written by `weft new`, updated by `weft update`. This is what ties a project
+back to its template:
+
+```toml
+[state]
+template = "/abs/path/to/template"   # canonicalized at scaffold time
+base = [                             # pinned patch ids the tree was rendered from
+  "0728bd79daf4…",
+  "9c1e22ab03fd…",
+]
+tree_hash = "5b0e…"                  # blake3 of the rendered tree (pre user edits)
+
+[answers]
+project_name = "My Shop"
+package_name = "my-shop"
+use_docker = true
+
+[secrets]
+database_url = "env:DATABASE_URL"    # references only — never values
+```
+
+Semantics:
+
+- **`base`** is the update anchor: `weft update` re-renders exactly these
+  patches with `[answers]` to reconstruct the pre-edit tree, then 3-way
+  merges toward the current template state. After an update, `base` is
+  re-pinned to the full current patch set (even if conflicts remain — the
+  markers are in your tree, and re-running update won't re-apply the same
+  hunks).
+- **`[answers]`** holds concrete values for every non-secret question.
+- **`[secrets]`** maps secret question ids to their source references.
+  Values are never stored; `weft update` re-resolves each reference and only
+  prompts if the reference itself is `prompt`.
+
+The `.weft/` directory is ignored when weft reads the project tree back (so
+it never shows up in merges), as is `.git/`.
+
+## `.weft-record/` (recording sessions)
+
+Created in the *template* directory by `weft record`, deleted by a successful
+`weft commit`:
+
+```
+<template>/.weft-record/
+├── session.toml
+└── worktree/          ← edit this
+```
+
+```toml
+# session.toml
+[session]
+base = ["0728bd79daf4…"]   # pinned patch ids the worktree was rendered from
+tree_hash = "5b0e…"        # blake3 of the rendered base tree
+
+[answers]
+project_name = "My Shop"
+
+[secrets]
+api_token = "env:API_TOKEN"
+```
+
+Semantics:
+
+- The worktree starts as exactly `render(base, answers)` — the author's
+  working directory never leaks in.
+- `weft commit` re-renders the base and verifies `tree_hash` still matches;
+  if the template (or a secret's resolved value) moved underneath the
+  session, commit refuses and asks you to re-record.
+- Only one session per template; `weft record --force` discards a stale one.
+
+## Tree hashing
+
+A tree hash is blake3 over `(path, mode, content)` for every file in sorted
+path order. It's used to pin base states, verify session integrity, detect
+no-op updates, and compare trees in the commutation check.

@@ -1,0 +1,166 @@
+---
+title: CLI reference
+description: Every weft command, flag, and exit-code behavior.
+---
+
+# CLI reference
+
+```
+weft <command> [options]
+```
+
+All commands print human diagnostics to stderr; machine-usable output (like
+the record worktree path) goes to stdout. Commands that prompt detect a
+missing TTY and switch to non-interactive automatically.
+
+## `weft new`
+
+Scaffold a template into a destination directory.
+
+```
+weft new <template> [dest] [options]
+```
+
+| Argument / flag         | Default | Meaning                                             |
+| ----------------------- | ------- | --------------------------------------------------- |
+| `<template>`            | —       | path to a directory containing `weft.toml`          |
+| `[dest]`                | `.`     | destination; must not exist or be an empty dir      |
+| `--preset NAME`         | —       | apply a named preset (repeatable; later presets win) |
+| `--answer KEY=VALUE`    | —       | answer a question inline (repeatable)               |
+| `--answers-file FILE`   | —       | TOML file of answers                                |
+| `--skip-tasks`          | off     | don't run template tasks after scaffolding          |
+| `--non-interactive`     | auto    | never prompt; fail if answers are missing           |
+
+Behavior notes:
+
+- Precedence (later wins): presets in CLI order → answers file → `--answer`.
+  Duplicate `--answer` keys with different values are an error.
+- `--answer` values are coerced by the question's kind (`true/false/yes/no/1/0`
+  for bools, integers for `int`, membership check for `choice`).
+- An answer that matches no declared question is an error.
+- Secret questions cannot be answered inline — they resolve through their
+  declared source.
+- Writes `.weft/state.toml` (template path canonicalized, pinned patch ids,
+  answers with secrets as references only).
+- Runs every `when`-passing task in dependency order.
+
+## `weft update`
+
+Re-render against the current template state and 3-way merge the changes over
+local edits.
+
+```
+weft update [dest] [options]
+```
+
+| Flag                | Default | Meaning                                          |
+| ------------------- | ------- | ------------------------------------------------ |
+| `[dest]`            | `.`     | a weft-scaffolded project directory              |
+| `--dry-run`         | off     | print the file plan and task plan; change nothing |
+| `--template PATH`   | state   | override the template path stored in state       |
+| `--skip-tasks`      | off     | don't run re-fired tasks                         |
+| `--non-interactive` | auto    | never prompt for newly added questions           |
+
+Behavior notes:
+
+- Old render = pinned patch ids + stored answers. New render = all template
+  patches + answers (new questions get defaults or prompts; **stored secret
+  references re-resolve without re-prompting**).
+- Per file: template-unchanged → keep yours; you-untouched → take the
+  template's; both diverged → line-level 3-way merge.
+- Conflicts write `<<<<<<< local` / `>>>>>>> template` markers, are listed in
+  the summary, and make the command **exit nonzero**. Tasks are skipped when
+  conflicts remain.
+- Template-deleted + you-modified keeps your file; you-deleted +
+  template-modified keeps it deleted. Both are reported.
+- Running `update` twice in a row is a no-op the second time.
+
+## `weft record`
+
+Start a recording session: materialize a base state into a scratch worktree
+and print its path (stdout).
+
+```
+weft record [options]
+```
+
+| Flag                  | Default  | Meaning                                            |
+| --------------------- | -------- | -------------------------------------------------- |
+| `--template DIR`      | `.`      | the template to record against                     |
+| `--base REF`          | `latest` | `latest` (all patches) or a patch name (that patch + its ancestors) |
+| `--preset NAME`       | —        | preset for rendering the base (repeatable)         |
+| `--answer KEY=VALUE`  | —        | concrete answers for the base render (repeatable)  |
+| `--answers-file FILE` | —        | TOML file of answers                               |
+| `--force`             | off      | discard an existing session instead of failing     |
+| `--non-interactive`   | auto     | never prompt                                       |
+
+The worktree lives at `<template>/.weft-record/worktree/`. Edit it with any
+tools you like, then run `weft commit`. A second `record` without `--force`
+fails while a session is active.
+
+## `weft commit`
+
+Diff the recording worktree against its base and append the result as a new
+patch, with value abstraction.
+
+```
+weft commit [options]
+```
+
+| Flag             | Default     | Meaning                                          |
+| ---------------- | ----------- | ------------------------------------------------ |
+| `--template DIR` | `.`         | the template with the active session             |
+| `--name NAME`    | `patch-NNN` | file name for the new patch                      |
+| `--when EXPR`    | —           | Starlark condition gating the new patch          |
+| `--yes`          | off         | accept all abstraction proposals without prompting |
+
+Behavior notes:
+
+- Fails if the worktree has no changes, or if the template changed underneath
+  the session (pinned base no longer reconstructible).
+- Before writing, the candidate patch is replayed against the base and must
+  reproduce the worktree byte-for-byte; ambiguous hunk contexts are rejected.
+- The new patch depends on the leaves of the pinned base.
+- On success the session (including the worktree) is deleted.
+
+## `weft presets`
+
+```
+weft presets list [template]        # names and files, tab-separated
+weft presets show <name> [template] # the answers a preset provides (TOML)
+```
+
+## `weft check`
+
+Validate a template. Exits nonzero if any issue is found.
+
+```
+weft check [template] [options]
+```
+
+| Flag                  | Meaning                                                  |
+| --------------------- | -------------------------------------------------------- |
+| `[template]`          | template directory (default `.`)                         |
+| `--preset NAME`       | preset for the render/commutation checks (repeatable)    |
+| `--answer KEY=VALUE`  | answers for the render/commutation checks (repeatable)   |
+| `--answers-file FILE` | TOML file of answers                                     |
+
+Always checked: manifest parses; question ids unique; every
+`default`/`when` expression parses as Starlark (questions, patches, tasks);
+choice lists non-empty; presets parse, are uniquely named, reference declared
+non-secret questions; task graph has no duplicate ids, unknown references, or
+cycles; glob inputs compile; every `{"answer": id}` segment in every patch
+references a declared question; the patch DAG is acyclic with resolvable
+dependencies.
+
+When answers are resolvable (defaults plus the flags above): the full
+template renders, and every pair of **independent patches is applied in both
+orders** — the resulting trees must hash identically, otherwise the patches
+don't commute and check tells you to add a dependency.
+
+## Exit codes
+
+| Code | Meaning                                        |
+| ---- | ---------------------------------------------- |
+| 0    | success                                        |
+| ≠0   | any error; notably `update` with conflicts and `check` with issues |

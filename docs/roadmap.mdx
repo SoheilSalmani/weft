@@ -1,0 +1,68 @@
+---
+title: Roadmap
+description: What the MVP deliberately leaves out, and the intended order of what comes next.
+---
+
+# Roadmap
+
+Weft 0.1 is a complete MVP of the record/commit/render/update loop. The
+following were **deliberate non-goals** for the MVP (per the original plan)
+or scope decisions made during implementation (logged in `PROGRESS.md`).
+Rough priority order within each section.
+
+## Near term
+
+- **Rename detection in `commit`.** Moved files currently record as
+  delete + create; similarity-based detection should emit `rename_path` (the
+  op already exists in the model and renderer).
+- **`weft record --abort`** as a first-class way to discard a session
+  (today: `weft record --force` on the next session, or delete
+  `.weft-record/`).
+- **Int/bool value abstraction with confirmation.** Skipped in MVP because
+  `8080` or `true` match far too much; needs occurrence-context heuristics
+  before proposing.
+- **Minimal dependency inference at commit.** A recorded patch currently
+  depends on the leaves of its base pin; inferring the *actual* files it
+  touches would produce patches that commute more often.
+- **Richer `update` task recovery** — persist the skipped task plan on
+  conflict so a follow-up command can run it after resolution.
+
+## Medium term
+
+- **Binary file support.** The MVP is UTF-8 text only (rendering normalizes
+  trailing newlines; `record` refuses non-UTF-8). Binary content needs a
+  separate content representation and merge policy (theirs/ours/conflict,
+  no line merge).
+- **Git URL templates.** Today templates are local paths; `weft new
+  gh:org/tpl` should clone/cache and pin a revision alongside the patch ids.
+- **Structural / AST-aware merge** for known formats (TOML, JSON, YAML) so
+  two patches editing different keys of the same table commute instead of
+  conflicting on adjacent lines. The design isolates this behind hunk
+  application and `merge3`, but none of it is built.
+- **`miette` diagnostics** — pretty spans for manifest/patch errors (errors
+  already carry patch names, paths, and hunk indices as text).
+- **Windows support.** Currently untested; mode handling is a no-op off
+  Unix.
+
+## Longer term / explicitly out of scope for now
+
+- **Remote template registries** — discovery, versioning, signed patches.
+  Content-addressed patch ids are the foundation this would build on.
+- **Copier/Jinja migration tooling.** Weft will not grow a Jinja
+  compatibility layer (that is the anti-goal); a converter that renders a
+  Copier template at several answer points and *records* the diffs is the
+  plausible path.
+- **A TUI** for interactive record review — showing the diff with proposed
+  abstractions inline before commit.
+- **Patch rebase tooling** — rewriting a patch's base pin when upstream
+  patches change, with the Merkle id chain recomputed and consumers migrated.
+
+## Known sharp edges (0.1)
+
+- Rendered files always end with exactly one trailing newline; files that
+  must not (rare) will round-trip with one added.
+- Answer values shorter than 2 characters are never abstraction candidates.
+- If two answers share the same value at record time, the longest-then-
+  alphabetical rule picks one — record with distinctive values.
+- `weft check`'s commutation test is pairwise (a smoke test, not a proof
+  over all interleavings), and needs resolvable answers to run.

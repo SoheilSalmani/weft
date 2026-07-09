@@ -1,0 +1,61 @@
+---
+title: Weft
+description: Record-based project scaffolding — patches of inputs, not templates of outputs.
+---
+
+# Weft
+
+Weft is a project scaffolding engine that replaces hand-authored Jinja
+templates (Copier-style) with **recorded patches**. Instead of writing
+`{{ cookiecutter.project_name }}` into template files by hand, you edit real,
+rendered files and Weft captures the change as a patch of *inputs*: an
+answer-schema delta plus a list of context-anchored operations.
+
+```
+author edits real files ──▶ weft commit ──▶ abstracted patch
+                                              │
+user answers questions ──▶ weft new ──────────┴──▶ rendered project
+```
+
+## Why
+
+- **No template language in your files.** A template's files are ordinary
+  files; you never debug Jinja inside YAML inside Markdown.
+- **Deterministic rendering.** `render(base, answers, patches) → tree` is a
+  pure function: same inputs, byte-identical output, every time.
+- **Updates that respect your edits.** `weft update` 3-way merges template
+  evolution over local changes — conflicts get markers, never silent
+  clobbers.
+- **Composable patches.** Patches form a dependency DAG (Pijul-flavored);
+  independent patches must commute, and `weft check` proves it.
+- **Secrets stay secret.** Secret answers are stored as references
+  (`env:VAR`, `cmd:...`, `prompt`) and resolved at render time. The core
+  refuses to serialize a resolved secret — it *cannot* end up in a file.
+
+## The five ideas
+
+1. **Patches store inputs, not outputs.** A patch = (answer-schema delta,
+   operation list). Rendering is replay, not expansion.
+2. **Base-state isolation during `record`.** Recording happens in a scratch
+   worktree materialized from a pinned base state; your dirty working
+   directory never leaks in.
+3. **Value abstraction happens at `commit`.** You edit concrete files
+   ("My Demo"); on commit, Weft proposes which literals correspond to which
+   answers and stores `{"answer": "project_name"}` segments instead.
+4. **Starlark is the declarative escape hatch** for conditions, defaults, and
+   derived values. No arbitrary shell in the manifest; shell exists only
+   inside task actions.
+5. **Determinism and idempotence everywhere.** `weft update` twice in a row
+   is a no-op the second time.
+
+## Where to go next
+
+| Page                                        | What it covers                                   |
+| ------------------------------------------- | ------------------------------------------------ |
+| [Getting started](./getting-started)        | Build the binary, scaffold your first project    |
+| [Tutorial](./tutorial)                      | The full loop: new → record → commit → update    |
+| [Concepts](./concepts)                      | The model: patches, segments, hunks, the DAG     |
+| [CLI reference](./reference/cli)            | Every command and flag                           |
+| [Manifest reference](./reference/manifest)  | `weft.toml`: questions, presets, tasks           |
+| [Patch format](./reference/patch-format)    | The on-disk `patches/*.json` format              |
+| [Roadmap](./roadmap)                        | What the MVP deliberately leaves out             |

@@ -105,7 +105,7 @@ row is a no-op.
 
 ```sh
 weft check /tmp/tpl --answer project_name=x
-# check: render ok (5 files)
+# check: render ok (4 files)
 # check: commutation ok for N independent pair(s)
 # ok: template `hello` passed all checks
 ```

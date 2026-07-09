@@ -1,0 +1,95 @@
+---
+title: Authoring templates
+description: How to build and evolve a template with record/commit — and when to write patches by hand.
+---
+
+# Authoring templates
+
+## Starting a template from scratch
+
+A minimal template is a manifest and nothing else:
+
+```sh
+mkdir my-template && cd my-template
+cat > weft.toml <<'EOF'
+[template]
+name = "my-template"
+weft-version = "0.1"
+
+[[question]]
+id = "project_name"
+kind = "string"
+prompt = "Project name"
+EOF
+```
+
+With zero patches, the base state is an empty tree. Record the initial
+scaffold as your first patch:
+
+```sh
+weft record --answer "project_name=Demo Project"
+# → .weft-record/worktree (empty)
+
+# create the initial files with your normal tools
+cd .weft-record/worktree
+git init -q . && uv init …            # whatever produces real files
+cd ../..
+
+weft commit --name base --yes
+```
+
+Everything the tool generated that contains "Demo Project" or any other
+answer value gets abstracted on commit. From then on, the template renders
+that scaffold for any answers.
+
+## Evolving a template
+
+Each meaningful change is one recorded patch:
+
+```sh
+weft record --answer "project_name=Demo Project"
+# edit .weft-record/worktree — add a linter config, change CI, whatever
+weft commit --name add-ruff --yes
+```
+
+Guidelines:
+
+- **One concern per patch.** Patches are the unit of composition, gating
+  (`when`), and conflict — small patches compose better.
+- **Pick answers that make abstraction unambiguous.** Record with
+  distinctive values ("Demo Project", not "test"): short or overlapping
+  values produce false abstraction candidates you'll have to decline.
+- **Gate optional features with `--when`.**
+  `weft commit --name docker --when use_docker` makes the whole patch
+  conditional on an answer.
+- **Record against the right base.** `--base latest` (default) stacks on
+  everything; `--base <patch-name>` records against just that patch's
+  ancestor closure, producing a patch independent of later ones — it can
+  then commute with them.
+- **Run `weft check` after every commit** (with answers, so the render and
+  commutation checks run). If two patches don't commute, add a dependency —
+  check tells you exactly which pair failed.
+
+## When to hand-write a patch
+
+The JSON format is designed to be writable (deps by name, literal strings for
+literal lines — see [Patch format](../reference/patch-format)). Hand-writing
+makes sense for:
+
+- test fixtures,
+- mechanical tweaks to an existing patch (fixing a typo in `added` lines),
+- patches using `{"expr": ...}` segments, which `commit` never generates
+  (abstraction only proposes direct answer references).
+
+After hand-editing, always run `weft check` — ids are recomputed from
+content, so there's nothing to update manually, but the render/commutation
+checks will catch a broken hunk.
+
+## What commit does *not* do (yet)
+
+- No rename detection: a moved file records as delete + create. If you want a
+  real `rename_path` op, write it by hand.
+- Ints and bools are not abstraction candidates (too collision-prone); only
+  string/choice values and secrets are proposed.
+- The author's `when` conditions and dependencies beyond the base leaves are
+  yours to declare — weft doesn't guess intent.

@@ -1,0 +1,91 @@
+---
+title: Updating projects
+description: How weft update merges template evolution over local edits, and how to handle conflicts.
+---
+
+# Updating projects
+
+`weft update` brings a scaffolded project up to the current state of its
+template while preserving local edits. It is a real 3-way merge, not a
+re-render-and-overwrite.
+
+## The three trees
+
+```
+base   = render(pinned patches, stored answers)     # what you scaffolded from
+ours   = your project directory as it is now        # includes local edits
+theirs = render(all patches, updated answers)       # current template state
+```
+
+`base` is reproducible because `.weft/state.toml` pins the exact patch ids
+and answers, and rendering is deterministic. That's the whole trick.
+
+## Per-file decision table
+
+| Situation                            | Result                              |
+| ------------------------------------ | ----------------------------------- |
+| template unchanged (`base == theirs`)| keep yours, untouched               |
+| you untouched (`ours == base`)       | take the template's version         |
+| both changed, edits don't overlap    | line-level merge, both applied      |
+| both changed the same lines          | **conflict**: markers written, nonzero exit |
+| template deleted, you modified       | keep your file (reported)           |
+| you deleted, template modified       | keep it deleted (reported)          |
+
+Nothing is ever silently clobbered.
+
+## Conflicts
+
+```
+<<<<<<< local
+your version of the lines
+=======
+the template's version
+>>>>>>> template
+```
+
+When conflicts occur:
+
+- the command exits nonzero and lists every conflicted file,
+- **tasks are skipped** (nothing runs against a half-merged tree) and
+  reported so you can re-run them after resolving,
+- state is still re-pinned to the new template — the markers are in your
+  tree; re-running `update` will not re-apply the same hunks or duplicate
+  markers.
+
+Resolve the markers with your editor, then re-run any skipped tasks manually
+(or make a trivial template change and update again).
+
+## New questions
+
+If the template gained questions since you scaffolded:
+
+- questions with defaults are filled silently,
+- default-less questions prompt (or fail with the exact `--answer` flag to
+  pass under `--non-interactive`),
+- **secret references stored in state re-resolve without re-prompting** — an
+  `env:VAR` secret just reads the variable again.
+
+## Tasks on update
+
+Tasks re-fire based on **declared inputs**, computed between the old and new
+renders (your local edits don't trigger tasks):
+
+- `glob:pyproject.toml` fires only if that file differs between the two
+  renders,
+- `answer:use_docker` fires only if the answer's value changed,
+- `task:uv-sync` fires if the upstream task fired.
+
+Use `--dry-run` to see both the file plan and the task plan before touching
+anything:
+
+```sh
+weft update app --dry-run
+# dry run: update Makefile
+# dry run: would run task `uv-sync`
+```
+
+## Idempotence
+
+`weft update` twice in a row is a no-op the second time — the pinned state
+equals the current template state, so `base == theirs` for every file. The
+second run reports `0 file(s) written`.

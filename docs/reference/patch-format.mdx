@@ -1,0 +1,127 @@
+---
+title: Patch format
+description: The on-disk patches/*.json format — ops, segments, hunks, and content addressing.
+---
+
+# Patch format (`patches/*.json`)
+
+Every file in a template's `patches/` directory is one patch. Patches are
+normally written by `weft commit`, but the format is deliberately
+hand-writable — test fixtures and small tweaks can be authored directly.
+
+## Top level
+
+```json
+{
+  "depends_on": ["base"],
+  "when": "use_docker",
+  "ops": [ ... ]
+}
+```
+
+| Field        | Required | Meaning                                             |
+| ------------ | -------- | --------------------------------------------------- |
+| `depends_on` | no       | **names** of other patches (their file stems)       |
+| `when`       | no       | Starlark gate; false skips this patch and its dependents |
+| `ops`        | yes      | operation list, applied in order                    |
+
+### Names vs ids
+
+On disk, dependencies are referenced by *name* so files stay hand-writable —
+you can't hand-compute a blake3 hash. At load time weft resolves names to
+content ids: a patch's id is the blake3 hash of its canonical serialization
+(sorted dep ids + `when` + `ops`), so ids form a Merkle DAG and are recomputed
+(and thereby validated) on every load. The id is never stored in the file.
+
+## Operations
+
+Applied sequentially against the in-memory tree. Paths are tree-relative,
+`/`-separated; rendered paths must not escape the tree (no `..`, no absolute
+paths).
+
+### `create_file`
+
+```json
+{
+  "op": "create_file",
+  "path": "README.md",
+  "content": ["# hello", ["Project: ", {"answer": "project_name"}]],
+  "mode": 420
+}
+```
+
+- Errors if the path already exists.
+- `mode` is optional (default `420` = `0o644`; use `493` = `0o755` for
+  executables).
+
+### `modify_file`
+
+```json
+{
+  "op": "modify_file",
+  "path": "README.md",
+  "hunks": [
+    {
+      "context_before": ["Scaffolded by weft."],
+      "removed": [],
+      "added": ["", "Ships with Docker."],
+      "context_after": []
+    }
+  ]
+}
+```
+
+Hunks are context-anchored (see below). Errors if the file doesn't exist.
+
+### `delete_file`, `rename_path`, `set_mode`
+
+```json
+{"op": "delete_file", "path": "old.txt"}
+{"op": "rename_path", "from": "a.txt", "to": "b.txt"}
+{"op": "set_mode", "path": "scripts/run.sh", "mode": 493}
+```
+
+All error if the source path is missing; `rename_path` also errors if the
+target exists.
+
+## Segments
+
+Paths and content lines are sequences of segments:
+
+| JSON form           | Meaning                                       |
+| ------------------- | --------------------------------------------- |
+| `"literal text"`    | literal                                       |
+| `{"answer": "id"}`  | substitute the answer's value at render time  |
+| `{"expr": "..."}`   | evaluate a Starlark expression at render time |
+
+Shorthands keep files readable:
+
+- a **line** that is fully literal may be written as a plain string instead
+  of an array of segments;
+- a **path** that is fully literal may be written as a plain string.
+
+**Content** is an array of lines (line-granular segments). Rendered files are
+normalized to end with exactly one trailing newline; empty content renders to
+an empty file.
+
+## Hunk semantics
+
+The rendered pattern `context_before + removed + context_after` must match at
+**exactly one** position in the target file:
+
+- zero matches → clean error ("the file diverged from what the patch was
+  recorded against")
+- multiple matches → clean error ("context is ambiguous")
+- a fully-empty pattern appends `added` at end of file
+
+All four hunk fields default to `[]` and may be omitted. Hunk lines are
+segment lines too — context recorded from abstracted content carries the
+abstraction, which is what makes hunks match under different answers.
+
+## Canonical form and hashing
+
+The canonical serialization is compact JSON with a fixed key order
+(`depends_on` sorted, then `when`, then `ops`). Two patches with the same
+canonical bytes have the same id. `weft check` recomputes everything from the
+files, so there is no way for a stored id to drift from its content — there
+is no stored id.

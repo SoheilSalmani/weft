@@ -1,0 +1,72 @@
+---
+title: Starlark expressions
+description: Where Starlark appears in weft, what's in scope, and the value model.
+---
+
+# Starlark expressions
+
+Weft embeds [Starlark](https://github.com/bazelbuild/starlark) (the
+`starlark-rust` implementation) as its declarative expression language. There
+is deliberately **no shell in the manifest** — Starlark covers conditions,
+defaults, and derived values; shell exists only inside task `action`s.
+
+## Where expressions appear
+
+| Location                     | Field     | Evaluates to                       |
+| ---------------------------- | --------- | ---------------------------------- |
+| `[[question]]`               | `default` | the question's value when unanswered |
+| `[[question]]`               | `when`    | truthy = ask, falsy = skip         |
+| `[[task]]`                   | `when`    | truthy = eligible to fire          |
+| patch (`patches/*.json`)     | `when`    | truthy = apply, falsy = skip patch + dependents |
+| content segment              | `{"expr": "..."}` | text substituted at render time |
+| `weft commit`                | `--when`  | gate stored on the new patch       |
+
+## Scope
+
+Every resolved **answer is a global variable** named by its question id:
+
+```python
+project_name.lower().replace(' ', '-')
+workers * 2
+use_docker and registry != ''
+```
+
+Rules:
+
+- Question `default`/`when` expressions see answers to *earlier* questions
+  only (declaration order).
+- Patch/task `when` and content `expr` see the full resolved answer set.
+- **Secret values are never injected** into the interpreter — an expression
+  referencing a secret answer fails. Secrets are opaque to the expression
+  language by design; they can only flow into file content via
+  `{"answer": id}` segments.
+- The standard Starlark library is available (`Globals::standard()`):
+  string methods, arithmetic, comparisons, `if`/`else` expressions, etc.
+
+## Value model
+
+Expressions produce one of three types, matching weft's answer values:
+
+| Starlark result | weft value | rendered text        |
+| --------------- | ---------- | -------------------- |
+| `bool`          | bool       | `True` / `False`     |
+| `int`           | int        | decimal              |
+| `string`        | string     | as-is                |
+
+Anything else (lists, dicts, `None`, functions) is an error with the offending
+type named.
+
+**Truthiness** for `when` gates follows Starlark: `False`, `0`, and `""` are
+falsy; everything else is truthy.
+
+## Gotchas
+
+- TOML strings wrap Starlark source, so a *string literal* default needs
+  inner quotes: `default = "'api'"`. Bool literals are capitalized:
+  `default = "True"`.
+- Referencing an undefined name (a question that doesn't exist, or one whose
+  `when` gate was false) is an evaluation error — weft reports the expression
+  and which field it came from.
+- `weft check` parse-checks every expression in the template without
+  evaluating it, so syntax errors are caught even when no answers are
+  available.
