@@ -6,12 +6,17 @@
 
 #![forbid(unsafe_code)]
 
+pub mod abstraction;
 pub mod answers;
+pub mod commit;
+pub mod diff;
 pub mod fsio;
 pub mod interact;
 pub mod manifest;
 pub mod new;
+pub mod record;
 pub mod secrets;
+pub mod session;
 pub mod state;
 pub mod tasks;
 pub mod template;

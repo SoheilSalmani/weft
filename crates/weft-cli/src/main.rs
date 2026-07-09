@@ -36,6 +36,47 @@ enum Command {
         #[arg(long)]
         non_interactive: bool,
     },
+    /// Start a recording session: materialize a base state into a scratch
+    /// worktree and print its path.
+    Record {
+        /// Template directory (defaults to `.`).
+        #[arg(long, default_value = ".")]
+        template: Utf8PathBuf,
+        /// Base state: `latest` or a patch name (that patch + ancestors).
+        #[arg(long, default_value = "latest")]
+        base: String,
+        /// Apply a named preset when rendering the base (repeatable).
+        #[arg(long = "preset")]
+        presets: Vec<String>,
+        /// Answer a question inline as KEY=VALUE (repeatable).
+        #[arg(long = "answer")]
+        answers: Vec<String>,
+        /// TOML file with answers.
+        #[arg(long = "answers-file")]
+        answers_file: Option<Utf8PathBuf>,
+        /// Discard an existing session instead of failing.
+        #[arg(long)]
+        force: bool,
+        /// Never prompt; fail if answers are missing.
+        #[arg(long)]
+        non_interactive: bool,
+    },
+    /// Diff the recording worktree against its base and append the result as
+    /// a new patch (with value abstraction).
+    Commit {
+        /// Template directory (defaults to `.`).
+        #[arg(long, default_value = ".")]
+        template: Utf8PathBuf,
+        /// Name for the new patch (defaults to patch-NNN).
+        #[arg(long)]
+        name: Option<String>,
+        /// Starlark condition gating the new patch.
+        #[arg(long)]
+        when: Option<String>,
+        /// Accept all abstraction proposals without prompting.
+        #[arg(long)]
+        yes: bool,
+    },
     /// List or show template presets.
     Presets {
         #[command(subcommand)]
@@ -86,6 +127,42 @@ fn main() -> anyhow::Result<()> {
             };
             let mut interaction = auto_interaction(non_interactive);
             weft_engine::new::run(&opts, interaction.as_mut())
+        }
+        Command::Record {
+            template,
+            base,
+            presets,
+            answers,
+            answers_file,
+            force,
+            non_interactive,
+        } => {
+            let opts = weft_engine::record::RecordOptions {
+                template,
+                base,
+                presets,
+                answers,
+                answers_file,
+                force,
+            };
+            let mut interaction = auto_interaction(non_interactive);
+            let worktree = weft_engine::record::run(&opts, interaction.as_mut())?;
+            weft_engine::record::announce(&worktree);
+            Ok(())
+        }
+        Command::Commit {
+            template,
+            name,
+            when,
+            yes,
+        } => {
+            let opts = weft_engine::commit::CommitOptions {
+                template,
+                name,
+                when,
+            };
+            let mut interaction = auto_interaction(yes);
+            weft_engine::commit::run(&opts, interaction.as_mut())
         }
         Command::Presets { command } => match command {
             PresetsCommand::List { template } => {

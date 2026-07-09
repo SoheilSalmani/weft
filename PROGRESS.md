@@ -3,6 +3,36 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## M4 — `record` / `commit`
+
+- `weft record` renders the pinned base into
+  `<template>/.weft-record/worktree/` and stores `session.toml` (pinned patch
+  ids, base tree hash, answers with secrets as refs only). A second `record`
+  without `--force` fails. **Deviation:** the worktree lives inside the
+  template dir rather than a tempdir so the session survives across
+  processes; "drop user into it" is a printed path (stdout) instead of
+  spawning a shell — e2e-testable and shell-agnostic.
+- `--base <ref>` accepts `latest` (default) or a patch name, pinning that
+  patch's ancestor closure.
+- `weft commit` re-renders the base (verifying the stored tree hash),
+  diffs the worktree with `similar` grouped ops (context radius 2; change
+  runs closer than the radius merge into one hunk so hunks never step on
+  each other's context), and runs the value-abstraction pass.
+- **Abstraction decisions:** string/choice answer values of length ≥ 2 are
+  candidates (ints/bools skipped in MVP — too collision-prone); longest
+  value wins on overlap; abstraction applies to *context and removed lines
+  too*, because a context line derived from an abstracted segment must
+  itself be abstracted or it won't match under different answers. Secret
+  values are abstracted unconditionally (a literal secret in a patch file
+  would be persistence). Interactive runs confirm per answer; `--yes` /
+  non-interactive accepts exact matches.
+- **Commit self-validation:** before writing, the candidate patch is
+  replayed against the base and must reproduce the worktree byte-for-byte
+  (catches ambiguous hunk contexts); the session's base leaves become the
+  new patch's `depends_on`.
+- Renames are recorded as delete+create in MVP (no rename detection);
+  `RenamePath` stays in the model for hand-written/future patches.
+
 ## M3 — `weft new`
 
 - Engine grew `template` (loading `weft.toml` + `patches/*.json`), `answers`
