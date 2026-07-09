@@ -1,0 +1,11 @@
+[package]
+name = "weft-lang"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Starlark evaluation for Weft conditions, defaults, and derived values"
+
+[dependencies]
+weft-core.workspace = true
+starlark.workspace = true
+thiserror.workspace = true

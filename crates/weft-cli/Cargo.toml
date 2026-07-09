@@ -1,0 +1,17 @@
+[package]
+name = "weft-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Weft command-line interface"
+
+[[bin]]
+name = "weft"
+path = "src/main.rs"
+
+[dependencies]
+weft-core.workspace = true
+weft-engine.workspace = true
+anyhow.workspace = true
+camino.workspace = true
+clap.workspace = true

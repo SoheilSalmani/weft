@@ -1,0 +1,44 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/weft-core",
+    "crates/weft-engine",
+    "crates/weft-lang",
+    "crates/weft-cli",
+    "tests/e2e",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = ""
+
+[workspace.dependencies]
+weft-core = { path = "crates/weft-core" }
+weft-engine = { path = "crates/weft-engine" }
+weft-lang = { path = "crates/weft-lang" }
+
+anyhow = "1"
+blake3 = "1"
+camino = { version = "1", features = ["serde1"] }
+clap = { version = "4", features = ["derive"] }
+dialoguer = "0.11"
+globset = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+similar = "2"
+starlark = "0.14"
+tempfile = "3"
+thiserror = "2"
+toml = "0.8"
+
+# dev
+assert_cmd = "2"
+insta = { version = "1", features = ["json"] }
+predicates = "3"
+proptest = "1"
+
+[profile.release]
+lto = true
+strip = true

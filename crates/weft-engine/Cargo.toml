@@ -1,0 +1,25 @@
+[package]
+name = "weft-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Weft record/commit/apply/update orchestration and worktree management"
+
+[dependencies]
+weft-core.workspace = true
+weft-lang.workspace = true
+anyhow.workspace = true
+blake3.workspace = true
+camino.workspace = true
+dialoguer.workspace = true
+globset.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+similar.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+tempfile.workspace = true

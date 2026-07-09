@@ -1,0 +1,20 @@
+[package]
+name = "weft-e2e"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Full-binary end-to-end tests for weft"
+
+# NOTE: `assert_cmd::Command::cargo_bin("weft")` locates the binary built by the
+# workspace; run these via `cargo test --workspace` so weft-cli is built first.
+
+[dependencies]
+
+[dev-dependencies]
+anyhow.workspace = true
+assert_cmd.workspace = true
+predicates.workspace = true
+tempfile.workspace = true
+toml.workspace = true
+serde_json.workspace = true
