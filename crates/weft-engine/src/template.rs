@@ -1,0 +1,186 @@
+use std::collections::BTreeMap;
+
+use anyhow::{bail, Context, Result};
+use camino::{Utf8Path, Utf8PathBuf};
+use serde::{Deserialize, Serialize};
+use weft_core::{AnswerSet, Op, Patch, PatchId, StarlarkExpr};
+
+use crate::manifest::Manifest;
+
+pub const MANIFEST_FILE: &str = "weft.toml";
+pub const PATCHES_DIR: &str = "patches";
+
+/// On-disk patch file (`patches/<name>.json`). Dependencies are referenced by
+/// *name* (another patch's file stem) so fixture patches stay hand-writable;
+/// content ids are recomputed on load, which is also what validates them.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PatchFile {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<StarlarkExpr>,
+    pub ops: Vec<Op>,
+}
+
+/// A loaded template: manifest plus the patch DAG with resolved ids.
+#[derive(Debug)]
+pub struct Template {
+    pub root: Utf8PathBuf,
+    pub manifest: Manifest,
+    /// In name-resolution (topological) order.
+    pub patches: Vec<Patch>,
+    pub name_to_id: BTreeMap<String, PatchId>,
+    pub id_to_name: BTreeMap<PatchId, String>,
+}
+
+impl Template {
+    pub fn load(root: &Utf8Path) -> Result<Self> {
+        let manifest_path = root.join(MANIFEST_FILE);
+        let manifest_src = std::fs::read_to_string(&manifest_path).with_context(|| {
+            format!("`{manifest_path}` not found: is `{root}` a weft template?")
+        })?;
+        let manifest: Manifest =
+            toml::from_str(&manifest_src).with_context(|| format!("parsing {manifest_path}"))?;
+
+        let mut files: BTreeMap<String, PatchFile> = BTreeMap::new();
+        let patches_dir = root.join(PATCHES_DIR);
+        if patches_dir.is_dir() {
+            for entry in patches_dir
+                .read_dir_utf8()
+                .with_context(|| format!("reading {patches_dir}"))?
+            {
+                let entry = entry?;
+                let path = entry.path();
+                if path.extension() != Some("json") {
+                    continue;
+                }
+                let stem = path
+                    .file_stem()
+                    .context("patch file has no name")?
+                    .to_owned();
+                let src =
+                    std::fs::read_to_string(path).with_context(|| format!("reading {path}"))?;
+                let file: PatchFile =
+                    serde_json::from_str(&src).with_context(|| format!("parsing patch {path}"))?;
+                files.insert(stem, file);
+            }
+        }
+
+        let (patches, name_to_id) = resolve_patches(files)?;
+        let id_to_name = name_to_id.iter().map(|(n, id)| (*id, n.clone())).collect();
+        Ok(Template {
+            root: root.to_owned(),
+            manifest,
+            patches,
+            name_to_id,
+            id_to_name,
+        })
+    }
+
+    pub fn preset_names(&self) -> Vec<&str> {
+        self.manifest
+            .presets
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect()
+    }
+
+    /// Load one preset's partial answer set.
+    pub fn preset(&self, name: &str) -> Result<AnswerSet> {
+        let decl = self
+            .manifest
+            .presets
+            .iter()
+            .find(|p| p.name == name)
+            .with_context(|| {
+                format!(
+                    "template `{}` has no preset `{name}` (available: {})",
+                    self.manifest.template.name,
+                    self.preset_names().join(", ")
+                )
+            })?;
+        let path = self.root.join(&decl.file);
+        let src = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading preset file {path}"))?;
+        let answers: AnswerSet =
+            toml::from_str(&src).with_context(|| format!("parsing preset file {path}"))?;
+        Ok(answers)
+    }
+
+    /// Write a new patch file and return its resolved id. `depends_on` are
+    /// patch names that must already exist.
+    pub fn write_patch(
+        &self,
+        name: &str,
+        depends_on: Vec<String>,
+        when: Option<StarlarkExpr>,
+        ops: Vec<Op>,
+    ) -> Result<PatchId> {
+        if self.name_to_id.contains_key(name) {
+            bail!("patch `{name}` already exists in this template");
+        }
+        let dep_ids: Vec<PatchId> = depends_on
+            .iter()
+            .map(|n| {
+                self.name_to_id
+                    .get(n)
+                    .copied()
+                    .with_context(|| format!("unknown patch dependency `{n}`"))
+            })
+            .collect::<Result<_>>()?;
+        let patch = Patch::new(dep_ids, when.clone(), ops.clone());
+        let file = PatchFile {
+            depends_on,
+            when,
+            ops,
+        };
+        let dir = self.root.join(PATCHES_DIR);
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("{name}.json"));
+        let mut json = serde_json::to_string_pretty(&file)?;
+        json.push('\n');
+        std::fs::write(&path, json).with_context(|| format!("writing {path}"))?;
+        Ok(patch.id)
+    }
+}
+
+/// Resolve name-based dependencies into content-addressed patches, in
+/// topological order. Deterministic: ready names are processed in sorted
+/// order.
+fn resolve_patches(
+    files: BTreeMap<String, PatchFile>,
+) -> Result<(Vec<Patch>, BTreeMap<String, PatchId>)> {
+    for (name, file) in &files {
+        for dep in &file.depends_on {
+            if !files.contains_key(dep) {
+                bail!("patch `{name}` depends on unknown patch `{dep}`");
+            }
+        }
+    }
+    let mut resolved: BTreeMap<String, PatchId> = BTreeMap::new();
+    let mut patches = Vec::with_capacity(files.len());
+    let mut remaining = files;
+    while !remaining.is_empty() {
+        let ready: Vec<String> = remaining
+            .iter()
+            .filter(|(_, f)| f.depends_on.iter().all(|d| resolved.contains_key(d)))
+            .map(|(n, _)| n.clone())
+            .collect();
+        if ready.is_empty() {
+            let names: Vec<_> = remaining.keys().cloned().collect();
+            bail!("patch dependency cycle among: {}", names.join(", "));
+        }
+        for name in ready {
+            let file = remaining.remove(&name).expect("ready name present");
+            let dep_ids = file
+                .depends_on
+                .iter()
+                .map(|d| resolved[d])
+                .collect::<Vec<_>>();
+            let patch = Patch::new(dep_ids, file.when, file.ops);
+            resolved.insert(name, patch.id);
+            patches.push(patch);
+        }
+    }
+    Ok((patches, resolved))
+}

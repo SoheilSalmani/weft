@@ -1,0 +1,29 @@
+[template]
+name = "hello"
+weft-version = "0.1"
+
+[[question]]
+id = "project_name"
+kind = "string"
+prompt = "Project name"
+
+[[question]]
+id = "package_name"
+kind = "string"
+prompt = "Package name"
+default = "project_name.lower().replace(' ', '-')"
+
+[[question]]
+id = "use_docker"
+kind = "bool"
+prompt = "Ship a Dockerfile?"
+default = "True"
+
+[[preset]]
+name = "no-docker"
+file = "presets/no-docker.toml"
+
+[[task]]
+id = "mark-synced"
+inputs = ["glob:pyproject.toml"]
+action = "echo synced > .task-ran"

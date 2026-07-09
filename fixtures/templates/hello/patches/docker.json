@@ -1,0 +1,24 @@
+{
+  "depends_on": ["base"],
+  "when": "use_docker",
+  "ops": [
+    {
+      "op": "create_file",
+      "path": "Dockerfile",
+      "content": [
+        "FROM python:3.12-slim",
+        ["COPY . /app/", { "answer": "package_name" }]
+      ]
+    },
+    {
+      "op": "modify_file",
+      "path": "README.md",
+      "hunks": [
+        {
+          "context_before": ["Scaffolded by weft."],
+          "added": ["", "Ships with Docker."]
+        }
+      ]
+    }
+  ]
+}

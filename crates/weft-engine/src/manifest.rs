@@ -1,0 +1,30 @@
+use camino::Utf8PathBuf;
+use serde::{Deserialize, Serialize};
+use weft_core::{Question, Task};
+
+/// The parsed `weft.toml` at a template root.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Manifest {
+    pub template: TemplateMeta,
+    #[serde(default, rename = "question", skip_serializing_if = "Vec::is_empty")]
+    pub questions: Vec<Question>,
+    #[serde(default, rename = "preset", skip_serializing_if = "Vec::is_empty")]
+    pub presets: Vec<PresetDecl>,
+    #[serde(default, rename = "task", skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<Task>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TemplateMeta {
+    pub name: String,
+    #[serde(rename = "weft-version")]
+    pub weft_version: String,
+}
+
+/// A named, layered partial answer-set. The file is a plain TOML map of
+/// answer id to value, relative to the template root.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PresetDecl {
+    pub name: String,
+    pub file: Utf8PathBuf,
+}

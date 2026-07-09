@@ -1,0 +1,22 @@
+{
+  "ops": [
+    {
+      "op": "create_file",
+      "path": "README.md",
+      "content": [
+        ["# ", { "answer": "project_name" }],
+        "",
+        "Scaffolded by weft."
+      ]
+    },
+    {
+      "op": "create_file",
+      "path": "pyproject.toml",
+      "content": [
+        "[project]",
+        ["name = \"", { "answer": "package_name" }, "\""],
+        "version = \"0.1.0\""
+      ]
+    }
+  ]
+}

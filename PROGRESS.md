@@ -3,6 +3,32 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## M3 — `weft new`
+
+- Engine grew `template` (loading `weft.toml` + `patches/*.json`), `answers`
+  (layering + coercion + gathering), `interact` (an `Interaction` trait with
+  dialoguer-backed and non-interactive impls), `secrets`, `state`, `fsio`,
+  `tasks`, and the `new` orchestration; CLI wires `new`, `presets list|show`,
+  and a `check` that at least fully loads/validates the template.
+- **Patch file format decision:** `patches/<name>.json` reference deps by
+  *name* (file stem), and content ids are recomputed on load — this keeps
+  fixture patches hand-writable (you can't hand-compute a blake3 id). Core
+  patch ids remain content-addressed; the name→id resolution happens at load.
+- **Precedence:** presets (CLI order) → answers file → `--answer` flags →
+  secrets/defaults/prompts during gather. Duplicate `--answer` keys with
+  different values are an error (equal precedence conflict); a `--answer`
+  naming a nonexistent question is an error.
+- Questions with defaults are auto-filled rather than prompted; only
+  default-less unanswered questions prompt. Non-interactive runs (no TTY or
+  `--non-interactive`) fail with the exact `--answer` flag to pass.
+- Secrets can't be provided via presets/answers files (the reference comes
+  from the question's declared source); state stores only the spec string
+  under `[secrets]`.
+- On first scaffold all `when`-passing tasks fire in declaration-stable topo
+  order (`task:` inputs create ordering edges); changed-input filtering
+  arrives with `weft update` in M5.
+- `weft new` refuses a non-empty destination.
+
 ## M2 — Deterministic render
 
 - `weft_core::render` implements `resolve_answers` (when-gating in question

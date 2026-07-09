@@ -2068,6 +2068,7 @@ dependencies = [
  "anyhow",
  "camino",
  "clap",
+ "toml",
  "weft-core",
  "weft-engine",
 ]

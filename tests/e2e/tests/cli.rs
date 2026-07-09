@@ -14,6 +14,12 @@ fn version_prints() {
 }
 
 #[test]
-fn check_stub_runs() {
-    weft().arg("check").assert().success();
+fn check_outside_template_fails_helpfully() {
+    let dir = tempfile::tempdir().unwrap();
+    weft()
+        .arg("check")
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("weft template"));
 }
