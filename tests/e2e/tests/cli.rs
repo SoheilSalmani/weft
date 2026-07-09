@@ -1,8 +1,4 @@
-use assert_cmd::Command;
-
-fn weft() -> Command {
-    Command::cargo_bin("weft").expect("weft binary built by workspace")
-}
+use weft_e2e::weft;
 
 #[test]
 fn version_prints() {

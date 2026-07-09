@@ -4,11 +4,7 @@
 use std::fs;
 use std::path::Path;
 
-use assert_cmd::Command;
-
-fn weft() -> Command {
-    Command::cargo_bin("weft").expect("weft binary built by workspace")
-}
+use weft_e2e::weft;
 
 fn write_template(root: &Path, patches: &[(&str, &str)]) {
     fs::create_dir_all(root.join("patches")).unwrap();

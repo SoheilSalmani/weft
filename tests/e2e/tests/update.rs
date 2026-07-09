@@ -5,11 +5,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use assert_cmd::Command;
-
-fn weft() -> Command {
-    Command::cargo_bin("weft").expect("weft binary built by workspace")
-}
+use weft_e2e::weft;
 
 fn fixture_template() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/templates/hello")

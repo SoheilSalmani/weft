@@ -10,6 +10,7 @@ description = "Full-binary end-to-end tests for weft"
 # workspace; run these via `cargo test --workspace` so weft-cli is built first.
 
 [dependencies]
+assert_cmd.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
