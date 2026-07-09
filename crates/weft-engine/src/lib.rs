@@ -20,3 +20,4 @@ pub mod session;
 pub mod state;
 pub mod tasks;
 pub mod template;
+pub mod update;

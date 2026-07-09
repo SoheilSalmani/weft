@@ -96,6 +96,7 @@ fn coerce(kind: &AnswerKind, raw: &str) -> Result<Value> {
 pub fn gather(
     template: &Template,
     provided: &AnswerSet,
+    presolved_secrets: &AnswerSet,
     eval: &dyn ExprEval,
     interaction: &mut dyn Interaction,
 ) -> Result<AnswerSet> {
@@ -111,6 +112,12 @@ pub fn gather(
             }
         }
         if let AnswerKind::Secret { source } = &q.kind {
+            if let Some(v) = presolved_secrets.get(&q.id) {
+                // `weft update` re-resolves stored secret references before
+                // gathering, so it never re-prompts for a resolvable ref.
+                resolved.insert(q.id.clone(), v.clone());
+                continue;
+            }
             if provided.contains(&q.id) {
                 bail!(
                     "secret `{}` cannot be answered via presets/answers files; \

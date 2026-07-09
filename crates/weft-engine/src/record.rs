@@ -46,7 +46,13 @@ pub fn run(opts: &RecordOptions, interaction: &mut dyn Interaction) -> Result<Ut
         opts.answers_file.as_deref(),
         &opts.answers,
     )?;
-    let resolved = answers::gather(&template, &provided, &eval, interaction)?;
+    let resolved = answers::gather(
+        &template,
+        &provided,
+        &weft_core::AnswerSet::new(),
+        &eval,
+        interaction,
+    )?;
 
     let pinned = pin_base(&template, &opts.base)?;
     let base_patches: Vec<_> = template

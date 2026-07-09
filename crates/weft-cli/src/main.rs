@@ -36,6 +36,25 @@ enum Command {
         #[arg(long)]
         non_interactive: bool,
     },
+    /// Re-render against the current template state and 3-way merge the
+    /// changes over local edits.
+    Update {
+        /// Scaffolded project directory (defaults to `.`).
+        #[arg(default_value = ".")]
+        dest: Utf8PathBuf,
+        /// Print the plan without changing anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Use this template path instead of the one stored in state.
+        #[arg(long)]
+        template: Option<Utf8PathBuf>,
+        /// Do not run template tasks after merging.
+        #[arg(long)]
+        skip_tasks: bool,
+        /// Never prompt; fail if new questions lack answers.
+        #[arg(long)]
+        non_interactive: bool,
+    },
     /// Start a recording session: materialize a base state into a scratch
     /// worktree and print its path.
     Record {
@@ -127,6 +146,23 @@ fn main() -> anyhow::Result<()> {
             };
             let mut interaction = auto_interaction(non_interactive);
             weft_engine::new::run(&opts, interaction.as_mut())
+        }
+        Command::Update {
+            dest,
+            dry_run,
+            template,
+            skip_tasks,
+            non_interactive,
+        } => {
+            let opts = weft_engine::update::UpdateOptions {
+                dest,
+                dry_run,
+                template_override: template,
+                skip_tasks,
+            };
+            let mut interaction = auto_interaction(non_interactive);
+            let report = weft_engine::update::run(&opts, interaction.as_mut())?;
+            weft_engine::update::finish(&report)
         }
         Command::Record {
             template,

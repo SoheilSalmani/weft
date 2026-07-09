@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod id;
+pub mod merge;
 pub mod patch;
 pub mod question;
 pub mod render;

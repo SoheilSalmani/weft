@@ -3,6 +3,33 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## M5 — `weft update` + task graph
+
+- `weft_core::merge` implements a diff3-flavored line merge: each side's
+  edits against the base are computed with `similar`, overlapping (or
+  touching) edit regions are absorbed into one region, and regions where both
+  sides produce different text become `<<<<<<< local` / `>>>>>>> template`
+  conflicts. Identical edits on both sides merge cleanly.
+- `weft update`: old render = pinned patches + stored answers; new render =
+  all patches + answers extended for any new questions (defaults/prompts;
+  stored secret *references* re-resolve without re-prompting, per the plan).
+  Per file: template-unchanged → keep ours; user-untouched → take theirs;
+  both diverged → `merge3` with conflict markers and a summary, nonzero exit.
+- Deletion policy on divergence: template-deleted + user-modified keeps the
+  user's file; user-deleted + template-modified keeps it deleted. Both are
+  reported as notes, never silent.
+- State is re-pinned to the new template even when conflicts remain (the
+  markers are in the tree; re-running update won't re-apply the same hunks).
+- **Task refire:** a `ChangeSet` of paths differing between the two renders
+  plus answers whose values changed (secret values are opaque — only
+  presence changes count). Tasks fire only if a `glob:` input matches a
+  changed path, an `answer:` input changed, or an upstream `task:` input
+  fired; tasks are skipped entirely when conflicts remain. `--dry-run`
+  prints the file plan and task plan and touches nothing.
+- Idempotence covered by e2e: second `update` writes 0 files.
+- `weft new` now stores the template path canonicalized so `update` works
+  from any cwd.
+
 ## M4 — `record` / `commit`
 
 - `weft record` renders the pinned base into

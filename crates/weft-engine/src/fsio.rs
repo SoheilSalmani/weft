@@ -19,6 +19,16 @@ pub fn write_tree(dest: &Utf8Path, tree: &Tree) -> Result<()> {
     Ok(())
 }
 
+/// Write a single file (creating parent dirs) with its mode.
+pub fn write_file(dest: &Utf8Path, rel: &Utf8Path, entry: &FileEntry) -> Result<()> {
+    let target = dest.join(rel);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&target, &entry.content).with_context(|| format!("writing {target}"))?;
+    set_mode(&target, entry.mode)
+}
+
 /// Read a directory back into a `Tree`, skipping `.weft/` and `.git/`.
 /// MVP is text-only: non-UTF-8 files are an error with a clear message.
 pub fn read_tree(root: &Utf8Path) -> Result<Tree> {

@@ -31,7 +31,13 @@ pub fn run(opts: &NewOptions, interaction: &mut dyn Interaction) -> Result<()> {
         opts.answers_file.as_deref(),
         &opts.answers,
     )?;
-    let resolved = answers::gather(&template, &provided, &eval, interaction)?;
+    let resolved = answers::gather(
+        &template,
+        &provided,
+        &weft_core::AnswerSet::new(),
+        &eval,
+        interaction,
+    )?;
 
     let tree = weft_core::render::render(&template.patches, &resolved, &eval)
         .context("rendering template")?;
@@ -50,8 +56,13 @@ pub fn run(opts: &NewOptions, interaction: &mut dyn Interaction) -> Result<()> {
             _ => None,
         })
         .collect();
+    // Absolutize so `weft update` works from any cwd later.
+    let template_abs = opts
+        .template
+        .canonicalize_utf8()
+        .unwrap_or_else(|_| opts.template.clone());
     let state = State::new(
-        opts.template.to_string(),
+        template_abs.to_string(),
         template.patches.iter().map(|p| p.id).collect(),
         tree.hash(),
         &resolved,
