@@ -2068,6 +2068,7 @@ dependencies = [
  "anyhow",
  "camino",
  "clap",
+ "serde_json",
  "toml",
  "weft-core",
  "weft-engine",

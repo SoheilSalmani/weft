@@ -15,4 +15,5 @@ weft-engine.workspace = true
 anyhow.workspace = true
 camino.workspace = true
 clap.workspace = true
+serde_json.workspace = true
 toml.workspace = true

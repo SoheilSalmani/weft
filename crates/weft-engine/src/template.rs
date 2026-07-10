@@ -107,6 +107,22 @@ impl Template {
         Ok(answers)
     }
 
+    /// A patch's ancestor closure (the patch itself plus everything it
+    /// transitively depends on). Ids must exist in this template.
+    pub fn ancestor_closure(&self, id: PatchId) -> std::collections::BTreeSet<PatchId> {
+        let by_id: BTreeMap<PatchId, &Patch> = self.patches.iter().map(|p| (p.id, p)).collect();
+        let mut closure = std::collections::BTreeSet::new();
+        let mut stack = vec![id];
+        while let Some(cur) = stack.pop() {
+            if closure.insert(cur) {
+                if let Some(patch) = by_id.get(&cur) {
+                    stack.extend(&patch.depends_on);
+                }
+            }
+        }
+        closure
+    }
+
     /// Write a new patch file and return its resolved id. `depends_on` are
     /// patch names that must already exist.
     pub fn write_patch(

@@ -24,15 +24,16 @@ pub fn weft_path() -> PathBuf {
         let bin = target_dir
             .join("debug")
             .join(format!("weft{}", std::env::consts::EXE_SUFFIX));
-        if !bin.exists() {
-            let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-            let status = std::process::Command::new(cargo)
-                .args(["build", "-p", "weft-cli"])
-                .current_dir(&workspace_root)
-                .status()
-                .expect("spawning `cargo build -p weft-cli`");
-            assert!(status.success(), "building the weft binary failed");
-        }
+        // Always build: `cargo test` compiles the bin's test harness but does
+        // not necessarily (re-)uplift the executable, so an existing binary
+        // can be stale. The incremental no-op build costs well under a second.
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let status = std::process::Command::new(cargo)
+            .args(["build", "-p", "weft-cli"])
+            .current_dir(&workspace_root)
+            .status()
+            .expect("spawning `cargo build -p weft-cli`");
+        assert!(status.success(), "building the weft binary failed");
         assert!(
             bin.exists(),
             "weft binary still not found at {} after `cargo build -p weft-cli`",

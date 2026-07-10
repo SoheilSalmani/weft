@@ -101,6 +101,28 @@ enum Command {
         #[command(subcommand)]
         command: PresetsCommand,
     },
+    /// Show the template's patch graph (nodes, dependency edges, and — when
+    /// answers are supplied — which patches are active).
+    Graph {
+        /// Template directory (defaults to `.`).
+        #[arg(default_value = ".")]
+        template: Utf8PathBuf,
+        /// Apply a named preset (repeatable).
+        #[arg(long = "preset")]
+        presets: Vec<String>,
+        /// Answer a question inline as KEY=VALUE (repeatable).
+        #[arg(long = "answer")]
+        answers: Vec<String>,
+        /// TOML file with answers.
+        #[arg(long = "answers-file")]
+        answers_file: Option<Utf8PathBuf>,
+        /// Print the graph document as JSON instead of a text summary.
+        #[arg(long)]
+        json: bool,
+        /// Show what one patch (by name) contributes under the answers.
+        #[arg(long = "diff")]
+        diff: Option<String>,
+    },
     /// Validate the template: manifest, expressions, patch graph, and (when
     /// answers are available) a full render plus patch commutation.
     Check {
@@ -229,6 +251,98 @@ fn main() -> anyhow::Result<()> {
                 Ok(())
             }
         },
+        Command::Graph {
+            template,
+            presets,
+            answers,
+            answers_file,
+            json,
+            diff,
+        } => {
+            use weft_engine::interact::NonInteractive;
+            let template = Template::load(&template)?;
+            let eval = weft_engine::eval();
+
+            // Resolve answers when any were supplied, or when defaults alone
+            // suffice; otherwise fall back to a structural (no-answers) graph.
+            let flags_given = !presets.is_empty() || !answers.is_empty() || answers_file.is_some();
+            let provided = weft_engine::answers::layered_answers(
+                &template,
+                &presets,
+                answers_file.as_deref(),
+                &answers,
+            )?;
+            let placeholders =
+                weft_engine::answers::placeholder_secrets(&template.manifest.questions);
+            let resolved = match weft_engine::answers::gather(
+                &template,
+                &provided,
+                &placeholders,
+                &eval,
+                &mut NonInteractive,
+            ) {
+                Ok(resolved) => Some(resolved),
+                Err(e) if flags_given => return Err(e),
+                Err(_) => None,
+            };
+
+            if let Some(patch_name) = diff {
+                let resolved = resolved.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "--diff needs a complete answer set; pass --answer/--answers-file/--preset"
+                    )
+                })?;
+                let node_diff =
+                    weft_engine::graph::node_diff(&template, &patch_name, &resolved, &eval)?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&node_diff)?);
+                } else {
+                    eprintln!(
+                        "patch `{}` ({}) — {}",
+                        node_diff.name,
+                        node_diff.id.short(),
+                        if node_diff.active {
+                            "active"
+                        } else {
+                            "inactive under these answers"
+                        }
+                    );
+                    for file in &node_diff.files {
+                        println!("{}", file.diff);
+                    }
+                }
+                return Ok(());
+            }
+
+            let doc = weft_engine::graph::graph_doc(&template, resolved.as_ref(), &eval)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&doc)?);
+            } else {
+                println!(
+                    "template `{}` — {} node(s), {} edge(s)",
+                    doc.template.name,
+                    doc.nodes.len(),
+                    doc.edges.len()
+                );
+                for node in &doc.nodes {
+                    let state = match node.active {
+                        Some(true) => " [active]",
+                        Some(false) => " [inactive]",
+                        None => "",
+                    };
+                    let when = node
+                        .when
+                        .as_deref()
+                        .map(|w| format!(" when={w}"))
+                        .unwrap_or_default();
+                    println!("• {} ({}){}{}", node.name, node.id.short(), when, state);
+                    for op in &node.ops {
+                        println!("    {} {}", op.kind, op.path);
+                    }
+                }
+            }
+            Ok(())
+        }
         Command::Check {
             template,
             presets,

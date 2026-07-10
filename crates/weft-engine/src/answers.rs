@@ -88,6 +88,23 @@ fn coerce(kind: &AnswerKind, raw: &str) -> Result<Value> {
     })
 }
 
+/// Placeholder values for every secret question, for previews (`weft graph`,
+/// UIs) that must never resolve real secrets. Pass as `presolved_secrets` to
+/// [`gather`]; the rendered output shows `<secret:id>` where the value would
+/// go.
+pub fn placeholder_secrets(questions: &[Question]) -> AnswerSet {
+    questions
+        .iter()
+        .filter(|q| matches!(q.kind, AnswerKind::Secret { .. }))
+        .map(|q| {
+            (
+                q.id.clone(),
+                Value::Secret(weft_core::SecretValue::new(format!("<secret:{}>", q.id))),
+            )
+        })
+        .collect()
+}
+
 /// Walk questions in declaration order and produce the complete answer set:
 /// `when`-gated questions are skipped, provided answers win, secrets resolve
 /// through their source, defaults evaluate, and anything left is prompted.

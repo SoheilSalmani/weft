@@ -123,6 +123,38 @@ Behavior notes:
 - The new patch depends on the leaves of the pinned base.
 - On success the session (including the worktree) is deleted.
 
+## `weft graph`
+
+Show the template's patch graph: nodes (patches), dependency edges, and —
+when answers are supplied — which patches are active under their `when`
+gates.
+
+```
+weft graph [template] [options]
+```
+
+| Flag                  | Meaning                                                    |
+| --------------------- | ---------------------------------------------------------- |
+| `[template]`          | template directory (default `.`)                           |
+| `--json`              | print the full graph document as JSON (for tooling/UIs)    |
+| `--diff PATCH`        | show what one patch (by name) contributes, as unified diffs |
+| `--preset NAME`       | preset for active-state computation (repeatable)           |
+| `--answer KEY=VALUE`  | answers for active-state computation (repeatable)          |
+| `--answers-file FILE` | TOML file of answers                                       |
+
+Behavior notes:
+
+- Without answers (and when defaults alone can't resolve every question) the
+  graph is structural: nodes report `active: null`.
+- With answers, active state mirrors rendering exactly: a patch is inactive
+  when its `when` gate is false or any dependency is inactive.
+- `--diff` renders the patch's ancestor closure with and without the patch
+  and diffs the trees — "what does this node do" under the given answers. A
+  gated-off patch still shows its would-be contribution (and reports
+  `active: false`).
+- Secret questions are given placeholder values (`<secret:id>`); `weft graph`
+  never resolves real secrets.
+
 ## `weft presets`
 
 ```

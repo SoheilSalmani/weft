@@ -116,17 +116,7 @@ fn pin_base(template: &Template, base: &str) -> Result<BTreeSet<PatchId>> {
                 .join(", ")
         )
     })?;
-    // Ancestor closure of the named patch.
-    let by_id: BTreeMap<PatchId, &weft_core::Patch> =
-        template.patches.iter().map(|p| (p.id, p)).collect();
-    let mut pinned = BTreeSet::new();
-    let mut stack = vec![root];
-    while let Some(id) = stack.pop() {
-        if pinned.insert(id) {
-            stack.extend(&by_id[&id].depends_on);
-        }
-    }
-    Ok(pinned)
+    Ok(template.ancestor_closure(root))
 }
 
 /// Leaves of the pinned base: patches no *other pinned* patch depends on.

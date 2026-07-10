@@ -3,6 +3,21 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — `weft graph`
+
+- New `weft-engine::graph` module: `GraphDoc` (nodes/edges/questions/presets,
+  serializable) and `node_diff` (render a patch's ancestor closure with and
+  without the patch, diff the trees). Powers the `weft graph` CLI command and
+  is the foundation for graph-based UIs (weft-cloud).
+- Active-state computation mirrors `render`'s skip logic exactly; without a
+  resolvable answer set the graph is structural (`active: null`).
+- `answers::placeholder_secrets` provides `<secret:id>` stand-ins so
+  graph/preview paths never resolve real secrets.
+- `Template::ancestor_closure` extracted from `record::pin_base` for reuse.
+- e2e helper fix: always run `cargo build -p weft-cli` (incremental) before
+  the tests — `cargo test` builds the bin's test harness but doesn't reliably
+  uplift the executable, so an existing binary could be stale.
+
 ## M6 — Hardening
 
 - `weft check` now validates: duplicate question ids, Starlark parse of every
