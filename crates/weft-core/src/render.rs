@@ -189,14 +189,23 @@ pub fn unanswered<'q>(
         if let Some(v) = provided.get(&q.id) {
             resolved.insert(q.id.clone(), v.clone());
         } else if let Some(default) = &q.default {
-            let value = eval
-                .eval(default, &resolved)
-                .map_err(|e| RenderError::Eval {
-                    expr: default.0.clone(),
-                    context: format!("default of question `{}`", q.id),
-                    source: e,
-                })?;
-            resolved.insert(q.id.clone(), value);
+            match eval.eval(default, &resolved) {
+                Ok(value) => {
+                    resolved.insert(q.id.clone(), value);
+                }
+                // A default referencing an already-missing answer can't be
+                // computed yet; it will resolve once that answer is provided,
+                // so it isn't itself "missing". With nothing missing so far,
+                // the failure is a genuine expression error.
+                Err(_) if !missing.is_empty() => {}
+                Err(e) => {
+                    return Err(RenderError::Eval {
+                        expr: default.0.clone(),
+                        context: format!("default of question `{}`", q.id),
+                        source: e,
+                    })
+                }
+            }
         } else {
             missing.push(q);
         }
