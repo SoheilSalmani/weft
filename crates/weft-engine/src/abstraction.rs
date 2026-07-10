@@ -23,6 +23,19 @@ pub struct Abstractor {
     subs: Vec<Sub>,
 }
 
+/// One abstraction proposal: this concrete text occurs in the diff and
+/// matches this answer's current value.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Candidate {
+    pub id: AnswerId,
+    /// The concrete text (for secrets this is the resolved value — callers
+    /// exposing candidates externally should use placeholder secrets).
+    pub text: String,
+    pub occurrences: usize,
+    /// Secrets: must be abstracted, never optional.
+    pub mandatory: bool,
+}
+
 impl Abstractor {
     /// Candidates: string/choice answers of length ≥ 2 (shorter values
     /// false-positive too easily; ints/bools are not abstracted in MVP) plus
@@ -53,34 +66,61 @@ impl Abstractor {
         Self { subs }
     }
 
+    /// The candidates that actually occur in `texts`, for callers that drive
+    /// confirmation themselves (a web UI, a `--yes` batch run, …). Mandatory
+    /// candidates (secrets) must always be applied.
+    pub fn candidates(&self, texts: &[&str]) -> Vec<Candidate> {
+        self.subs
+            .iter()
+            .filter_map(|sub| {
+                let occurrences: usize = texts.iter().map(|t| t.matches(&sub.text).count()).sum();
+                (occurrences > 0).then(|| Candidate {
+                    id: sub.id.clone(),
+                    text: sub.text.clone(),
+                    occurrences,
+                    mandatory: sub.mandatory,
+                })
+            })
+            .collect()
+    }
+
+    /// Turn external per-candidate decisions into the confirmed map used by
+    /// the substitution methods. Mandatory candidates are always applied;
+    /// undecided ones default to `true` (exact matches are the
+    /// high-confidence default).
+    pub fn confirmed_from_decisions(
+        &self,
+        texts: &[&str],
+        decisions: &BTreeMap<AnswerId, bool>,
+    ) -> BTreeMap<AnswerId, bool> {
+        self.candidates(texts)
+            .into_iter()
+            .map(|c| {
+                let yes = c.mandatory || decisions.get(&c.id).copied().unwrap_or(true);
+                (c.id, yes)
+            })
+            .collect()
+    }
+
     /// Ask the user which non-mandatory candidates that actually occur in
     /// `texts` should be abstracted. Returns the confirmed candidate ids.
-    /// Non-interactive runs confirm everything (exact matches are the
-    /// high-confidence default).
+    /// Non-interactive runs confirm everything.
     pub fn confirm(
         &self,
         texts: &[&str],
         interaction: &mut dyn Interaction,
     ) -> Result<BTreeMap<AnswerId, bool>> {
         let mut confirmed = BTreeMap::new();
-        for sub in &self.subs {
-            let occurrences: usize = texts.iter().map(|t| t.matches(&sub.text).count()).sum();
-            if occurrences == 0 {
-                confirmed.insert(sub.id.clone(), false);
-                continue;
-            }
-            let yes = if sub.mandatory {
-                true
-            } else {
-                interaction.confirm(
+        for candidate in self.candidates(texts) {
+            let yes = candidate.mandatory
+                || interaction.confirm(
                     &format!(
                         "abstract {} occurrence(s) of {:?} as answer `{}`?",
-                        occurrences, sub.text, sub.id
+                        candidate.occurrences, candidate.text, candidate.id
                     ),
                     true,
-                )?
-            };
-            confirmed.insert(sub.id.clone(), yes);
+                )?;
+            confirmed.insert(candidate.id, yes);
         }
         Ok(confirmed)
     }

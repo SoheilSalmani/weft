@@ -12,18 +12,10 @@ use crate::interact::Interaction;
 
 const CONTEXT_RADIUS: usize = 2;
 
-/// Diff two trees and build ops. Runs the abstraction confirmation over all
-/// texts the ops will contain, then substitutes confirmed answers everywhere
-/// (including context lines — a context line that came from an abstracted
-/// segment must be abstracted too, or it won't match under other answers).
-pub fn build_ops(
-    base: &Tree,
-    work: &Tree,
-    abstractor: &Abstractor,
-    interaction: &mut dyn Interaction,
-) -> Result<Vec<Op>> {
-    // Collect everything that will appear in the patch so confirmation sees
-    // the whole picture at once.
+/// Everything that will appear in the patch (paths, changed content, base
+/// content of modified files), so abstraction confirmation sees the whole
+/// picture at once.
+pub fn collect_texts<'t>(base: &'t Tree, work: &'t Tree) -> Vec<&'t str> {
     let mut texts: Vec<&str> = Vec::new();
     for (path, entry) in work.iter() {
         match base.get(path) {
@@ -42,14 +34,38 @@ pub fn build_ops(
     for path in base.paths().filter(|p| work.get(p).is_none()) {
         texts.push(path.as_str());
     }
-    let confirmed = abstractor.confirm(&texts, interaction)?;
+    texts
+}
 
+/// Diff two trees and build ops. Runs the abstraction confirmation over all
+/// texts the ops will contain, then substitutes confirmed answers everywhere
+/// (including context lines — a context line that came from an abstracted
+/// segment must be abstracted too, or it won't match under other answers).
+pub fn build_ops(
+    base: &Tree,
+    work: &Tree,
+    abstractor: &Abstractor,
+    interaction: &mut dyn Interaction,
+) -> Result<Vec<Op>> {
+    let texts = collect_texts(base, work);
+    let confirmed = abstractor.confirm(&texts, interaction)?;
+    Ok(build_ops_with(base, work, abstractor, &confirmed))
+}
+
+/// [`build_ops`] with the abstraction decisions supplied by the caller
+/// (e.g. a web UI) instead of an interactive prompt loop.
+pub fn build_ops_with(
+    base: &Tree,
+    work: &Tree,
+    abstractor: &Abstractor,
+    confirmed: &BTreeMap<AnswerId, bool>,
+) -> Vec<Op> {
     let mut ops = Vec::new();
 
     // Deletions first (sorted by path via Tree's BTreeMap).
     for path in base.paths().filter(|p| work.get(p).is_none()) {
         ops.push(Op::DeleteFile {
-            path: abstractor.path(path.as_str(), &confirmed),
+            path: abstractor.path(path.as_str(), confirmed),
         });
     }
     // Then modifications.
@@ -57,16 +73,16 @@ pub fn build_ops(
         if let Some(base_entry) = base.get(path) {
             if base_entry.content != entry.content {
                 let hunks = hunks_between(&base_entry.content, &entry.content, |line| {
-                    abstractor.line(line, &confirmed)
+                    abstractor.line(line, confirmed)
                 });
                 ops.push(Op::ModifyFile {
-                    path: abstractor.path(path.as_str(), &confirmed),
+                    path: abstractor.path(path.as_str(), confirmed),
                     hunks,
                 });
             }
             if base_entry.mode != entry.mode {
                 ops.push(Op::SetMode {
-                    path: abstractor.path(path.as_str(), &confirmed),
+                    path: abstractor.path(path.as_str(), confirmed),
                     mode: entry.mode,
                 });
             }
@@ -76,13 +92,13 @@ pub fn build_ops(
     for (path, entry) in work.iter() {
         if base.get(path).is_none() {
             ops.push(Op::CreateFile {
-                path: abstractor.path(path.as_str(), &confirmed),
-                content: abstract_content(&entry.content, abstractor, &confirmed),
+                path: abstractor.path(path.as_str(), confirmed),
+                content: abstract_content(&entry.content, abstractor, confirmed),
                 mode: entry.mode,
             });
         }
     }
-    Ok(ops)
+    ops
 }
 
 fn abstract_content(
