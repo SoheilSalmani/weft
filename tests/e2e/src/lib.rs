@@ -1,33 +1,46 @@
 //! Shared helpers for the e2e integration tests.
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
-/// Path to the `weft` binary built by `cargo test --workspace`.
+/// Path to the `weft` binary, building it if necessary.
 ///
 /// `assert_cmd`'s `cargo_bin` heuristic derives the artifact dir from the
-/// test executable's location, which breaks on cargo ≥1.91's separated
-/// build-dir layout (and `CARGO_BIN_EXE_weft` is only set for the package
-/// that owns the binary, which this one doesn't). Final binaries are always
-/// uplifted to `<target-dir>/debug/`, so resolve that explicitly.
+/// test executable's location, and `CARGO_BIN_EXE_weft` is only set for the
+/// package that owns the binary (not this one). Worse, newer cargo's
+/// separated build-dir layout doesn't uplift bins to `<target-dir>/debug/`
+/// during `cargo test` at all. So: resolve the uplift path explicitly and
+/// run `cargo build -p weft-cli` ourselves when the binary isn't there —
+/// that command always uplifts, on every cargo version.
 pub fn weft_path() -> PathBuf {
-    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("..")
-                .join("..")
-                .join("target")
-        });
-    let bin = target_dir
-        .join("debug")
-        .join(format!("weft{}", std::env::consts::EXE_SUFFIX));
-    assert!(
-        bin.exists(),
-        "weft binary not found at {}; run the e2e tests via `cargo test --workspace` \
-         so weft-cli is built first",
-        bin.display()
-    );
-    bin
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
+        let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| workspace_root.join("target"));
+        let bin = target_dir
+            .join("debug")
+            .join(format!("weft{}", std::env::consts::EXE_SUFFIX));
+        if !bin.exists() {
+            let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+            let status = std::process::Command::new(cargo)
+                .args(["build", "-p", "weft-cli"])
+                .current_dir(&workspace_root)
+                .status()
+                .expect("spawning `cargo build -p weft-cli`");
+            assert!(status.success(), "building the weft binary failed");
+        }
+        assert!(
+            bin.exists(),
+            "weft binary still not found at {} after `cargo build -p weft-cli`",
+            bin.display()
+        );
+        bin
+    })
+    .clone()
 }
 
 /// An `assert_cmd` command for the `weft` binary.
