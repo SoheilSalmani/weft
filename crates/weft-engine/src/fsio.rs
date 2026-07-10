@@ -53,9 +53,16 @@ fn read_dir_into(root: &Utf8Path, dir: &Utf8Path, tree: &mut Tree) -> Result<()>
             read_dir_into(root, path, tree)?;
         } else if file_type.is_file() {
             let bytes = std::fs::read(path)?;
-            let content = String::from_utf8(bytes).map_err(|_| {
+            let mut content = String::from_utf8(bytes).map_err(|_| {
                 anyhow::anyhow!("`{path}` is not UTF-8 text; weft MVP handles text files only")
             })?;
+            // Weft's text model normalizes files to exactly one trailing
+            // newline (rendering always produces that). Apply the same rule
+            // on read, or editor-written files without a final newline make
+            // replay-vs-worktree comparisons fail spuriously.
+            if !content.is_empty() && !content.ends_with('\n') {
+                content.push('\n');
+            }
             let mode = get_mode(path)?;
             let rel: Utf8PathBuf = path
                 .strip_prefix(root)
@@ -109,4 +116,29 @@ fn get_mode(path: &Utf8Path) -> Result<u32> {
 #[cfg(not(unix))]
 fn get_mode(_path: &Utf8Path) -> Result<u32> {
     Ok(DEFAULT_FILE_MODE)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_tree_normalizes_missing_trailing_newline() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = camino::Utf8Path::from_path(dir.path()).unwrap();
+        std::fs::write(root.join("no-newline.txt"), "hello world").unwrap();
+        std::fs::write(root.join("with-newline.txt"), "hello\n").unwrap();
+        std::fs::write(root.join("empty.txt"), "").unwrap();
+
+        let tree = read_tree(root).unwrap();
+        assert_eq!(
+            tree.get("no-newline.txt".into()).unwrap().content,
+            "hello world\n"
+        );
+        assert_eq!(
+            tree.get("with-newline.txt".into()).unwrap().content,
+            "hello\n"
+        );
+        assert_eq!(tree.get("empty.txt".into()).unwrap().content, "");
+    }
 }
