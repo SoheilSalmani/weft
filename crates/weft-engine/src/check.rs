@@ -259,8 +259,10 @@ fn check_commutation(
     ));
 }
 
-/// Collect every `Segment::Answer` id used in a patch's ops.
-fn answer_refs(patch: &Patch) -> BTreeSet<AnswerId> {
+/// Collect every `Segment::Answer` id used in a patch's ops. Public
+/// because it is generic impact tooling (weft-cloud uses it for question
+/// reference analysis).
+pub fn answer_refs(patch: &Patch) -> BTreeSet<AnswerId> {
     let mut out = BTreeSet::new();
     let visit_path = |path: &TemplatePath, out: &mut BTreeSet<AnswerId>| {
         for seg in &path.0 {
