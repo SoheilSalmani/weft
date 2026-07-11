@@ -67,8 +67,13 @@ configuration through its `settings.json.schemas` LSP settings.
 One server, every editor: live `weft check` diagnostics published to the
 files each issue names, completion for answer ids (inside `{"answer": …}`,
 `when`/`default` strings) and dependency names, hover with question/patch
-metadata, and go-to-definition from an answer reference to its
-`[[question]]` (and dep names to patch files).
+metadata, go-to-definition from an answer reference to its
+`[[question]]` (and dep names to patch files), and **inlay hints**: virtual
+text next to every `{"answer": …}` / `{"expr": …}` segment (and `default =`
+expressions in weft.toml) showing the value it renders to under the
+template's example/default answers — `{"answer": "package_name"}` reads as
+`⇒ my-demo` inline. The weft.nvim shim enables hints automatically; in
+VSCode they follow `editor.inlayHints.enabled`.
 
 ### VSCode
 

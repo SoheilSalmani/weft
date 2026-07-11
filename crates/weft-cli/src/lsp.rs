@@ -14,6 +14,7 @@ use tokio::sync::Mutex;
 use tower_lsp::jsonrpc::Result as LspResult;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
+use weft_core::render::ExprEval;
 use weft_engine::template::Template;
 
 pub struct Backend {
@@ -184,6 +185,78 @@ impl Backend {
     }
 }
 
+/// Best-effort preview answers for inlay hints: walk questions in
+/// declaration order preferring `example` (parsed by kind) over the
+/// evaluated `default` over a kind-appropriate stand-in — so
+/// `{"answer": "project_name"}` previews as its example ("My Demo") rather
+/// than a generic placeholder.
+fn preview_answers(template: &Template) -> weft_core::AnswerSet {
+    use weft_core::{AnswerKind, Value};
+    let eval = weft_engine::eval();
+    let mut resolved = weft_core::AnswerSet::new();
+    for q in &template.manifest.questions {
+        if let Some(when) = &q.when {
+            if !eval.eval_bool(when, &resolved).unwrap_or(false) {
+                continue;
+            }
+        }
+        let from_example = q.example.as_ref().and_then(|e| match &q.kind {
+            AnswerKind::String => Some(Value::String(e.clone())),
+            AnswerKind::Int => e.parse().ok().map(Value::Int),
+            AnswerKind::Bool => match e.as_str() {
+                "true" | "True" => Some(Value::Bool(true)),
+                "false" | "False" => Some(Value::Bool(false)),
+                _ => None,
+            },
+            AnswerKind::Choice { choices } => choices.contains(e).then(|| Value::String(e.clone())),
+            AnswerKind::Secret { .. } => None,
+        });
+        let value = from_example
+            .or_else(|| {
+                q.default
+                    .as_ref()
+                    .and_then(|d| eval.eval(d, &resolved).ok())
+            })
+            .or_else(|| match &q.kind {
+                AnswerKind::String => Some(Value::String(format!("<{}>", q.id))),
+                AnswerKind::Bool => Some(Value::Bool(true)),
+                AnswerKind::Int => Some(Value::Int(1)),
+                AnswerKind::Choice { choices } => choices.first().cloned().map(Value::String),
+                AnswerKind::Secret { .. } => None,
+            });
+        if let Some(v) = value {
+            resolved.insert(q.id.clone(), v);
+        }
+    }
+    resolved
+}
+
+/// Occurrences of `"key": "…"` on a line; returns (value, end-column of the
+/// closing quote) pairs. Naive quote scan — fine for machine-written JSON.
+fn json_string_values(line: &str, key: &str) -> Vec<(String, usize)> {
+    let needle = format!("\"{key}\"");
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(at) = line[from..].find(&needle) {
+        let after_key = from + at + needle.len();
+        let rest = &line[after_key..];
+        if let Some(colon) = rest.find(':') {
+            let rest2 = &rest[colon + 1..];
+            if let Some(open) = rest2.find('\"') {
+                let value_start = after_key + colon + 1 + open + 1;
+                if let Some(close) = line[value_start..].find('\"') {
+                    let value_end = value_start + close;
+                    out.push((line[value_start..value_end].to_owned(), value_end + 1));
+                    from = value_end + 1;
+                    continue;
+                }
+            }
+        }
+        from = after_key;
+    }
+    out
+}
+
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, _: InitializeParams) -> LspResult<InitializeResult> {
@@ -202,6 +275,7 @@ impl LanguageServer for Backend {
                 }),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
+                inlay_hint_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
         })
@@ -415,6 +489,98 @@ impl LanguageServer for Backend {
         }
 
         Ok(None)
+    }
+
+    async fn inlay_hint(&self, params: InlayHintParams) -> LspResult<Option<Vec<InlayHint>>> {
+        let uri = params.text_document.uri;
+        let Some(path) = url_to_path(&uri) else {
+            return Ok(None);
+        };
+        let Some(root) = template_root(&path) else {
+            return Ok(None);
+        };
+        let Ok(template) = Template::load(&root) else {
+            return Ok(None);
+        };
+        let docs = self.docs.lock().await;
+        let Some(text) = read_file(&docs, &path) else {
+            return Ok(None);
+        };
+        drop(docs);
+
+        let answers = preview_answers(&template);
+        let eval = weft_engine::eval();
+        let is_json = path.extension() == Some("json");
+        let mut hints = Vec::new();
+
+        for (line_no, line) in text.lines().enumerate() {
+            let line_no = line_no as u32;
+            if line_no < params.range.start.line || line_no > params.range.end.line {
+                continue;
+            }
+            if is_json {
+                // {"answer": "x"} -> the value it renders to
+                for (id, end_col) in json_string_values(line, "answer") {
+                    if let Some(value) = answers.get(&weft_core::AnswerId(id)) {
+                        hints.push(InlayHint {
+                            position: Position::new(line_no, end_col as u32),
+                            label: InlayHintLabel::String(format!("⇒ {}", value.render_text())),
+                            kind: None,
+                            text_edits: None,
+                            tooltip: Some(InlayHintTooltip::String(
+                                "preview under example/default answers".into(),
+                            )),
+                            padding_left: Some(true),
+                            padding_right: None,
+                            data: None,
+                        });
+                    }
+                }
+                // {"expr": "..."} -> evaluated preview
+                for (expr, end_col) in json_string_values(line, "expr") {
+                    let expr = expr.replace("\\\"", "\"");
+                    if let Ok(value) = eval.eval(&weft_core::StarlarkExpr(expr), &answers) {
+                        hints.push(InlayHint {
+                            position: Position::new(line_no, end_col as u32),
+                            label: InlayHintLabel::String(format!("⇒ {}", value.render_text())),
+                            kind: None,
+                            text_edits: None,
+                            tooltip: Some(InlayHintTooltip::String(
+                                "preview under example/default answers".into(),
+                            )),
+                            padding_left: Some(true),
+                            padding_right: None,
+                            data: None,
+                        });
+                    }
+                }
+            } else {
+                // weft.toml: default = "expr" -> evaluated preview
+                let trimmed = line.trim_start();
+                if let Some(rest) = trimmed.strip_prefix("default = \"") {
+                    if let Some(end) = rest.rfind('\"') {
+                        let expr = &rest[..end];
+                        if let Ok(value) =
+                            eval.eval(&weft_core::StarlarkExpr(expr.to_owned()), &answers)
+                        {
+                            hints.push(InlayHint {
+                                position: Position::new(line_no, line.len() as u32),
+                                label: InlayHintLabel::String(format!("⇒ {}", value.render_text())),
+                                kind: None,
+                                text_edits: None,
+                                tooltip: Some(InlayHintTooltip::String(
+                                    "evaluated with example/default answers".into(),
+                                )),
+                                padding_left: Some(true),
+                                padding_right: None,
+                                data: None,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        Ok(Some(hints))
     }
 }
 

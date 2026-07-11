@@ -224,3 +224,39 @@ fn lsp_hover_and_definition_and_completion() {
         .collect();
     assert!(labels.contains(&"project_name") && labels.contains(&"use_docker"));
 }
+
+#[test]
+fn lsp_inlay_hints_preview_rendered_values() {
+    let tmp = tempfile::tempdir().unwrap();
+    let template = copy_fixture(tmp.path());
+    let patch_path = template.join("patches/docker.json");
+    let text = std::fs::read_to_string(&patch_path).unwrap();
+
+    let mut client = LspClient::spawn();
+    client.initialize();
+    client.did_open(&patch_path, "json", &text);
+
+    let uri = format!("file://{}", patch_path.display());
+    let line_count = text.lines().count() as u64;
+    let hints = client.request(
+        "textDocument/inlayHint",
+        serde_json::json!({
+            "textDocument": {"uri": uri},
+            "range": {
+                "start": {"line": 0, "character": 0},
+                "end": {"line": line_count, "character": 0},
+            },
+        }),
+    );
+    let labels: Vec<&str> = hints
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["label"].as_str().unwrap())
+        .collect();
+    // package_name previews via project_name's example ("My Demo" -> my-demo)
+    assert!(
+        labels.iter().any(|l| l.contains("my-demo")),
+        "expected a rendered preview hint, got {labels:?}"
+    );
+}

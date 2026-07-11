@@ -27,6 +27,10 @@ local function start_lsp(bufnr)
     cmd = { config.bin, "lsp" },
     root_dir = root,
   }, { bufnr = bufnr })
+  -- rendered-value previews next to {"answer": ...} / {"expr": ...} segments
+  if vim.lsp.inlay_hint then
+    vim.lsp.inlay_hint.enable(true, { bufnr = bufnr })
+  end
 end
 
 function M.setup(opts)
