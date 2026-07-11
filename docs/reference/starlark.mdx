@@ -70,3 +70,10 @@ falsy; everything else is truthy.
 - `weft check` parse-checks every expression in the template without
   evaluating it, so syntax errors are caught even when no answers are
   available.
+- **Patch/task `when` expressions must only reference always-present
+  answers.** Starlark resolves names before `and` can short-circuit, so
+  `use_ci and ci_provider == 'github'` fails with "Variable not found"
+  whenever `ci_provider`'s own `when` gate is closed. Gate the *patch* on the
+  same condition as the question instead, or leave the question ungated with
+  a default. (Question `when`/`default` are safe — they resolve in
+  declaration order against earlier answers only.)

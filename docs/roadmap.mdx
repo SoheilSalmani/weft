@@ -66,3 +66,6 @@ Rough priority order within each section.
   alphabetical rule picks one — record with distinctive values.
 - `weft check`'s commutation test is pairwise (a smoke test, not a proof
   over all interleavings), and needs resolvable answers to run.
+- A patch `when` referencing a gated-off answer fails at render (Starlark
+  name resolution precedes short-circuiting). A future engine change could
+  inject `None` for declared-but-gated-off answers to make such gates safe.
