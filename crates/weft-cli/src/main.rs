@@ -1,3 +1,4 @@
+mod lsp;
 mod mcp;
 mod schema;
 
@@ -143,6 +144,9 @@ enum Command {
         #[arg(long, default_value = "schemas")]
         out: Utf8PathBuf,
     },
+    /// Run the weft language server (stdio) for template authoring:
+    /// live check diagnostics, completion, hover, go-to-definition.
+    Lsp,
     /// Serve weft to AI agents over the Model Context Protocol (stdio).
     Mcp {
         /// Directory containing templates (or itself a template). Defaults
@@ -402,6 +406,7 @@ fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Command::Lsp => lsp::serve(),
         Command::Mcp { templates_dir } => mcp::serve(templates_dir),
         Command::Describe {
             template,
