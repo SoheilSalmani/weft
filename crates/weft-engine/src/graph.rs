@@ -40,6 +40,10 @@ pub struct GraphNode {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub when: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     pub ops: Vec<OpSummary>,
     /// Whether the patch applies under the supplied answers; `None` when the
     /// graph was built without answers.
@@ -83,6 +87,8 @@ pub fn graph_doc(
             id: patch.id,
             name,
             when: patch.when.as_ref().map(|w| w.as_str().to_owned()),
+            description: patch.meta.description.clone(),
+            tags: patch.meta.tags.clone(),
             ops: patch.ops.iter().map(op_summary).collect(),
             active: skipped.as_ref().map(|s| !s.contains(&patch.id)),
         });
@@ -140,7 +146,7 @@ fn skipped_patches(
     Ok(skipped)
 }
 
-fn op_summary(op: &Op) -> OpSummary {
+pub(crate) fn op_summary(op: &Op) -> OpSummary {
     match op {
         Op::CreateFile { path, .. } => OpSummary {
             kind: "create_file",

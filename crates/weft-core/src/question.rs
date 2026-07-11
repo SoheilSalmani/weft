@@ -34,6 +34,12 @@ pub struct Question {
     pub kind: AnswerKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    /// Longer human/agent-facing explanation of what this answer controls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Example value, shown to humans and agents (display form, not Starlark).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub example: Option<String>,
     /// Starlark expression; may reference answers to earlier questions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<StarlarkExpr>,

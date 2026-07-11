@@ -19,6 +19,9 @@ pub struct TemplateMeta {
     pub name: String,
     #[serde(rename = "weft-version")]
     pub weft_version: String,
+    /// What this template scaffolds — the first thing agents read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// A named, layered partial answer-set. The file is a plain TOML map of

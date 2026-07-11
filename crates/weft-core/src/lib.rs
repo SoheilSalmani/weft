@@ -16,7 +16,7 @@ pub mod tree;
 pub mod value;
 
 pub use id::{AnswerId, PatchId, TaskId};
-pub use patch::{Hunk, Op, Patch, DEFAULT_FILE_MODE};
+pub use patch::{Hunk, Op, Patch, PatchMeta, DEFAULT_FILE_MODE};
 pub use question::{AnswerKind, Question, SecretSpec, StarlarkExpr};
 pub use segment::{join_lines, Content, Line, Segment, TemplatePath};
 pub use task::{Task, TaskAction, TaskInput};

@@ -20,6 +20,9 @@ pub struct CommitOptions {
     pub name: Option<String>,
     /// Optional `when` condition for the new patch.
     pub when: Option<String>,
+    /// Human/agent-facing description stored in the patch file (not hashed).
+    pub describe: Option<String>,
+    pub tags: Vec<String>,
 }
 
 pub fn run(opts: &CommitOptions, interaction: &mut dyn Interaction) -> Result<()> {
@@ -94,7 +97,16 @@ pub fn run(opts: &CommitOptions, interaction: &mut dyn Interaction) -> Result<()
         );
     }
 
-    template.write_patch(&name, depends_on, when, ops.clone())?;
+    template.write_patch(
+        &name,
+        depends_on,
+        when,
+        ops.clone(),
+        weft_core::PatchMeta {
+            description: opts.describe.clone(),
+            tags: opts.tags.clone(),
+        },
+    )?;
     Session::discard(&opts.template)?;
 
     eprintln!(

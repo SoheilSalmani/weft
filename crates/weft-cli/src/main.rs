@@ -92,6 +92,12 @@ enum Command {
         /// Starlark condition gating the new patch.
         #[arg(long)]
         when: Option<String>,
+        /// Human/agent-facing description stored with the patch (not hashed).
+        #[arg(long)]
+        describe: Option<String>,
+        /// Tag the patch (repeatable).
+        #[arg(long = "tag")]
+        tags: Vec<String>,
         /// Accept all abstraction proposals without prompting.
         #[arg(long)]
         yes: bool,
@@ -226,12 +232,16 @@ fn main() -> anyhow::Result<()> {
             template,
             name,
             when,
+            describe,
+            tags,
             yes,
         } => {
             let opts = weft_engine::commit::CommitOptions {
                 template,
                 name,
                 when,
+                describe,
+                tags,
             };
             let mut interaction = auto_interaction(yes);
             weft_engine::commit::run(&opts, interaction.as_mut())

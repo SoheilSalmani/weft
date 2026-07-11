@@ -286,6 +286,8 @@ fn synthetic_secret_question(id: &AnswerId, spec: &weft_core::SecretSpec) -> Que
             source: spec.clone(),
         },
         prompt: None,
+        description: None,
+        example: None,
         default: None,
         when: None,
     }

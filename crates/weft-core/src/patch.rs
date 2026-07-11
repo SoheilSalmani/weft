@@ -24,6 +24,19 @@ pub struct Patch {
     /// Apply only if this evaluates to true.
     pub when: Option<StarlarkExpr>,
     pub ops: Vec<Op>,
+    /// Descriptive metadata. **Never part of the canonical hash**: editing a
+    /// description or tag must not change this patch's id (or any
+    /// descendant's), so documentation edits can't break pinned projects.
+    pub meta: PatchMeta,
+}
+
+/// Human/agent-facing patch metadata, excluded from content addressing.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PatchMeta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 /// The hashed portion of a patch. Field order is the canonical key order.
@@ -45,7 +58,14 @@ impl Patch {
             depends_on,
             when,
             ops,
+            meta: PatchMeta::default(),
         }
+    }
+
+    /// Attach descriptive metadata (does not affect the id).
+    pub fn with_meta(mut self, meta: PatchMeta) -> Self {
+        self.meta = meta;
+        self
     }
 
     /// Canonical serialization: compact JSON, sorted deps, fixed key order.
@@ -155,6 +175,17 @@ mod tests {
         let p1 = Patch::new(vec![d1, d2], None, vec![]);
         let p2 = Patch::new(vec![d2, d1], None, vec![]);
         assert_eq!(p1.id, p2.id);
+    }
+
+    #[test]
+    fn metadata_never_changes_the_id() {
+        let plain = sample_patch();
+        let documented = sample_patch().with_meta(PatchMeta {
+            description: Some("adds docker support".into()),
+            tags: vec!["docker".into(), "infra".into()],
+        });
+        assert_eq!(plain.id, documented.id);
+        assert_eq!(plain.canonical_json(), documented.canonical_json());
     }
 
     #[test]

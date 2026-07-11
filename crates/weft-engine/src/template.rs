@@ -15,6 +15,11 @@ pub const PATCHES_DIR: &str = "patches";
 /// content ids are recomputed on load, which is also what validates them.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PatchFile {
+    /// Descriptive metadata (never hashed; see `weft_core::PatchMeta`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -131,6 +136,7 @@ impl Template {
         depends_on: Vec<String>,
         when: Option<StarlarkExpr>,
         ops: Vec<Op>,
+        meta: weft_core::PatchMeta,
     ) -> Result<PatchId> {
         if self.name_to_id.contains_key(name) {
             bail!("patch `{name}` already exists in this template");
@@ -146,6 +152,8 @@ impl Template {
             .collect::<Result<_>>()?;
         let patch = Patch::new(dep_ids, when.clone(), ops.clone());
         let file = PatchFile {
+            description: meta.description,
+            tags: meta.tags,
             depends_on,
             when,
             ops,
@@ -193,7 +201,10 @@ fn resolve_patches(
                 .iter()
                 .map(|d| resolved[d])
                 .collect::<Vec<_>>();
-            let patch = Patch::new(dep_ids, file.when, file.ops);
+            let patch = Patch::new(dep_ids, file.when, file.ops).with_meta(weft_core::PatchMeta {
+                description: file.description,
+                tags: file.tags,
+            });
             resolved.insert(name, patch.id);
             patches.push(patch);
         }
