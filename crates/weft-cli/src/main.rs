@@ -29,6 +29,10 @@ enum Command {
         /// TOML file with answers.
         #[arg(long = "answers-file")]
         answers_file: Option<Utf8PathBuf>,
+        /// Answers as a JSON object (inline, `@file`, or `-` for stdin);
+        /// highest precedence before prompts. Designed for agents.
+        #[arg(long = "answers-json")]
+        answers_json: Option<String>,
         /// Do not run template tasks after scaffolding.
         #[arg(long)]
         skip_tasks: bool,
@@ -129,6 +133,21 @@ enum Command {
         #[arg(long = "diff")]
         diff: Option<String>,
     },
+    /// Print the template's contract: questions with types/defaults/gates,
+    /// presets, patches, tasks, and ready-to-run commands. Agents should use
+    /// `--json`.
+    Describe {
+        /// Template directory (defaults to `.`).
+        #[arg(default_value = ".")]
+        template: Utf8PathBuf,
+        /// Emit the full machine-readable contract as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Write an AGENTS.md guide (default path: <template>/AGENTS.md;
+        /// pass `-` for stdout).
+        #[arg(long = "agents-md", num_args = 0..=1, default_missing_value = "")]
+        agents_md: Option<String>,
+    },
     /// Validate the template: manifest, expressions, patch graph, and (when
     /// answers are available) a full render plus patch commutation.
     Check {
@@ -144,6 +163,9 @@ enum Command {
         /// TOML file with answers.
         #[arg(long = "answers-file")]
         answers_file: Option<Utf8PathBuf>,
+        /// Emit {ok, issues, notes} as JSON (exit code still reflects ok).
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -171,6 +193,7 @@ fn main() -> anyhow::Result<()> {
             presets,
             answers,
             answers_file,
+            answers_json,
             skip_tasks,
             non_interactive,
         } => {
@@ -180,6 +203,7 @@ fn main() -> anyhow::Result<()> {
                 presets,
                 answers,
                 answers_file,
+                answers_json,
                 skip_tasks,
             };
             let mut interaction = auto_interaction(non_interactive);
@@ -353,11 +377,42 @@ fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Command::Describe {
+            template,
+            json,
+            agents_md,
+        } => {
+            let tpl = Template::load(&template)?;
+            let eval = weft_engine::eval();
+            let doc = weft_engine::describe::describe(&tpl, &eval)?;
+            if let Some(path) = agents_md {
+                let md = weft_engine::describe::agents_md(&doc);
+                if path == "-" {
+                    print!("{md}");
+                } else {
+                    let target = if path.is_empty() {
+                        template.join("AGENTS.md")
+                    } else {
+                        Utf8PathBuf::from(path)
+                    };
+                    std::fs::write(&target, md)?;
+                    eprintln!("wrote {target}");
+                }
+                return Ok(());
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&doc)?);
+            } else {
+                print!("{}", weft_engine::describe::agents_md(&doc));
+            }
+            Ok(())
+        }
         Command::Check {
             template,
             presets,
             answers,
             answers_file,
+            json,
         } => {
             let name = Template::load(&template)?.manifest.template.name;
             let opts = weft_engine::check::CheckOptions {
@@ -367,7 +422,23 @@ fn main() -> anyhow::Result<()> {
                 answers_file,
             };
             let report = weft_engine::check::run(&opts)?;
-            weft_engine::check::finish(&name, &report)
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "ok": report.issues.is_empty(),
+                        "issues": report.issues,
+                        "notes": report.notes,
+                    })
+                );
+                if report.issues.is_empty() {
+                    Ok(())
+                } else {
+                    std::process::exit(1);
+                }
+            } else {
+                weft_engine::check::finish(&name, &report)
+            }
         }
     }
 }

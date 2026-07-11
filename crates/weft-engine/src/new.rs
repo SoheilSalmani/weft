@@ -18,6 +18,8 @@ pub struct NewOptions {
     pub presets: Vec<String>,
     pub answers: Vec<String>,
     pub answers_file: Option<Utf8PathBuf>,
+    /// Answers as a JSON object (inline, `@file`, or `-` for stdin).
+    pub answers_json: Option<String>,
     pub skip_tasks: bool,
 }
 
@@ -25,12 +27,24 @@ pub fn run(opts: &NewOptions, interaction: &mut dyn Interaction) -> Result<()> {
     let template = Template::load(&opts.template)?;
     let eval = StarlarkEval;
 
-    let provided = answers::layered_answers(
+    let mut provided = answers::layered_answers(
         &template,
         &opts.presets,
         opts.answers_file.as_deref(),
         &opts.answers,
     )?;
+    if let Some(spec) = &opts.answers_json {
+        let json = match spec.as_str() {
+            "-" => std::io::read_to_string(std::io::stdin())?,
+            s if s.starts_with('@') => std::fs::read_to_string(&s[1..])
+                .with_context(|| format!("reading answers JSON file {}", &s[1..]))?,
+            s => s.to_owned(),
+        };
+        provided.overlay(&answers::answers_from_json(
+            &template.manifest.questions,
+            &json,
+        )?);
+    }
     let resolved = answers::gather(
         &template,
         &provided,

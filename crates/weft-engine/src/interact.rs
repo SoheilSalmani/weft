@@ -17,7 +17,8 @@ impl Interaction for NonInteractive {
     fn ask(&mut self, question: &Question, _default: Option<&Value>) -> Result<Value> {
         bail!(
             "question `{}` is unanswered and this run is non-interactive; \
-             pass it with --answer {}=..., an answers file, or a preset",
+             pass it with --answer {}=..., --answers-json, an answers file, or a \
+             preset (run `weft describe --json` for the full contract)",
             question.id,
             question.id
         );

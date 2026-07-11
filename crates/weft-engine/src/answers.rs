@@ -161,3 +161,57 @@ pub fn gather(
     let validated = weft_core::render::resolve_answers(questions, &resolved, eval)?;
     Ok(validated)
 }
+
+/// Kind-appropriate stand-in values for trial-evaluating expressions
+/// (previews of defaults, validating gates) without real user input.
+pub fn dummy_answers(questions: &[Question]) -> AnswerSet {
+    let mut set = AnswerSet::new();
+    for q in questions {
+        let value = match &q.kind {
+            AnswerKind::String => Value::String("example".into()),
+            AnswerKind::Bool => Value::Bool(true),
+            AnswerKind::Int => Value::Int(1),
+            AnswerKind::Choice { choices } => {
+                Value::String(choices.first().cloned().unwrap_or_default())
+            }
+            AnswerKind::Secret { .. } => continue, // not visible to expressions
+        };
+        set.insert(q.id.clone(), value);
+    }
+    set
+}
+
+/// Coerce a JSON value into a weft value according to the question's kind.
+/// The agent-facing counterpart of [`parse_answer_arg`].
+pub fn json_to_value(kind: &AnswerKind, key: &str, raw: &serde_json::Value) -> Result<Value> {
+    let bad = |expected: &str| anyhow::anyhow!("answer `{key}` expects {expected}, got {raw}");
+    Ok(match kind {
+        AnswerKind::String | AnswerKind::Choice { .. } => {
+            Value::String(raw.as_str().ok_or_else(|| bad("a string"))?.to_owned())
+        }
+        AnswerKind::Bool => Value::Bool(raw.as_bool().ok_or_else(|| bad("a boolean"))?),
+        AnswerKind::Int => Value::Int(raw.as_i64().ok_or_else(|| bad("an integer"))?),
+        AnswerKind::Secret { .. } => {
+            bail!("secret `{key}` cannot be supplied; it resolves through its declared source")
+        }
+    })
+}
+
+/// Parse a JSON object of answers (`{"project_name": "X", "use_db": true}`)
+/// into a typed answer set, validating keys against the declared questions.
+pub fn answers_from_json(questions: &[Question], json: &str) -> Result<AnswerSet> {
+    let object: serde_json::Map<String, serde_json::Value> = serde_json::from_str(json)
+        .context("answers JSON must be an object of question id -> value")?;
+    let mut set = AnswerSet::new();
+    for (key, raw) in &object {
+        let question = questions
+            .iter()
+            .find(|q| q.id.0 == *key)
+            .with_context(|| format!("no question with id `{key}`"))?;
+        set.insert(
+            question.id.clone(),
+            json_to_value(&question.kind, key, raw)?,
+        );
+    }
+    Ok(set)
+}
