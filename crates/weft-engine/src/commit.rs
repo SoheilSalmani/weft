@@ -23,6 +23,10 @@ pub struct CommitOptions {
     /// Human/agent-facing description stored in the patch file (not hashed).
     pub describe: Option<String>,
     pub tags: Vec<String>,
+    /// Per-answer abstraction decisions supplied by a non-terminal caller
+    /// (agents/UIs). `None` = confirm interactively; undecided candidates
+    /// default to accepted, secrets are always abstracted.
+    pub decisions: Option<std::collections::BTreeMap<String, bool>>,
 }
 
 pub fn run(opts: &CommitOptions, interaction: &mut dyn Interaction) -> Result<()> {
@@ -61,7 +65,18 @@ pub fn run(opts: &CommitOptions, interaction: &mut dyn Interaction) -> Result<()
     let work_tree = fsio::read_tree(&worktree)?;
 
     let abstractor = Abstractor::from_answers(&answers);
-    let ops = diff::build_ops(&base_tree, &work_tree, &abstractor, interaction)?;
+    let ops = match &opts.decisions {
+        Some(decisions) => {
+            let texts = diff::collect_texts(&base_tree, &work_tree);
+            let decisions = decisions
+                .iter()
+                .map(|(k, v)| (weft_core::AnswerId(k.clone()), *v))
+                .collect();
+            let confirmed = abstractor.confirmed_from_decisions(&texts, &decisions);
+            diff::build_ops_with(&base_tree, &work_tree, &abstractor, &confirmed)
+        }
+        None => diff::build_ops(&base_tree, &work_tree, &abstractor, interaction)?,
+    };
     if ops.is_empty() {
         bail!("worktree has no changes against the base state; nothing to commit");
     }

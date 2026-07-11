@@ -3,6 +3,24 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — AI-ready (contract, metadata, AGENTS.md, MCP)
+
+- Patches carry `description`/`tags` metadata **outside the canonical hash**
+  (regression-tested: documenting a patch never changes its id); questions
+  gained `description`/`example`, templates a top-level `description`.
+- `weft describe [--json|--agents-md]`: the agent contract — evaluated
+  default previews via dummy-answer trial eval (declaration-order scope),
+  `required` flags, preset contents, patch DAG with metadata, ready-to-run
+  usage commands. AGENTS.md generator renders the same doc as a committed
+  guide.
+- `weft new --answers-json` (inline/@file/stdin) and `weft check --json`.
+- `weft mcp` (rmcp 2.x, stdio): list/describe/scaffold/check plus the full
+  record→commit authoring loop as typed tools. Guardrails: scaffold never
+  runs template tasks; secrets never accepted as answers; worktree paths
+  validated. e2e drives the real JSON-RPC protocol.
+- Engine seams added for non-terminal callers: `RecordOptions.answers_json`,
+  `CommitOptions.decisions` (per-answer abstraction decisions).
+
 ## Post-MVP — `weft graph`
 
 - New `weft-engine::graph` module: `GraphDoc` (nodes/edges/questions/presets,

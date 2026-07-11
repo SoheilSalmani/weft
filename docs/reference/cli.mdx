@@ -28,6 +28,7 @@ weft new <template> [dest] [options]
 | `--preset NAME`         | —       | apply a named preset (repeatable; later presets win) |
 | `--answer KEY=VALUE`    | —       | answer a question inline (repeatable)               |
 | `--answers-file FILE`   | —       | TOML file of answers                                |
+| `--answers-json JSON`   | —       | answers as a JSON object (inline, `@file`, or `-` for stdin); wins over the other layers |
 | `--skip-tasks`          | off     | don't run template tasks after scaffolding          |
 | `--non-interactive`     | auto    | never prompt; fail if answers are missing           |
 
@@ -112,6 +113,8 @@ weft commit [options]
 | `--template DIR` | `.`         | the template with the active session             |
 | `--name NAME`    | `patch-NNN` | file name for the new patch                      |
 | `--when EXPR`    | —           | Starlark condition gating the new patch          |
+| `--describe TEXT`| —           | patch description (metadata; never hashed)       |
+| `--tag TAG`      | —           | tag the patch (repeatable)                       |
 | `--yes`          | off         | accept all abstraction proposals without prompting |
 
 Behavior notes:
@@ -122,6 +125,35 @@ Behavior notes:
   reproduce the worktree byte-for-byte; ambiguous hunk contexts are rejected.
 - The new patch depends on the leaves of the pinned base.
 - On success the session (including the worktree) is deleted.
+
+## `weft describe`
+
+The template contract, for humans and agents.
+
+```
+weft describe [template] [--json] [--agents-md [PATH]]
+```
+
+- default: markdown summary (same renderer as AGENTS.md) to stdout
+- `--json`: the full machine-readable contract — questions with kinds,
+  `required` flags, evaluated `default_preview`s, gates, examples; preset
+  contents; the patch DAG with descriptions/tags; tasks; ready-to-run
+  `usage` commands
+- `--agents-md [PATH]`: write the guide to `<template>/AGENTS.md` (or PATH,
+  `-` for stdout) for committing into the template repo
+
+## `weft mcp`
+
+Serve weft to AI agents over the Model Context Protocol (stdio).
+
+```
+weft mcp [--templates-dir DIR]     # DIR defaults to `.`
+```
+
+Tools: `list_templates`, `describe_template`, `scaffold` (never runs
+template tasks), `check_template`, and the authoring loop `record_start` /
+`record_read_file` / `record_write_file` / `record_delete_file` /
+`record_commit` / `record_discard`. See the [AI agents guide](../guides/ai-agents).
 
 ## `weft graph`
 
@@ -176,6 +208,7 @@ weft check [template] [options]
 | `--preset NAME`       | preset for the render/commutation checks (repeatable)    |
 | `--answer KEY=VALUE`  | answers for the render/commutation checks (repeatable)   |
 | `--answers-file FILE` | TOML file of answers                                     |
+| `--json`              | emit `{ok, issues, notes}` as JSON                       |
 
 Always checked: manifest parses; question ids unique; every
 `default`/`when` expression parses as Starlark (questions, patches, tasks);

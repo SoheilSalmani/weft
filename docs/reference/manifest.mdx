@@ -21,9 +21,11 @@ my-template/
 [template]
 name = "python-service"
 weft-version = "0.1"
+description = "A FastAPI/Flask microservice scaffold."   # optional
 ```
 
-Both fields are required. `name` is used in messages; `weft-version` declares
+`name` and `weft-version` are required; `description` is what agents (and
+`weft describe`) surface first. `name` is used in messages; `weft-version` declares
 the manifest format version.
 
 ## `[[question]]`
@@ -33,6 +35,8 @@ the manifest format version.
 id = "project_name"        # answer id; referenced by patches and expressions
 kind = "string"            # string | bool | int | choice | secret
 prompt = "Project name"    # optional; shown when prompting (defaults to id)
+description = "Human-readable name; drives titles."   # optional, agent-facing
+example = "My Shop"        # optional example value (display form)
 default = "'my-project'"   # optional Starlark expression
 when = "use_docker"        # optional Starlark gate; ask only if truthy
 ```

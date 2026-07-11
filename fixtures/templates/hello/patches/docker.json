@@ -1,5 +1,11 @@
 {
-  "depends_on": ["base"],
+  "description": "Adds a Dockerfile and documents the image workflow.",
+  "tags": [
+    "docker"
+  ],
+  "depends_on": [
+    "base"
+  ],
   "when": "use_docker",
   "ops": [
     {
@@ -7,7 +13,12 @@
       "path": "Dockerfile",
       "content": [
         "FROM python:3.12-slim",
-        ["COPY . /app/", { "answer": "package_name" }]
+        [
+          "COPY . /app/",
+          {
+            "answer": "package_name"
+          }
+        ]
       ]
     },
     {
@@ -15,8 +26,13 @@
       "path": "README.md",
       "hunks": [
         {
-          "context_before": ["Scaffolded by weft."],
-          "added": ["", "Ships with Docker."]
+          "context_before": [
+            "Scaffolded by weft."
+          ],
+          "added": [
+            "",
+            "Ships with Docker."
+          ]
         }
       ]
     }

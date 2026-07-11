@@ -13,6 +13,10 @@ path = "src/main.rs"
 weft-core.workspace = true
 weft-engine.workspace = true
 anyhow.workspace = true
+rmcp = { version = "2", features = ["server", "transport-io", "macros"] }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }
 camino.workspace = true
 clap.workspace = true
 serde_json.workspace = true

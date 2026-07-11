@@ -1,10 +1,19 @@
 {
+  "description": "Initial scaffold: README and pyproject.",
+  "tags": [
+    "scaffold"
+  ],
   "ops": [
     {
       "op": "create_file",
       "path": "README.md",
       "content": [
-        ["# ", { "answer": "project_name" }],
+        [
+          "# ",
+          {
+            "answer": "project_name"
+          }
+        ],
         "",
         "Scaffolded by weft."
       ]
@@ -14,7 +23,13 @@
       "path": "pyproject.toml",
       "content": [
         "[project]",
-        ["name = \"", { "answer": "package_name" }, "\""],
+        [
+          "name = \"",
+          {
+            "answer": "package_name"
+          },
+          "\""
+        ],
         "version = \"0.1.0\""
       ]
     }

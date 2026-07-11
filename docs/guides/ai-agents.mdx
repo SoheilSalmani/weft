@@ -1,0 +1,114 @@
+---
+title: AI agents
+description: How agents scaffold from and author weft templates — the JSON contract, AGENTS.md, and the MCP server.
+---
+
+# AI agents
+
+Weft is designed to be operated by AI agents in both directions: consuming
+templates (scaffold a project with exactly the right answers) and authoring
+them (record and commit patches). Three interfaces, layered:
+
+## 1. The JSON contract
+
+`weft describe --json` emits everything an agent needs, with no prose
+parsing:
+
+```sh
+weft describe path/to/template --json
+```
+
+```json
+{
+  "template": { "name": "python-service", "description": "…" },
+  "questions": [
+    {
+      "id": "project_name", "kind": "string", "required": true,
+      "description": "…", "example": "My Shop"
+    },
+    {
+      "id": "port", "kind": "int", "required": false,
+      "default_preview": "8000", "when": "web_framework != 'none'"
+    }
+  ],
+  "presets": [ { "name": "production", "answers": { "use_db": true } } ],
+  "patches": [ { "name": "docker", "description": "…", "when": "use_docker" } ],
+  "usage": { "scaffold_json": "weft new … --answers-json '{…}'" }
+}
+```
+
+Key fields for answering correctly:
+
+- **`required: true`** — must be supplied; everything else has a default
+  (`default_preview` shows its evaluated value) or is a secret.
+- **`when`** — the question only applies when the gate is truthy; gated-off
+  questions must not be answered.
+- **`choices`** — the only legal values for `choice` questions.
+- **Secrets are never answered.** They resolve from their `secret_source`
+  (`env:VAR`, `cmd:…`) at render time.
+
+Answers go in as one JSON object:
+
+```sh
+weft new tpl dest --answers-json '{"project_name":"My Shop","use_db":true}'
+# also accepts @answers.json and - (stdin)
+```
+
+Wrong types, unknown ids, and out-of-choice values are precise errors.
+`weft check --json` returns `{ok, issues, notes}` for validation loops, and
+non-interactive failures name the missing question and point back at
+`weft describe --json`.
+
+## 2. AGENTS.md in the template repo
+
+```sh
+weft describe --agents-md          # writes <template>/AGENTS.md
+```
+
+generates a committed guide — question table (id/kind/required/default/
+description/example), presets, patch overview, exact scaffold commands —
+so an agent that merely *opens the repo* knows what the template is and how
+to drive it, before running anything.
+
+## 3. The MCP server
+
+```sh
+weft mcp --templates-dir path/to/templates
+```
+
+exposes weft as typed Model Context Protocol tools over stdio, for hosts
+that speak MCP (Claude Code, Claude Desktop, Cursor, …):
+
+| Tool | Purpose |
+| --- | --- |
+| `list_templates` / `describe_template` | discovery + the full contract |
+| `scaffold` | render into a destination — **template tasks are never executed** (guardrail) |
+| `check_template` | validation incl. patch commutation |
+| `record_start` | render the base state into a scratch worktree |
+| `record_read_file` / `record_write_file` / `record_delete_file` | edit the worktree (paths validated) |
+| `record_commit` | diff → abstraction (per-answer `decisions`; undecided = accepted, secrets always abstracted) → replay-validated patch with `description`/`tags` |
+| `record_discard` | abort the session |
+
+Claude Code registration:
+
+```sh
+claude mcp add weft -- weft mcp --templates-dir ~/templates
+```
+
+## Authoring guidance for agents
+
+The intended patch-authoring loop is the same one humans use:
+
+1. `describe_template` — understand the questions and existing patches.
+2. `record_start` with **concrete, distinctive answers** ("My Shop", not
+   "test") — abstraction quality depends on values being recognizable.
+3. Write files with concrete values; never invent `{placeholder}` syntax —
+   weft abstracts literals into answer references at commit.
+4. `record_commit` with a real `description` (that metadata is how future
+   agents understand the patch — it is deliberately excluded from the
+   content hash, so documenting never breaks pinned projects).
+5. `check_template` — commutation and expression validation.
+
+Sharp edge worth knowing: patch `when` expressions may only reference
+always-present answers (Starlark resolves names before `and` can
+short-circuit) — see the [Starlark reference](../reference/starlark).

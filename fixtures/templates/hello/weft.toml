@@ -1,11 +1,14 @@
 [template]
 name = "hello"
 weft-version = "0.1"
+description = "A tiny Python project scaffold used as weft's test fixture."
 
 [[question]]
 id = "project_name"
 kind = "string"
 prompt = "Project name"
+description = "Human-readable project name; drives the README title and derived identifiers."
+example = "My Demo"
 
 [[question]]
 id = "package_name"

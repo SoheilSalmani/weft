@@ -21,6 +21,8 @@ pub struct RecordOptions {
     pub presets: Vec<String>,
     pub answers: Vec<String>,
     pub answers_file: Option<Utf8PathBuf>,
+    /// Answers as a JSON object (agents).
+    pub answers_json: Option<String>,
     /// Discard an existing session instead of erroring.
     pub force: bool,
 }
@@ -40,12 +42,18 @@ pub fn run(opts: &RecordOptions, interaction: &mut dyn Interaction) -> Result<Ut
     }
 
     let eval = StarlarkEval;
-    let provided = answers::layered_answers(
+    let mut provided = answers::layered_answers(
         &template,
         &opts.presets,
         opts.answers_file.as_deref(),
         &opts.answers,
     )?;
+    if let Some(json) = &opts.answers_json {
+        provided.overlay(&answers::answers_from_json(
+            &template.manifest.questions,
+            json,
+        )?);
+    }
     let resolved = answers::gather(
         &template,
         &provided,

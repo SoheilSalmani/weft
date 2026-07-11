@@ -1,3 +1,5 @@
+mod mcp;
+
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
 use weft_engine::interact::auto_interaction;
@@ -133,6 +135,13 @@ enum Command {
         #[arg(long = "diff")]
         diff: Option<String>,
     },
+    /// Serve weft to AI agents over the Model Context Protocol (stdio).
+    Mcp {
+        /// Directory containing templates (or itself a template). Defaults
+        /// to the current directory.
+        #[arg(long = "templates-dir", default_value = ".")]
+        templates_dir: Utf8PathBuf,
+    },
     /// Print the template's contract: questions with types/defaults/gates,
     /// presets, patches, tasks, and ready-to-run commands. Agents should use
     /// `--json`.
@@ -245,6 +254,7 @@ fn main() -> anyhow::Result<()> {
                 presets,
                 answers,
                 answers_file,
+                answers_json: None,
                 force,
             };
             let mut interaction = auto_interaction(non_interactive);
@@ -266,6 +276,7 @@ fn main() -> anyhow::Result<()> {
                 when,
                 describe,
                 tags,
+                decisions: None,
             };
             let mut interaction = auto_interaction(yes);
             weft_engine::commit::run(&opts, interaction.as_mut())
@@ -377,6 +388,7 @@ fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Command::Mcp { templates_dir } => mcp::serve(templates_dir),
         Command::Describe {
             template,
             json,

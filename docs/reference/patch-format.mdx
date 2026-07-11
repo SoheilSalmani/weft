@@ -19,9 +19,11 @@ hand-writable — test fixtures and small tweaks can be authored directly.
 }
 ```
 
-| Field        | Required | Meaning                                             |
-| ------------ | -------- | --------------------------------------------------- |
-| `depends_on` | no       | **names** of other patches (their file stems)       |
+| Field         | Required | Meaning                                             |
+| ------------- | -------- | --------------------------------------------------- |
+| `description` | no       | what the patch does — **metadata, never hashed**    |
+| `tags`        | no       | free-form labels — metadata, never hashed           |
+| `depends_on`  | no       | **names** of other patches (their file stems)       |
 | `when`       | no       | Starlark gate; false skips this patch and its dependents |
 | `ops`        | yes      | operation list, applied in order                    |
 
@@ -121,7 +123,10 @@ abstraction, which is what makes hunks match under different answers.
 ## Canonical form and hashing
 
 The canonical serialization is compact JSON with a fixed key order
-(`depends_on` sorted, then `when`, then `ops`). Two patches with the same
+(`depends_on` sorted, then `when`, then `ops`). `description` and `tags` are
+deliberately excluded: documenting a patch must never change its id (or any
+descendant's), so metadata edits can't break projects pinned to existing
+ids. Two patches with the same
 canonical bytes have the same id. `weft check` recomputes everything from the
 files, so there is no way for a stored id to drift from its content — there
 is no stored id.

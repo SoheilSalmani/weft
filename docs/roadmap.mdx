@@ -29,6 +29,10 @@ Rough priority order within each section.
 
 ## Medium term
 
+- **Remote MCP endpoint on weft-cloud** — the local `weft mcp` tools served
+  over streamable HTTP by the SaaS, so agents author GitHub-backed templates
+  without a local install (needs token auth instead of browser cookies).
+
 - **Binary file support.** The MVP is UTF-8 text only (rendering normalizes
   trailing newlines; `record` refuses non-UTF-8). Binary content needs a
   separate content representation and merge policy (theirs/ours/conflict,
