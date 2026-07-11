@@ -28,7 +28,6 @@ enum Source {
 }
 
 struct Row {
-    id: AnswerId,
     label: String,
     detail: String,
     value_display: String,
@@ -109,7 +108,6 @@ impl<'a> WizardState<'a> {
                     (_, None) => String::new(),
                 };
                 Row {
-                    id: q.id.clone(),
                     label: q.id.0.clone(),
                     detail: q
                         .description
