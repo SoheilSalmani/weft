@@ -1,4 +1,5 @@
 mod mcp;
+mod schema;
 
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
@@ -134,6 +135,13 @@ enum Command {
         /// Show what one patch (by name) contributes under the answers.
         #[arg(long = "diff")]
         diff: Option<String>,
+    },
+    /// Write JSON Schemas for weft.toml and patches/*.json (editor
+    /// validation + completion).
+    Schema {
+        /// Output directory.
+        #[arg(long, default_value = "schemas")]
+        out: Utf8PathBuf,
     },
     /// Serve weft to AI agents over the Model Context Protocol (stdio).
     Mcp {
@@ -385,6 +393,12 @@ fn main() -> anyhow::Result<()> {
                         println!("    {} {}", op.kind, op.path);
                     }
                 }
+            }
+            Ok(())
+        }
+        Command::Schema { out } => {
+            for path in schema::write_schemas(&out)? {
+                eprintln!("wrote {path}");
             }
             Ok(())
         }

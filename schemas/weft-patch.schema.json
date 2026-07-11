@@ -1,0 +1,280 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "weft patch",
+  "description": "A weft patch file (`patches/<name>.json`): one recorded unit of template\nbehavior. The file name (stem) is the patch's name; its content id is\ncomputed on load and never stored.",
+  "type": "object",
+  "properties": {
+    "description": {
+      "description": "What this patch does — metadata, never part of the content hash.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "tags": {
+      "description": "Free-form labels — metadata, never part of the content hash.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "depends_on": {
+      "description": "Names (file stems) of patches this one depends on. Patches with no\ndependency path between them must commute.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "when": {
+      "description": "Starlark gate: apply this patch (and its dependents) only if truthy.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "ops": {
+      "description": "Operations, applied in order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Op"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "ops"
+  ],
+  "$defs": {
+    "Op": {
+      "description": "A single tree operation, applied in order.",
+      "oneOf": [
+        {
+          "description": "Create a file (errors if it already exists).",
+          "type": "object",
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/TemplatePath"
+            },
+            "content": {
+              "description": "File content as an array of lines.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Line"
+              }
+            },
+            "mode": {
+              "description": "Unix mode as decimal (420 = 0o644, 493 = 0o755). Default 420.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0,
+              "default": null
+            },
+            "op": {
+              "type": "string",
+              "const": "create_file"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "path",
+            "content"
+          ]
+        },
+        {
+          "description": "Modify an existing file with context-anchored hunks.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/TemplatePath"
+            },
+            "hunks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Hunk"
+              }
+            },
+            "op": {
+              "type": "string",
+              "const": "modify_file"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "path",
+            "hunks"
+          ]
+        },
+        {
+          "description": "Delete an existing file.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/TemplatePath"
+            },
+            "op": {
+              "type": "string",
+              "const": "delete_file"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "path"
+          ]
+        },
+        {
+          "description": "Rename/move a file (target must not exist).",
+          "type": "object",
+          "properties": {
+            "from": {
+              "$ref": "#/$defs/TemplatePath"
+            },
+            "to": {
+              "$ref": "#/$defs/TemplatePath"
+            },
+            "op": {
+              "type": "string",
+              "const": "rename_path"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "from",
+            "to"
+          ]
+        },
+        {
+          "description": "Change a file's mode.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/TemplatePath"
+            },
+            "mode": {
+              "description": "Unix mode as decimal (493 = 0o755).",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "op": {
+              "type": "string",
+              "const": "set_mode"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "path",
+            "mode"
+          ]
+        }
+      ]
+    },
+    "TemplatePath": {
+      "description": "A path inside the rendered tree: a plain string when fully literal, or an\narray of segments. Relative, `/`-separated, no `..`.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Segment"
+          }
+        }
+      ]
+    },
+    "Segment": {
+      "description": "One piece of a path or content line.",
+      "anyOf": [
+        {
+          "description": "Literal text.",
+          "type": "string"
+        },
+        {
+          "description": "Substitute an answer's value at render time.",
+          "type": "object",
+          "properties": {
+            "answer": {
+              "description": "The question id whose value is substituted.",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "answer"
+          ]
+        },
+        {
+          "description": "Evaluate a Starlark expression at render time.",
+          "type": "object",
+          "properties": {
+            "expr": {
+              "description": "Starlark source; answers are in scope as variables.",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "expr"
+          ]
+        }
+      ]
+    },
+    "Line": {
+      "description": "One line of file content: a plain string when fully literal, or an array\nof segments.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Segment"
+          }
+        }
+      ]
+    },
+    "Hunk": {
+      "description": "A context-anchored change: `context_before + removed + context_after`\nmust match exactly once in the rendered file; `removed` is replaced with\n`added`. An entirely empty pattern appends at end of file.",
+      "type": "object",
+      "properties": {
+        "context_before": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Line"
+          }
+        },
+        "removed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Line"
+          }
+        },
+        "added": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Line"
+          }
+        },
+        "context_after": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Line"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

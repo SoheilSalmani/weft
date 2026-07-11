@@ -1,0 +1,67 @@
+---
+title: Editor integration
+description: JSON Schemas, the LSP server, and editor setup for authoring weft templates.
+---
+
+# Editor integration
+
+## JSON Schemas (validation + completion everywhere)
+
+`weft schema` writes JSON Schemas for the two on-disk formats:
+
+```sh
+weft schema --out schemas
+# schemas/weft-patch.schema.json      → patches/*.json
+# schemas/weft-manifest.schema.json   → weft.toml
+```
+
+The repo ships generated copies under `schemas/`. Wiring them up gives every
+editor validation, completion, and hover docs for template files with no
+plugin:
+
+### VSCode — patch files
+
+`.vscode/settings.json` in a template repo:
+
+```json
+{
+  "json.schemas": [
+    {
+      "fileMatch": ["patches/*.json"],
+      "url": "https://raw.githubusercontent.com/SoheilSalmani/weft/master/schemas/weft-patch.schema.json"
+    }
+  ]
+}
+```
+
+### VSCode — weft.toml (Even Better TOML)
+
+```json
+{
+  "evenBetterToml.schema.associations": {
+    "weft\\.toml$": "https://raw.githubusercontent.com/SoheilSalmani/weft/master/schemas/weft-manifest.schema.json"
+  }
+}
+```
+
+### Neovim / anything using taplo
+
+`.taplo.toml` in the template repo:
+
+```toml
+[[rule]]
+include = ["**/weft.toml"]
+
+[rule.schema]
+path = "https://raw.githubusercontent.com/SoheilSalmani/weft/master/schemas/weft-manifest.schema.json"
+```
+
+For JSON patch files, jsonls accepts the same `json.schemas`-style
+configuration through its `settings.json.schemas` LSP settings.
+
+> The raw.githubusercontent URLs require the repo to be public; until then,
+> point at a local checkout's `schemas/` directory instead.
+
+*(LSP server and editor commands: coming in the next phases of the editor
+track — this page will grow `weft lsp` setup for VSCode/Neovim and the
+`Weft: New Project` flows.)*
