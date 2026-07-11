@@ -7,6 +7,8 @@
 //! the *file* formats (name-based deps, segment shorthands) rather than the
 //! in-memory model.
 
+#![allow(dead_code)] // mirrors exist for schema generation + validation, not field access
+
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 use schemars::JsonSchema;
