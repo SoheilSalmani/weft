@@ -62,6 +62,47 @@ configuration through its `settings.json.schemas` LSP settings.
 > The raw.githubusercontent URLs require the repo to be public; until then,
 > point at a local checkout's `schemas/` directory instead.
 
-*(LSP server and editor commands: coming in the next phases of the editor
-track — this page will grow `weft lsp` setup for VSCode/Neovim and the
-`Weft: New Project` flows.)*
+## The language server (`weft lsp`)
+
+One server, every editor: live `weft check` diagnostics published to the
+files each issue names, completion for answer ids (inside `{"answer": …}`,
+`when`/`default` strings) and dependency names, hover with question/patch
+metadata, and go-to-definition from an answer reference to its
+`[[question]]` (and dep names to patch files).
+
+### VSCode
+
+Install the extension from `editors/vscode/` (F5 dev-host, or `vsce
+package`); it launches `weft lsp` automatically for `weft.toml` and
+`patches/*.json`, bundles the patch schema, and adds **Weft: New Project**
+— a QuickPick flow generated from `weft describe --json` that ends in
+`weft new --answers-json`.
+
+### Neovim
+
+`editors/nvim/` is a small plugin: it attaches `weft lsp` to template
+buffers and adds `:WeftNew [template] [dest]`, which opens weft's
+full-screen wizard in a floating terminal.
+
+```lua
+require("weft").setup({ bin = "weft" })
+```
+
+No plugin manager? The raw `vim.lsp.start` call it makes works standalone:
+
+```lua
+vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
+  pattern = { "weft.toml", "*/patches/*.json" },
+  callback = function(ev)
+    vim.lsp.start({ name = "weft", cmd = { "weft", "lsp" } }, { bufnr = ev.buf })
+  end,
+})
+```
+
+## The terminal wizard
+
+Interactive `weft new` / `weft record` now open a full-screen answers form
+(kind-aware editing, live `when`-gating, descriptions and examples inline,
+required tracking). It runs in any terminal — including editors' embedded
+terminals — so it *is* the TUI story everywhere. `--no-wizard` restores the
+sequential prompts.

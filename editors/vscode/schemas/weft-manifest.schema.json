@@ -1,0 +1,240 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "weft manifest",
+  "description": "The weft template manifest (`weft.toml`).",
+  "type": "object",
+  "properties": {
+    "template": {
+      "$ref": "#/$defs/TemplateMeta"
+    },
+    "question": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Question"
+      }
+    },
+    "preset": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PresetDecl"
+      }
+    },
+    "task": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Task"
+      }
+    }
+  },
+  "required": [
+    "template"
+  ],
+  "$defs": {
+    "TemplateMeta": {
+      "description": "`[template]` metadata.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "weft-version": {
+          "description": "Manifest format version (currently \"0.1\").",
+          "type": "string"
+        },
+        "description": {
+          "description": "What this template scaffolds — the first thing agents read.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "weft-version"
+      ]
+    },
+    "Question": {
+      "description": "A `[[question]]` the template asks.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Answer id: a Starlark identifier (lowercase, digits, underscore).",
+          "type": "string"
+        },
+        "prompt": {
+          "description": "Shown when prompting (defaults to the id).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "description": {
+          "description": "Longer human/agent-facing explanation of what this answer controls.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "example": {
+          "description": "Example value (display form, not Starlark).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "default": {
+          "description": "Starlark default; may reference earlier questions. String literals\nneed inner quotes: `default = \"'api'\"`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "when": {
+          "description": "Ask only if this Starlark gate is truthy (earlier answers in scope).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "bool"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "int"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "choices": {
+              "description": "The legal values.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "choice"
+            }
+          },
+          "required": [
+            "kind",
+            "choices"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "source": {
+              "description": "`env:VAR`, `cmd:...`, or `prompt` — resolved at render time,\nnever persisted.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "secret"
+            }
+          },
+          "required": [
+            "kind",
+            "source"
+          ]
+        }
+      ]
+    },
+    "PresetDecl": {
+      "description": "A `[[preset]]` declaration: a named partial answer-set.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "file": {
+          "description": "Path to a plain TOML answer map, relative to the template root.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "file"
+      ]
+    },
+    "Task": {
+      "description": "A `[[task]]` node: fired on scaffold, re-fired on update only when its\ndeclared inputs changed.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "inputs": {
+          "description": "`glob:PATTERN`, `answer:ID`, or `task:ID`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "action": {
+          "description": "Shell command run in the scaffolded directory.",
+          "type": "string"
+        },
+        "when": {
+          "description": "Starlark gate.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "action"
+      ]
+    }
+  }
+}

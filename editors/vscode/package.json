@@ -1,0 +1,55 @@
+{
+  "name": "weft-vscode",
+  "displayName": "Weft",
+  "description": "Weft template authoring: LSP diagnostics/completion/hover, schema validation, and a New Project flow.",
+  "version": "0.1.0",
+  "publisher": "weft",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/weft.toml"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "weft.newProject",
+        "title": "Weft: New Project"
+      }
+    ],
+    "jsonValidation": [
+      {
+        "fileMatch": "patches/*.json",
+        "url": "./schemas/weft-patch.schema.json"
+      }
+    ],
+    "configuration": {
+      "title": "Weft",
+      "properties": {
+        "weft.path": {
+          "type": "string",
+          "default": "weft",
+          "description": "Path to the weft binary."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -w -p ."
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5"
+  }
+}

@@ -3,6 +3,29 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Editor track (schemas, LSP, wizard, shims)
+
+- `weft schema` emits JSON Schemas for patches and weft.toml from
+  hand-mirrored schemars structs (core/engine stay schemars-free; mirrors
+  document the *file* formats incl. segment shorthands). Generated copies
+  committed under `schemas/`; e2e validates every fixture and rejects
+  malformed ops/kinds/stray keys.
+- `weft lsp` (tower-lsp, stdio): check diagnostics mapped to the files each
+  issue names with token-anchored ranges, answer-id/dep completion, hover
+  with question/patch metadata, go-to-definition. Position features are
+  line-heuristic by design (noted for later precision). e2e speaks framed
+  LSP over stdio.
+- Full-screen ratatui wizard as the interactive path of new/record: pure
+  `WizardState` (declaration-order gating identical to render, provenance
+  labels, readiness) unit-tested separately from the terminal loop;
+  `--no-wizard` falls back to dialoguer. Wizard answers travel as the
+  highest-precedence answers-json layer; engine gained
+  `answers::layered_with_json` shared by new/record/wizard.
+- Thin editor shims in `editors/`: VSCode extension (LSP client, bundled
+  patch schema, `Weft: New Project` QuickPick flow from describe --json)
+  and weft.nvim (`weft lsp` autostart + `:WeftNew` floating-terminal
+  wizard).
+
 ## Post-MVP — AI-ready (contract, metadata, AGENTS.md, MCP)
 
 - Patches carry `description`/`tags` metadata **outside the canonical hash**
