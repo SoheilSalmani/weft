@@ -42,18 +42,13 @@ pub fn run(opts: &RecordOptions, interaction: &mut dyn Interaction) -> Result<Ut
     }
 
     let eval = StarlarkEval;
-    let mut provided = answers::layered_answers(
+    let provided = answers::layered_with_json(
         &template,
         &opts.presets,
         opts.answers_file.as_deref(),
         &opts.answers,
+        opts.answers_json.as_deref(),
     )?;
-    if let Some(json) = &opts.answers_json {
-        provided.overlay(&answers::answers_from_json(
-            &template.manifest.questions,
-            json,
-        )?);
-    }
     let resolved = answers::gather(
         &template,
         &provided,

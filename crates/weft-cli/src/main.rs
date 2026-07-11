@@ -1,6 +1,7 @@
 mod lsp;
 mod mcp;
 mod schema;
+mod wizard;
 
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
@@ -43,6 +44,9 @@ enum Command {
         /// Never prompt; fail if answers are missing.
         #[arg(long)]
         non_interactive: bool,
+        /// Use sequential prompts instead of the full-screen wizard.
+        #[arg(long)]
+        no_wizard: bool,
     },
     /// Re-render against the current template state and 3-way merge the
     /// changes over local edits.
@@ -87,6 +91,9 @@ enum Command {
         /// Never prompt; fail if answers are missing.
         #[arg(long)]
         non_interactive: bool,
+        /// Use sequential prompts instead of the full-screen wizard.
+        #[arg(long)]
+        no_wizard: bool,
     },
     /// Diff the recording worktree against its base and append the result as
     /// a new patch (with value abstraction).
@@ -217,8 +224,9 @@ fn main() -> anyhow::Result<()> {
             answers_json,
             skip_tasks,
             non_interactive,
+            no_wizard,
         } => {
-            let opts = NewOptions {
+            let mut opts = NewOptions {
                 template,
                 dest,
                 presets,
@@ -227,6 +235,15 @@ fn main() -> anyhow::Result<()> {
                 answers_json,
                 skip_tasks,
             };
+            maybe_wizard(
+                &opts.template,
+                &opts.presets,
+                opts.answers_file.as_deref(),
+                &opts.answers,
+                &mut opts.answers_json,
+                non_interactive,
+                no_wizard,
+            )?;
             let mut interaction = auto_interaction(non_interactive);
             weft_engine::new::run(&opts, interaction.as_mut())
         }
@@ -259,8 +276,9 @@ fn main() -> anyhow::Result<()> {
             answers_file,
             force,
             non_interactive,
+            no_wizard,
         } => {
-            let opts = weft_engine::record::RecordOptions {
+            let mut opts = weft_engine::record::RecordOptions {
                 template,
                 base,
                 presets,
@@ -269,6 +287,15 @@ fn main() -> anyhow::Result<()> {
                 answers_json: None,
                 force,
             };
+            maybe_wizard(
+                &opts.template,
+                &opts.presets,
+                opts.answers_file.as_deref(),
+                &opts.answers,
+                &mut opts.answers_json,
+                non_interactive,
+                no_wizard,
+            )?;
             let mut interaction = auto_interaction(non_interactive);
             let worktree = weft_engine::record::run(&opts, interaction.as_mut())?;
             weft_engine::record::announce(&worktree);
@@ -472,4 +499,57 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
+}
+
+/// Run the full-screen wizard when interactive (TTY, not --non-interactive,
+/// not --no-wizard) and stash its answers as the highest-precedence JSON
+/// layer. Falls through silently otherwise.
+#[allow(clippy::too_many_arguments)]
+fn maybe_wizard(
+    template_dir: &Utf8PathBuf,
+    presets: &[String],
+    answers_file: Option<&camino::Utf8Path>,
+    answer_args: &[String],
+    answers_json: &mut Option<String>,
+    non_interactive: bool,
+    no_wizard: bool,
+) -> anyhow::Result<()> {
+    use std::io::IsTerminal;
+    if non_interactive || no_wizard || !std::io::stdin().is_terminal() {
+        return Ok(());
+    }
+    let template = Template::load(template_dir)?;
+    let provided = weft_engine::answers::layered_with_json(
+        &template,
+        presets,
+        answers_file,
+        answer_args,
+        answers_json.as_deref(),
+    )?;
+    let eval = weft_engine::eval();
+    let entered = wizard::run(
+        &template.manifest.template.name,
+        &template.manifest.questions,
+        &provided,
+        &eval,
+    )?;
+    if !entered.is_empty() {
+        let mut merged = provided;
+        merged.overlay(&entered);
+        // Serialize the wizard layer only (secrets never appear here).
+        let map: std::collections::BTreeMap<String, serde_json::Value> = entered
+            .iter()
+            .map(|(k, v)| {
+                let json = match v {
+                    weft_core::Value::String(s) => serde_json::Value::String(s.clone()),
+                    weft_core::Value::Bool(b) => serde_json::Value::Bool(*b),
+                    weft_core::Value::Int(i) => serde_json::Value::Number((*i).into()),
+                    weft_core::Value::Secret(_) => unreachable!("wizard never holds secrets"),
+                };
+                (k.0.clone(), json)
+            })
+            .collect();
+        *answers_json = Some(serde_json::to_string(&map)?);
+    }
+    Ok(())
 }

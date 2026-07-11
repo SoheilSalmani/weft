@@ -162,6 +162,28 @@ pub fn gather(
     Ok(validated)
 }
 
+/// The full pre-interactive layering: presets → answers file → `--answer`
+/// flags → answers JSON (inline, `@file`, `-` for stdin). Later wins.
+pub fn layered_with_json(
+    template: &Template,
+    presets: &[String],
+    answers_file: Option<&Utf8Path>,
+    answer_args: &[String],
+    answers_json: Option<&str>,
+) -> Result<AnswerSet> {
+    let mut provided = layered_answers(template, presets, answers_file, answer_args)?;
+    if let Some(spec) = answers_json {
+        let json = match spec {
+            "-" => std::io::read_to_string(std::io::stdin())?,
+            s if s.starts_with('@') => std::fs::read_to_string(&s[1..])
+                .with_context(|| format!("reading answers JSON file {}", &s[1..]))?,
+            s => s.to_owned(),
+        };
+        provided.overlay(&answers_from_json(&template.manifest.questions, &json)?);
+    }
+    Ok(provided)
+}
+
 /// Kind-appropriate stand-in values for trial-evaluating expressions
 /// (previews of defaults, validating gates) without real user input.
 pub fn dummy_answers(questions: &[Question]) -> AnswerSet {

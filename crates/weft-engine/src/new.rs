@@ -27,24 +27,13 @@ pub fn run(opts: &NewOptions, interaction: &mut dyn Interaction) -> Result<()> {
     let template = Template::load(&opts.template)?;
     let eval = StarlarkEval;
 
-    let mut provided = answers::layered_answers(
+    let provided = answers::layered_with_json(
         &template,
         &opts.presets,
         opts.answers_file.as_deref(),
         &opts.answers,
+        opts.answers_json.as_deref(),
     )?;
-    if let Some(spec) = &opts.answers_json {
-        let json = match spec.as_str() {
-            "-" => std::io::read_to_string(std::io::stdin())?,
-            s if s.starts_with('@') => std::fs::read_to_string(&s[1..])
-                .with_context(|| format!("reading answers JSON file {}", &s[1..]))?,
-            s => s.to_owned(),
-        };
-        provided.overlay(&answers::answers_from_json(
-            &template.manifest.questions,
-            &json,
-        )?);
-    }
     let resolved = answers::gather(
         &template,
         &provided,
