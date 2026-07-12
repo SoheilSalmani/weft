@@ -45,9 +45,52 @@ pub struct GraphNode {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     pub ops: Vec<OpSummary>,
+    /// This patch's hooks (declaration order), for the UI's pre/post panels.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hooks: Vec<HookSummary>,
     /// Whether the patch applies under the supplied answers; `None` when the
     /// graph was built without answers.
     pub active: Option<bool>,
+}
+
+/// A patch hook, summarized for display.
+#[derive(Debug, Serialize)]
+pub struct HookSummary {
+    pub id: String,
+    /// `pre` | `post`.
+    pub phase: &'static str,
+    /// `check` | `setup` | `deploy`.
+    pub effect: &'static str,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Command source (interpolations shown as `${…}`).
+    pub action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub after: Vec<String>,
+}
+
+fn hook_summary(hook: &weft_core::Hook) -> HookSummary {
+    use weft_core::{HookEffect, HookPhase};
+    HookSummary {
+        id: hook.id.to_string(),
+        phase: match hook.phase {
+            HookPhase::Pre => "pre",
+            HookPhase::Post => "post",
+        },
+        effect: match hook.effect {
+            HookEffect::Check => "check",
+            HookEffect::Setup => "setup",
+            HookEffect::Deploy => "deploy",
+        },
+        label: hook.label.clone(),
+        description: hook.description.clone(),
+        action: hook.action.source(),
+        when: hook.when.as_ref().map(|e| e.as_str().to_owned()),
+        after: hook.after.iter().map(ToString::to_string).collect(),
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -90,6 +133,7 @@ pub fn graph_doc(
             description: patch.meta.description.clone(),
             tags: patch.meta.tags.clone(),
             ops: patch.ops.iter().map(op_summary).collect(),
+            hooks: patch.meta.hooks.iter().map(hook_summary).collect(),
             active: skipped.as_ref().map(|s| !s.contains(&patch.id)),
         });
         for dep in &patch.depends_on {

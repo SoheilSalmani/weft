@@ -5,20 +5,20 @@
 
 #![forbid(unsafe_code)]
 
+pub mod hook;
 pub mod id;
 pub mod merge;
 pub mod patch;
 pub mod question;
 pub mod render;
 pub mod segment;
-pub mod task;
 pub mod tree;
 pub mod value;
 
-pub use id::{AnswerId, PatchId, TaskId};
+pub use hook::{Command, Hook, HookEffect, HookInput, HookPhase};
+pub use id::{AnswerId, HookId, PatchId};
 pub use patch::{Hunk, Op, Patch, PatchMeta, DEFAULT_FILE_MODE};
 pub use question::{AnswerKind, Question, SecretSpec, StarlarkExpr};
 pub use segment::{join_lines, Content, Line, Segment, TemplatePath};
-pub use task::{Task, TaskAction, TaskInput};
 pub use tree::{FileEntry, Tree};
 pub use value::{AnswerSet, SecretValue, Value};

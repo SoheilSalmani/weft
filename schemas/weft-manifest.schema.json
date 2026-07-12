@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "weft manifest",
-  "description": "The weft template manifest (`weft.toml`).",
+  "description": "The weft template manifest (`weft.toml`). Side-effects live on patches\n(`patches/<name>.json` `hooks`), not here.",
   "type": "object",
   "properties": {
     "template": {
@@ -17,12 +17,6 @@
       "type": "array",
       "items": {
         "$ref": "#/$defs/PresetDecl"
-      }
-    },
-    "task": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/Task"
       }
     }
   },
@@ -225,91 +219,6 @@
       "required": [
         "name",
         "file"
-      ]
-    },
-    "Task": {
-      "description": "A `[[task]]` node: fired on scaffold, re-fired on update only when its\ndeclared inputs changed.",
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "inputs": {
-          "description": "`glob:PATTERN`, `answer:ID`, or `task:ID`.",
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": []
-        },
-        "action": {
-          "description": "Shell command run in the scaffolded directory: a plain string when\nfully literal, or an array of segments to interpolate answers/exprs\n(e.g. `[\"shadcn add \", {\"expr\": \"' '.join(components)\"}]`).",
-          "$ref": "#/$defs/TaskCommand"
-        },
-        "when": {
-          "description": "Starlark gate.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "id",
-        "action"
-      ]
-    },
-    "TaskCommand": {
-      "description": "A task command: a plain shell string, or an array of segments.",
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Segment"
-          }
-        }
-      ]
-    },
-    "Segment": {
-      "description": "One piece of a path or content line.",
-      "anyOf": [
-        {
-          "description": "Literal text.",
-          "type": "string"
-        },
-        {
-          "description": "Substitute an answer's value at render time.",
-          "type": "object",
-          "properties": {
-            "answer": {
-              "description": "The question id whose value is substituted.",
-              "type": "string"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "answer"
-          ]
-        },
-        {
-          "description": "Evaluate a Starlark expression at render time.",
-          "type": "object",
-          "properties": {
-            "expr": {
-              "description": "Starlark source; answers are in scope as variables.",
-              "type": "string"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "expr"
-          ]
-        }
       ]
     }
   }

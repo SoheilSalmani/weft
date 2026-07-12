@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::hook::Hook;
 use crate::id::PatchId;
 use crate::question::StarlarkExpr;
 use crate::segment::{Content, Line, TemplatePath};
@@ -37,6 +38,10 @@ pub struct PatchMeta {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Pre/post-render side-effects owned by this patch. Not hashed: adding or
+    /// editing a hook never changes the patch id (like `description`/`tags`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hooks: Vec<Hook>,
 }
 
 /// The hashed portion of a patch. Field order is the canonical key order.
@@ -179,10 +184,22 @@ mod tests {
 
     #[test]
     fn metadata_never_changes_the_id() {
+        use crate::hook::{Command, Hook, HookEffect, HookPhase};
         let plain = sample_patch();
         let documented = sample_patch().with_meta(PatchMeta {
             description: Some("adds docker support".into()),
             tags: vec!["docker".into(), "infra".into()],
+            hooks: vec![Hook {
+                id: "verify-docker".into(),
+                phase: HookPhase::Pre,
+                effect: HookEffect::Check,
+                label: "Verify docker is installed".into(),
+                description: None,
+                action: Command::literal("command -v docker"),
+                when: None,
+                after: vec![],
+                inputs: vec![],
+            }],
         });
         assert_eq!(plain.id, documented.id);
         assert_eq!(plain.canonical_json(), documented.canonical_json());

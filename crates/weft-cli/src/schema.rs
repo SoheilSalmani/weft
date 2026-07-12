@@ -121,6 +121,65 @@ pub struct PatchFile {
     pub when: Option<String>,
     /// Operations, applied in order.
     pub ops: Vec<Op>,
+    /// Pre/post-render side-effects owned by this patch. Metadata: never part
+    /// of the content hash, so adding/editing a hook never changes patch ids.
+    #[serde(default)]
+    pub hooks: Vec<Hook>,
+}
+
+/// A patch-scoped side-effect that runs before (`pre`) or after (`post`) the
+/// render.
+#[derive(JsonSchema, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Hook {
+    /// Unique slug across the template (referenced by `after`/`inputs`).
+    pub id: String,
+    /// `pre` runs before any file is written (a non-zero exit aborts);
+    /// `post` runs after the tree is written.
+    pub phase: HookPhase,
+    /// `check` = read-only verification (safe to auto-run); `setup` =
+    /// idempotent local mutation; `deploy` = external/irreversible side-effect.
+    pub effect: HookEffect,
+    /// Short human/agent label, e.g. "Verify uv is installed".
+    pub label: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Shell command: a plain string when literal, or an array of segments to
+    /// interpolate answers/exprs (e.g. `["shadcn add ", {"expr": "..."}]`).
+    pub action: Command,
+    /// Starlark gate.
+    #[serde(default)]
+    pub when: Option<String>,
+    /// Other hooks this one must run after (ordering edges).
+    #[serde(default)]
+    pub after: Vec<String>,
+    /// Post-only: `glob:PATTERN`, `answer:ID`, or `hook:ID` — on `weft update`
+    /// this hook re-fires only when one changed.
+    #[serde(default)]
+    pub inputs: Vec<String>,
+}
+
+#[derive(JsonSchema, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HookPhase {
+    Pre,
+    Post,
+}
+
+#[derive(JsonSchema, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HookEffect {
+    Check,
+    Setup,
+    Deploy,
+}
+
+/// A shell command: a plain string, or an array of segments.
+#[derive(JsonSchema, Deserialize)]
+#[serde(untagged)]
+pub enum Command {
+    Shell(String),
+    Segments(Vec<Segment>),
 }
 
 // ---- manifest (weft.toml) ----------------------------------------------
@@ -198,33 +257,8 @@ pub struct PresetDecl {
     pub file: String,
 }
 
-/// A `[[task]]` node: fired on scaffold, re-fired on update only when its
-/// declared inputs changed.
-#[derive(JsonSchema, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Task {
-    pub id: String,
-    /// `glob:PATTERN`, `answer:ID`, or `task:ID`.
-    #[serde(default)]
-    pub inputs: Vec<String>,
-    /// Shell command run in the scaffolded directory: a plain string when
-    /// fully literal, or an array of segments to interpolate answers/exprs
-    /// (e.g. `["shadcn add ", {"expr": "' '.join(components)"}]`).
-    pub action: TaskCommand,
-    /// Starlark gate.
-    #[serde(default)]
-    pub when: Option<String>,
-}
-
-/// A task command: a plain shell string, or an array of segments.
-#[derive(JsonSchema, Deserialize)]
-#[serde(untagged)]
-pub enum TaskCommand {
-    Shell(String),
-    Segments(Vec<Segment>),
-}
-
-/// The weft template manifest (`weft.toml`).
+/// The weft template manifest (`weft.toml`). Side-effects live on patches
+/// (`patches/<name>.json` `hooks`), not here.
 #[derive(JsonSchema, Deserialize)]
 #[schemars(title = "weft manifest")]
 pub struct Manifest {
@@ -233,8 +267,6 @@ pub struct Manifest {
     pub questions: Vec<Question>,
     #[serde(default, rename = "preset")]
     pub presets: Vec<PresetDecl>,
-    #[serde(default, rename = "task")]
-    pub tasks: Vec<Task>,
 }
 
 /// Generate both schemas into `out` (created if needed).

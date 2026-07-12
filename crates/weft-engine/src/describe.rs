@@ -20,7 +20,9 @@ pub struct DescribeDoc {
     pub questions: Vec<QuestionDescription>,
     pub presets: Vec<PresetDescription>,
     pub patches: Vec<PatchDescription>,
-    pub tasks: Vec<TaskDescription>,
+    /// All hooks across all patches, ordered `pre` then `post`, each in patch
+    /// render order then declaration order (execution order).
+    pub hooks: Vec<HookDescription>,
     pub usage: Usage,
 }
 
@@ -85,13 +87,28 @@ pub struct PatchDescription {
     pub ops: Vec<graph::OpSummary>,
 }
 
+/// A patch-scoped side-effect, in execution order. Everything an agent needs
+/// to understand what runs, when, and its blast radius.
 #[derive(Serialize)]
-pub struct TaskDescription {
+pub struct HookDescription {
     pub id: String,
-    pub inputs: Vec<String>,
+    /// The patch that owns this hook.
+    pub patch: String,
+    /// `pre` (guard, before write) | `post` (after write).
+    pub phase: &'static str,
+    /// `check` (read-only) | `setup` (idempotent local) | `deploy` (external).
+    pub effect: &'static str,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Command source (interpolations shown as `${…}`; secrets never resolved).
     pub action: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub when: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub after: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -179,17 +196,7 @@ pub fn describe(template: &Template, eval: &dyn ExprEval) -> Result<DescribeDoc>
         })
         .collect();
 
-    let tasks = template
-        .manifest
-        .tasks
-        .iter()
-        .map(|t| TaskDescription {
-            id: t.id.to_string(),
-            inputs: t.inputs.iter().map(ToString::to_string).collect(),
-            action: t.action.source(),
-            when: t.when.as_ref().map(|e| e.as_str().to_owned()),
-        })
-        .collect();
+    let hooks = hook_descriptions(template);
 
     let usage = build_usage(template, &question_docs, &dummies);
 
@@ -202,9 +209,52 @@ pub fn describe(template: &Template, eval: &dyn ExprEval) -> Result<DescribeDoc>
         questions: question_docs,
         presets,
         patches,
-        tasks,
+        hooks,
         usage,
     })
+}
+
+/// Flatten every patch's hooks into execution order: `pre` before `post`,
+/// then patch render order (`template.patches` is topological), then
+/// declaration order. This is the full side-effect contract for agents.
+fn hook_descriptions(template: &Template) -> Vec<HookDescription> {
+    use weft_core::{HookEffect, HookPhase};
+    let mut rows: Vec<(u8, usize, usize, HookDescription)> = Vec::new();
+    for (pi, patch) in template.patches.iter().enumerate() {
+        let patch_name = template.id_to_name[&patch.id].clone();
+        for (di, hook) in patch.meta.hooks.iter().enumerate() {
+            let phase_rank = match hook.phase {
+                HookPhase::Pre => 0,
+                HookPhase::Post => 1,
+            };
+            rows.push((
+                phase_rank,
+                pi,
+                di,
+                HookDescription {
+                    id: hook.id.to_string(),
+                    patch: patch_name.clone(),
+                    phase: match hook.phase {
+                        HookPhase::Pre => "pre",
+                        HookPhase::Post => "post",
+                    },
+                    effect: match hook.effect {
+                        HookEffect::Check => "check",
+                        HookEffect::Setup => "setup",
+                        HookEffect::Deploy => "deploy",
+                    },
+                    label: hook.label.clone(),
+                    description: hook.description.clone(),
+                    action: hook.action.source(),
+                    when: hook.when.as_ref().map(|e| e.as_str().to_owned()),
+                    after: hook.after.iter().map(ToString::to_string).collect(),
+                    inputs: hook.inputs.iter().map(ToString::to_string).collect(),
+                },
+            ));
+        }
+    }
+    rows.sort_by_key(|(phase, pi, di, _)| (*phase, *pi, *di));
+    rows.into_iter().map(|(_, _, _, d)| d).collect()
 }
 
 fn answer_set_to_json(set: &AnswerSet) -> BTreeMap<String, serde_json::Value> {
@@ -382,6 +432,29 @@ pub fn agents_md(doc: &DescribeDoc) -> String {
         w(&line);
     }
     w("");
+
+    if !doc.hooks.is_empty() {
+        w("## Hooks (side-effects, in run order)");
+        w("");
+        w("`pre` hooks run before any file is written (a failure aborts); `post`");
+        w("hooks run after. Effects: **check** = read-only/safe, **setup** =");
+        w("idempotent local, **deploy** = external/irreversible (confirm first).");
+        w("");
+        w("| phase | effect | label | patch | command | when |");
+        w("| --- | --- | --- | --- | --- | --- |");
+        for h in &doc.hooks {
+            w(&format!(
+                "| {} | {} | {} | `{}` | `{}` | {} |",
+                h.phase,
+                h.effect,
+                h.label,
+                h.patch,
+                h.action,
+                h.when.as_deref().unwrap_or("—"),
+            ));
+        }
+        w("");
+    }
 
     w("## Scaffold");
     w("");

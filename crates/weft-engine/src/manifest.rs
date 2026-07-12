@@ -1,8 +1,11 @@
 use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
-use weft_core::{Question, Task};
+use weft_core::Question;
 
 /// The parsed `weft.toml` at a template root.
+///
+/// Side-effects (`hooks`) are **not** declared here — they live on the patches
+/// that own them (`patches/<name>.json`), collected at render time.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Manifest {
     pub template: TemplateMeta,
@@ -10,8 +13,6 @@ pub struct Manifest {
     pub questions: Vec<Question>,
     #[serde(default, rename = "preset", skip_serializing_if = "Vec::is_empty")]
     pub presets: Vec<PresetDecl>,
-    #[serde(default, rename = "task", skip_serializing_if = "Vec::is_empty")]
-    pub tasks: Vec<Task>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -10,9 +10,9 @@ use weft_core::merge::merge3;
 use weft_core::{AnswerId, AnswerSet, FileEntry, Question, Value};
 use weft_lang::StarlarkEval;
 
+use crate::hooks::{self, ChangeSet};
 use crate::interact::Interaction;
 use crate::state::State;
-use crate::tasks::{self, ChangeSet};
 use crate::template::Template;
 use crate::{answers, fsio, secrets};
 
@@ -122,12 +122,10 @@ pub fn run(opts: &UpdateOptions, interaction: &mut dyn Interaction) -> Result<Up
         paths: changed_paths,
         answers: changed_answers,
     };
-    let task_plan = tasks::plan(
-        &template.manifest.tasks,
-        &new_answers,
-        &eval,
-        Some(&changes),
-    )?;
+    // Pre-hooks always run on update (they're guards); post-hooks re-fire only
+    // when one of their inputs changed.
+    let collected = hooks::collect(&template, &new_answers, &eval)?;
+    let post_plan = hooks::fire_on_update(&collected.post, Some(&changes), &eval, &new_answers)?;
 
     if opts.dry_run {
         if actions.is_empty() {
@@ -136,10 +134,22 @@ pub fn run(opts: &UpdateOptions, interaction: &mut dyn Interaction) -> Result<Up
         for (path, action) in &actions {
             eprintln!("dry run: {} {path}", action.verb());
         }
-        for task in &task_plan {
-            eprintln!("dry run: would run task `{}`", task.id);
+        for hook in &collected.pre {
+            eprintln!("dry run: would run pre-hook `{}` ({})", hook.id, hook.label);
+        }
+        for hook in &post_plan {
+            eprintln!(
+                "dry run: would run post-hook `{}` ({})",
+                hook.id, hook.label
+            );
         }
         return Ok(report);
+    }
+
+    // Pre-hooks run before touching files.
+    if !opts.skip_tasks {
+        hooks::run(&collected.pre, &opts.dest, &new_answers, &eval)
+            .context("a pre-render hook failed")?;
     }
 
     for (path, action) in actions {
@@ -179,11 +189,11 @@ pub fn run(opts: &UpdateOptions, interaction: &mut dyn Interaction) -> Result<Up
     .save(&opts.dest)?;
 
     if !opts.skip_tasks && report.conflicts.is_empty() {
-        tasks::run(&task_plan, &opts.dest, &new_answers, &eval)?;
-    } else if !task_plan.is_empty() && !report.conflicts.is_empty() {
+        hooks::run(&post_plan, &opts.dest, &new_answers, &eval)?;
+    } else if !post_plan.is_empty() && !report.conflicts.is_empty() {
         report.notes.push(format!(
-            "skipped {} task(s) because of conflicts; re-run them after resolving",
-            task_plan.len()
+            "skipped {} post-hook(s) because of conflicts; re-run them after resolving",
+            post_plan.len()
         ));
     }
 

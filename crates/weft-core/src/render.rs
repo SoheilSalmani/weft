@@ -220,33 +220,44 @@ pub fn unanswered<'q>(
     let mut resolved = AnswerSet::new();
     let mut missing = Vec::new();
     for q in questions {
-        if let Some(when) = &q.when {
+        let gated_off = if let Some(when) = &q.when {
             // Gate evaluation uses answers resolved so far; questions after a
             // missing answer may be mis-gated, so callers should re-run after
             // filling in the missing ones (the engine prompts in order).
-            let asked = eval
-                .eval_bool(when, &resolved)
-                .map_err(|e| RenderError::Eval {
-                    expr: when.0.clone(),
-                    context: format!("when of question `{}`", q.id),
-                    source: e,
-                })?;
-            if !asked {
+            match eval.eval_bool(when, &resolved) {
+                Ok(asked) => !asked,
+                // The gate can't be evaluated yet (it references a not-yet-
+                // resolved missing answer): treat this question as not-missing
+                // for now — a re-run after the missing ones are filled will
+                // classify it. Only a genuine error (nothing else missing)
+                // surfaces.
+                Err(_) if !missing.is_empty() => continue,
+                Err(e) => {
+                    return Err(RenderError::Eval {
+                        expr: when.0.clone(),
+                        context: format!("when of question `{}`", q.id),
+                        source: e,
+                    })
+                }
+            }
+        } else {
+            false
+        };
+        if !gated_off {
+            if let Some(v) = provided.get(&q.id) {
+                resolved.insert(q.id.clone(), v.clone());
                 continue;
             }
         }
-        if let Some(v) = provided.get(&q.id) {
-            resolved.insert(q.id.clone(), v.clone());
-        } else if let Some(default) = &q.default {
+        if let Some(default) = &q.default {
             match eval.eval(default, &resolved) {
                 Ok(value) => {
                     resolved.insert(q.id.clone(), value);
                 }
-                // A default referencing an already-missing answer can't be
-                // computed yet; it will resolve once that answer is provided,
-                // so it isn't itself "missing". With nothing missing so far,
-                // the failure is a genuine expression error.
-                Err(_) if !missing.is_empty() => {}
+                // A gated-off default is best-effort (keeps the name defined);
+                // a default referencing an already-missing answer can't be
+                // computed yet. Either way, don't fail the pass.
+                Err(_) if gated_off || !missing.is_empty() => {}
                 Err(e) => {
                     return Err(RenderError::Eval {
                         expr: default.0.clone(),
@@ -255,7 +266,7 @@ pub fn unanswered<'q>(
                     })
                 }
             }
-        } else {
+        } else if !gated_off {
             missing.push(q);
         }
     }

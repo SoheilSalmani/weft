@@ -3,6 +3,42 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Patch-scoped hooks (pre/post-render actions)
+
+Replaces template-level `[[task]]` with **hooks** owned by patches. A hook is
+a labeled, AI-classified side-effect: `{ id, phase: pre|post, effect:
+check|setup|deploy, label, description?, action, when?, after[], inputs[] }`.
+
+- **Home & identity**: hooks live in `PatchMeta` (`weft-core`), which
+  `PatchBody`/`canonical_json` already omit — so adding/editing a hook never
+  changes patch ids (same guarantee as `description`/`tags`;
+  `metadata_never_changes_the_id` extended to cover hooks). `task.rs` →
+  `hook.rs`: `TaskAction`→`Command`, `TaskInput`→`HookInput` (`hook:` prefix),
+  `TaskId`→`HookId`, `Task`→`Hook`. Manifest `[[task]]` removed entirely
+  (`Manifest` drops `tasks`); every action is now patch-scoped.
+- **effect** is the AI-ready/risk axis: `check` (read-only, safe to auto-run;
+  a failing *pre* check aborts before any file is written), `setup`
+  (idempotent local), `deploy` (external/irreversible — confirm first).
+- **Ordering** (`weft-engine/hooks.rs`, was `tasks.rs`): collect hooks from
+  **active** patches only, split by phase; within a phase topo-sort over an
+  `after` DAG with a stable base order = patch render order + in-patch
+  declaration order (Kahn, ready-set drained by base index). Finalize hooks
+  (`format`, `git commit`) sequence via `after`.
+- **Execution**: pre-hooks run in `new.rs`/`update.rs` *before* `write_tree`
+  (abort → nothing written); post-hooks after `state.save`, rendered against
+  resolved answers via `render::render_segments`, bailing on first failure. On
+  update, a post-hook re-fires only when an `inputs` entry changed (`glob:`/
+  `answer:`/`hook:`); pre-hooks always run. Secret safety: the run log prints
+  the label (not the rendered command) for any non-literal command, so an
+  interpolated secret can't leak to stdout.
+- **Surfacing**: `weft check` → `hooks::validate_all` (unique ids, resolvable
+  `after`/`inputs`, no cycle, pre-hooks reject `inputs`, parseable exprs);
+  `describe` → a top-level `hooks` list in execution order (pre then post,
+  patch render order, declaration order) + an AGENTS.md "Hooks" table with the
+  effect legend; `graph` `GraphNode.hooks` (phase/effect/label/action) for the
+  cloud UI's pre/post panels. Patch-file schema gains `hooks`; manifest schema
+  drops `task`. Fixture `hello`'s task migrated to a `base` post-hook.
+
 ## Post-MVP — List answers & multi-select (for the web-template port)
 
 Driven by converting a real Copier monorepo template

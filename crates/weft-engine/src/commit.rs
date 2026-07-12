@@ -120,6 +120,7 @@ pub fn run(opts: &CommitOptions, interaction: &mut dyn Interaction) -> Result<()
         weft_core::PatchMeta {
             description: opts.describe.clone(),
             tags: opts.tags.clone(),
+            hooks: vec![],
         },
     )?;
     Session::discard(&opts.template)?;

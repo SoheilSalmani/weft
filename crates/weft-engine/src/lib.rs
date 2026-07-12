@@ -14,6 +14,7 @@ pub mod describe;
 pub mod diff;
 pub mod fsio;
 pub mod graph;
+pub mod hooks;
 pub mod interact;
 pub mod manifest;
 pub mod new;
@@ -21,7 +22,6 @@ pub mod record;
 pub mod secrets;
 pub mod session;
 pub mod state;
-pub mod tasks;
 pub mod template;
 pub mod update;
 

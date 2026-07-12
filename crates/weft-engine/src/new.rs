@@ -10,7 +10,7 @@ use weft_lang::StarlarkEval;
 use crate::interact::Interaction;
 use crate::state::State;
 use crate::template::Template;
-use crate::{answers, fsio, tasks};
+use crate::{answers, fsio, hooks};
 
 pub struct NewOptions {
     pub template: Utf8PathBuf,
@@ -45,7 +45,14 @@ pub fn run(opts: &NewOptions, interaction: &mut dyn Interaction) -> Result<()> {
     let tree = weft_core::render::render(&template.patches, &resolved, &eval)
         .context("rendering template")?;
 
+    // Collect the active patches' hooks; run pre-hooks (guards) before writing
+    // anything — a failing pre-hook aborts with nothing but an empty dest dir.
+    let collected = hooks::collect(&template, &resolved, &eval)?;
     fsio::ensure_empty_dest(&opts.dest)?;
+    if !opts.skip_tasks {
+        hooks::run(&collected.pre, &opts.dest, &resolved, &eval)
+            .context("a pre-render hook failed; no files were written")?;
+    }
     fsio::write_tree(&opts.dest, &tree)?;
 
     let secret_specs: BTreeMap<_, _> = template
@@ -74,8 +81,7 @@ pub fn run(opts: &NewOptions, interaction: &mut dyn Interaction) -> Result<()> {
     state.save(&opts.dest)?;
 
     if !opts.skip_tasks {
-        let plan = tasks::plan(&template.manifest.tasks, &resolved, &eval, None)?;
-        tasks::run(&plan, &opts.dest, &resolved, &eval)?;
+        hooks::run(&collected.post, &opts.dest, &resolved, &eval)?;
     }
 
     eprintln!(

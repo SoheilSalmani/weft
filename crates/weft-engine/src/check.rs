@@ -6,12 +6,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Result};
 use camino::Utf8PathBuf;
-use weft_core::{AnswerId, AnswerKind, Op, Patch, PatchId, Segment, TaskInput, TemplatePath};
+use weft_core::{AnswerId, AnswerKind, Op, Patch, PatchId, Segment, TemplatePath};
 use weft_lang::StarlarkEval;
 
 use crate::interact::NonInteractive;
 use crate::template::Template;
-use crate::{answers, tasks};
+use crate::{answers, hooks};
 
 pub struct CheckOptions {
     pub template: Utf8PathBuf,
@@ -105,53 +105,10 @@ pub fn run(opts: &CheckOptions) -> Result<CheckReport> {
         }
     }
 
-    // Tasks (topo_order validates duplicate ids, unknown deps, cycles)
-    if let Err(e) = tasks::topo_order(&template.manifest.tasks) {
-        issue(&mut report, format!("{e:#}"));
-    }
-    for task in &template.manifest.tasks {
-        for input in &task.inputs {
-            match input {
-                TaskInput::Glob(pattern) => {
-                    if globset::Glob::new(pattern).is_err() {
-                        issue(
-                            &mut report,
-                            format!("task `{}`: invalid glob {pattern:?}", task.id),
-                        );
-                    }
-                }
-                TaskInput::Answer(id) => {
-                    if !declared.contains(id) {
-                        issue(
-                            &mut report,
-                            format!("task `{}`: unknown answer input `{id}`", task.id),
-                        );
-                    }
-                }
-                TaskInput::Task(_) => {} // validated by topo_order
-            }
-        }
-        if let Some(when) = &task.when {
-            if let Err(e) = weft_lang::parse_expr(when.as_str()) {
-                issue(
-                    &mut report,
-                    format!("task `{}`: when does not parse: {e}", task.id),
-                );
-            }
-        }
-        for seg in &task.action.0 {
-            if let weft_core::Segment::Expr(e) = seg {
-                if let Err(err) = weft_lang::parse_expr(e.as_str()) {
-                    issue(
-                        &mut report,
-                        format!(
-                            "task `{}`: command expression does not parse: {err}",
-                            task.id
-                        ),
-                    );
-                }
-            }
-        }
+    // Hooks (patch-scoped): unique ids, resolvable after/inputs refs, no
+    // cycle, parseable when/command expressions.
+    for msg in hooks::validate_all(&template) {
+        issue(&mut report, msg);
     }
 
     // Patches: graph structure was validated at load; check expressions and

@@ -42,6 +42,13 @@
       "items": {
         "$ref": "#/$defs/Op"
       }
+    },
+    "hooks": {
+      "description": "Pre/post-render side-effects owned by this patch. Metadata: never part\nof the content hash, so adding/editing a hook never changes patch ids.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Hook"
+      }
     }
   },
   "additionalProperties": false,
@@ -275,6 +282,100 @@
         }
       },
       "additionalProperties": false
+    },
+    "Hook": {
+      "description": "A patch-scoped side-effect that runs before (`pre`) or after (`post`) the\nrender.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Unique slug across the template (referenced by `after`/`inputs`).",
+          "type": "string"
+        },
+        "phase": {
+          "description": "`pre` runs before any file is written (a non-zero exit aborts);\n`post` runs after the tree is written.",
+          "$ref": "#/$defs/HookPhase"
+        },
+        "effect": {
+          "description": "`check` = read-only verification (safe to auto-run); `setup` =\nidempotent local mutation; `deploy` = external/irreversible side-effect.",
+          "$ref": "#/$defs/HookEffect"
+        },
+        "label": {
+          "description": "Short human/agent label, e.g. \"Verify uv is installed\".",
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "action": {
+          "description": "Shell command: a plain string when literal, or an array of segments to\ninterpolate answers/exprs (e.g. `[\"shadcn add \", {\"expr\": \"...\"}]`).",
+          "$ref": "#/$defs/Command"
+        },
+        "when": {
+          "description": "Starlark gate.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "after": {
+          "description": "Other hooks this one must run after (ordering edges).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "inputs": {
+          "description": "Post-only: `glob:PATTERN`, `answer:ID`, or `hook:ID` — on `weft update`\nthis hook re-fires only when one changed.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "phase",
+        "effect",
+        "label",
+        "action"
+      ]
+    },
+    "HookPhase": {
+      "type": "string",
+      "enum": [
+        "pre",
+        "post"
+      ]
+    },
+    "HookEffect": {
+      "type": "string",
+      "enum": [
+        "check",
+        "setup",
+        "deploy"
+      ]
+    },
+    "Command": {
+      "description": "A shell command: a plain string, or an array of segments.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Segment"
+          }
+        }
+      ]
     }
   }
 }

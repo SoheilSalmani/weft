@@ -25,8 +25,3 @@ default = "True"
 [[preset]]
 name = "no-docker"
 file = "presets/no-docker.toml"
-
-[[task]]
-id = "mark-synced"
-inputs = ["glob:pyproject.toml"]
-action = "echo synced > .task-ran"

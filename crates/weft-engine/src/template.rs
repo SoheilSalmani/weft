@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use anyhow::{bail, Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
-use weft_core::{AnswerSet, Op, Patch, PatchId, StarlarkExpr};
+use weft_core::{AnswerSet, Hook, Op, Patch, PatchId, StarlarkExpr};
 
 use crate::manifest::Manifest;
 
@@ -25,6 +25,9 @@ pub struct PatchFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<StarlarkExpr>,
     pub ops: Vec<Op>,
+    /// Pre/post-render side-effects owned by this patch (never hashed).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hooks: Vec<Hook>,
 }
 
 /// A loaded template: manifest plus the patch DAG with resolved ids.
@@ -157,6 +160,7 @@ impl Template {
             depends_on,
             when,
             ops,
+            hooks: meta.hooks,
         };
         let dir = self.root.join(PATCHES_DIR);
         std::fs::create_dir_all(&dir)?;
@@ -204,6 +208,7 @@ fn resolve_patches(
             let patch = Patch::new(dep_ids, file.when, file.ops).with_meta(weft_core::PatchMeta {
                 description: file.description,
                 tags: file.tags,
+                hooks: file.hooks,
             });
             resolved.insert(name, patch.id);
             patches.push(patch);

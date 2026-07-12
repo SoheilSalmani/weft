@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize};
 #[serde(transparent)]
 pub struct AnswerId(pub String);
 
-/// Identifier of a task node, e.g. `uv-sync`.
+/// Identifier of a hook, e.g. `uv-sync`. Human slug, unique within a template.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct TaskId(pub String);
+pub struct HookId(pub String);
 
 /// Content address of a patch: blake3 of its canonical serialization.
 ///
@@ -70,7 +70,7 @@ impl fmt::Display for AnswerId {
     }
 }
 
-impl fmt::Display for TaskId {
+impl fmt::Display for HookId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
@@ -82,7 +82,7 @@ impl From<&str> for AnswerId {
     }
 }
 
-impl From<&str> for TaskId {
+impl From<&str> for HookId {
     fn from(s: &str) -> Self {
         Self(s.to_owned())
     }

@@ -33,5 +33,15 @@
         "version = \"0.1.0\""
       ]
     }
+  ],
+  "hooks": [
+    {
+      "id": "mark-synced",
+      "phase": "post",
+      "effect": "setup",
+      "label": "Record that dependencies synced",
+      "action": "echo synced > .task-ran",
+      "inputs": ["glob:pyproject.toml"]
+    }
   ]
 }
