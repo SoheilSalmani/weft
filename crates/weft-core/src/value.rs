@@ -17,6 +17,10 @@ pub enum Value {
     String(String),
     Bool(bool),
     Int(i64),
+    /// An ordered list of values, produced by multi-choice questions and
+    /// list-valued expressions. Lists are never written directly into file
+    /// content — project them through an expression (e.g. join) first.
+    List(Vec<Value>),
     Secret(SecretValue),
 }
 
@@ -47,16 +51,30 @@ impl Value {
             Value::String(_) => "string",
             Value::Bool(_) => "bool",
             Value::Int(_) => "int",
+            Value::List(_) => "list",
             Value::Secret(_) => "secret",
         }
     }
 
-    /// Concrete text used when substituting this value into file content.
+    /// Whether this value is a list. Rendering a list into file content is an
+    /// error (see `render_segment`); callers project lists via expressions.
+    pub fn is_list(&self) -> bool {
+        matches!(self, Value::List(_))
+    }
+
+    /// Concrete text used when substituting this value into file content, or
+    /// for human/agent display. Lists render as a `, `-joined display form;
+    /// the content path rejects lists before reaching here.
     pub fn render_text(&self) -> String {
         match self {
             Value::String(s) => s.clone(),
             Value::Bool(b) => if *b { "True" } else { "False" }.to_owned(),
             Value::Int(i) => i.to_string(),
+            Value::List(items) => items
+                .iter()
+                .map(Value::render_text)
+                .collect::<Vec<_>>()
+                .join(", "),
             Value::Secret(s) => s.expose().to_owned(),
         }
     }
@@ -68,6 +86,7 @@ impl Serialize for Value {
             Value::String(s) => serializer.serialize_str(s),
             Value::Bool(b) => serializer.serialize_bool(*b),
             Value::Int(i) => serializer.serialize_i64(*i),
+            Value::List(items) => serializer.collect_seq(items),
             Value::Secret(_) => Err(ser::Error::custom(
                 "refusing to serialize a secret value; store the secret *reference* instead",
             )),
@@ -81,7 +100,7 @@ impl<'de> Deserialize<'de> for Value {
         impl<'de> de::Visitor<'de> for V {
             type Value = Value;
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("a string, bool, or integer")
+                f.write_str("a string, bool, integer, or list")
             }
             fn visit_str<E: de::Error>(self, v: &str) -> Result<Value, E> {
                 Ok(Value::String(v.to_owned()))
@@ -99,6 +118,13 @@ impl<'de> Deserialize<'de> for Value {
                 i64::try_from(v)
                     .map(Value::Int)
                     .map_err(|_| E::custom("integer answer out of range"))
+            }
+            fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
+                let mut items = Vec::new();
+                while let Some(item) = seq.next_element::<Value>()? {
+                    items.push(item);
+                }
+                Ok(Value::List(items))
             }
         }
         deserializer.deserialize_any(V)
@@ -213,6 +239,22 @@ mod tests {
         let merged = layer(&[base, over]);
         assert_eq!(merged.get(&id("a")), Some(&Value::Int(1)));
         assert_eq!(merged.get(&id("b")), Some(&Value::Int(20)));
+    }
+
+    #[test]
+    fn list_serde_round_trip() {
+        let v = Value::List(vec![Value::String("a".into()), Value::String("b".into())]);
+        let json = serde_json::to_string(&v).unwrap();
+        assert_eq!(json, r#"["a","b"]"#);
+        let back: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, v);
+    }
+
+    #[test]
+    fn list_render_text_is_comma_joined_display() {
+        let v = Value::List(vec![Value::String("x".into()), Value::String("y".into())]);
+        assert_eq!(v.render_text(), "x, y");
+        assert!(v.is_list());
     }
 
     #[test]

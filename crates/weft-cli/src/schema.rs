@@ -149,6 +149,10 @@ pub enum QuestionKind {
         /// The legal values.
         choices: Vec<String>,
     },
+    MultiChoice {
+        /// The legal values; the answer is any subset of these.
+        choices: Vec<String>,
+    },
     Secret {
         /// `env:VAR`, `cmd:...`, or `prompt` — resolved at render time,
         /// never persisted.

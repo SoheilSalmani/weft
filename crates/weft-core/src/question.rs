@@ -54,8 +54,17 @@ pub enum AnswerKind {
     String,
     Bool,
     Int,
-    Choice { choices: Vec<String> },
-    Secret { source: SecretSpec },
+    Choice {
+        choices: Vec<String>,
+    },
+    /// Pick any subset of `choices`; the answer is a `Value::List` of the
+    /// selected values (each one of `choices`).
+    MultiChoice {
+        choices: Vec<String>,
+    },
+    Secret {
+        source: SecretSpec,
+    },
 }
 
 impl AnswerKind {
@@ -65,7 +74,16 @@ impl AnswerKind {
             AnswerKind::Bool => "bool",
             AnswerKind::Int => "int",
             AnswerKind::Choice { .. } => "choice",
+            AnswerKind::MultiChoice { .. } => "multichoice",
             AnswerKind::Secret { .. } => "secret",
+        }
+    }
+
+    /// The declared choices for `choice`/`multichoice` kinds.
+    pub fn choices(&self) -> Option<&[String]> {
+        match self {
+            AnswerKind::Choice { choices } | AnswerKind::MultiChoice { choices } => Some(choices),
+            _ => None,
         }
     }
 }
@@ -175,5 +193,24 @@ mod tests {
                 choices: vec!["mit".into(), "apache".into()]
             }
         );
+    }
+
+    #[test]
+    fn multichoice_kind_round_trip() {
+        let toml_src = r#"
+            id = "components"
+            kind = "multichoice"
+            choices = ["button", "card", "dialog"]
+        "#;
+        let q: Question = toml::from_str(toml_src).unwrap();
+        assert_eq!(
+            q.kind,
+            AnswerKind::MultiChoice {
+                choices: vec!["button".into(), "card".into(), "dialog".into()]
+            }
+        );
+        assert_eq!(q.kind.name(), "multichoice");
+        let back = toml::to_string(&q).unwrap();
+        assert_eq!(toml::from_str::<Question>(&back).unwrap(), q);
     }
 }

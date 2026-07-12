@@ -121,6 +121,7 @@ pub fn describe(template: &Template, eval: &dyn ExprEval) -> Result<DescribeDoc>
                 AnswerKind::Bool => ("bool", None, None),
                 AnswerKind::Int => ("int", None, None),
                 AnswerKind::Choice { choices } => ("choice", Some(choices.clone()), None),
+                AnswerKind::MultiChoice { choices } => ("multichoice", Some(choices.clone()), None),
                 AnswerKind::Secret { source } => ("secret", None, Some(source.to_string())),
             };
             QuestionDescription {
@@ -201,16 +202,22 @@ pub fn describe(template: &Template, eval: &dyn ExprEval) -> Result<DescribeDoc>
 
 fn answer_set_to_json(set: &AnswerSet) -> BTreeMap<String, serde_json::Value> {
     set.iter()
-        .filter_map(|(id, value)| {
-            let json = match value {
-                Value::String(s) => serde_json::Value::String(s.clone()),
-                Value::Bool(b) => serde_json::Value::Bool(*b),
-                Value::Int(i) => serde_json::Value::Number((*i).into()),
-                Value::Secret(_) => return None,
-            };
-            Some((id.0.clone(), json))
-        })
+        .filter_map(|(id, value)| Some((id.0.clone(), value_to_json(value)?)))
         .collect()
+}
+
+/// JSON projection of an answer value; `None` for secrets (and lists that
+/// transitively contain one), which must never be serialized.
+fn value_to_json(value: &Value) -> Option<serde_json::Value> {
+    Some(match value {
+        Value::String(s) => serde_json::Value::String(s.clone()),
+        Value::Bool(b) => serde_json::Value::Bool(*b),
+        Value::Int(i) => serde_json::Value::Number((*i).into()),
+        Value::List(items) => {
+            serde_json::Value::Array(items.iter().map(value_to_json).collect::<Option<_>>()?)
+        }
+        Value::Secret(_) => return None,
+    })
 }
 
 fn build_usage(

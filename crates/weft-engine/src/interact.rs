@@ -70,6 +70,28 @@ impl Interaction for TerminalInteraction {
                 let idx = select.interact()?;
                 Value::String(choices[idx].clone())
             }
+            AnswerKind::MultiChoice { choices } => {
+                let mut ms = dialoguer::MultiSelect::new()
+                    .with_prompt(prompt)
+                    .items(choices);
+                if let Some(Value::List(items)) = default {
+                    let checked: Vec<bool> = choices
+                        .iter()
+                        .map(|c| {
+                            items
+                                .iter()
+                                .any(|v| matches!(v, Value::String(s) if s == c))
+                        })
+                        .collect();
+                    ms = ms.defaults(&checked);
+                }
+                let idxs = ms.interact()?;
+                Value::List(
+                    idxs.into_iter()
+                        .map(|i| Value::String(choices[i].clone()))
+                        .collect(),
+                )
+            }
             AnswerKind::String => {
                 let mut input = dialoguer::Input::<String>::new().with_prompt(prompt);
                 if let Some(Value::String(s)) = default {

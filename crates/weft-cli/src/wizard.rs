@@ -172,6 +172,18 @@ impl<'a> WizardState<'a> {
                     return;
                 }
             },
+            // Comma-separated entry, validated against the declared choices.
+            AnswerKind::MultiChoice { choices } => {
+                let mut items = Vec::new();
+                for part in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                    if !choices.iter().any(|c| c == part) {
+                        self.error = Some(format!("`{part}` is not one of the choices"));
+                        return;
+                    }
+                    items.push(Value::String(part.to_owned()));
+                }
+                Value::List(items)
+            }
             _ => Value::String(raw.to_owned()),
         };
         self.entered.insert(id, value);

@@ -26,6 +26,7 @@ pub trait ExprEval {
             Value::Bool(b) => b,
             Value::Int(i) => i != 0,
             Value::String(s) => !s.is_empty(),
+            Value::List(items) => !items.is_empty(),
             Value::Secret(_) => {
                 return Err(EvalError {
                     message: "secret values cannot be used in conditions".into(),
@@ -53,6 +54,11 @@ pub enum RenderError {
     },
     #[error("answer `{id}` value {value:?} is not one of the declared choices")]
     InvalidChoice { id: AnswerId, value: String },
+    #[error(
+        "answer/expression `{0}` is a list; project it with an expression \
+         (e.g. `', '.join(x)`) before using it in a path or content segment"
+    )]
+    ListInContent(String),
     #[error("evaluating `{expr}` for `{context}`: {source}")]
     Eval {
         expr: String,
@@ -141,6 +147,7 @@ fn check_type(id: &AnswerId, kind: &AnswerKind, value: Value) -> Result<Value, R
             | (AnswerKind::Bool, Value::Bool(_))
             | (AnswerKind::Int, Value::Int(_))
             | (AnswerKind::Choice { .. }, Value::String(_))
+            | (AnswerKind::MultiChoice { .. }, Value::List(_))
             | (AnswerKind::Secret { .. }, Value::Secret(_))
     );
     if !ok {
@@ -150,13 +157,36 @@ fn check_type(id: &AnswerId, kind: &AnswerKind, value: Value) -> Result<Value, R
             got: value.kind_name(),
         });
     }
-    if let (AnswerKind::Choice { choices }, Value::String(s)) = (kind, &value) {
-        if !choices.contains(s) {
-            return Err(RenderError::InvalidChoice {
-                id: id.clone(),
-                value: s.clone(),
-            });
+    match (kind, &value) {
+        (AnswerKind::Choice { choices }, Value::String(s)) => {
+            if !choices.contains(s) {
+                return Err(RenderError::InvalidChoice {
+                    id: id.clone(),
+                    value: s.clone(),
+                });
+            }
         }
+        (AnswerKind::MultiChoice { choices }, Value::List(items)) => {
+            for item in items {
+                let s = match item {
+                    Value::String(s) => s,
+                    other => {
+                        return Err(RenderError::TypeMismatch {
+                            id: id.clone(),
+                            expected: "string (multichoice element)",
+                            got: other.kind_name(),
+                        })
+                    }
+                };
+                if !choices.contains(s) {
+                    return Err(RenderError::InvalidChoice {
+                        id: id.clone(),
+                        value: s.clone(),
+                    });
+                }
+            }
+        }
+        _ => {}
     }
     Ok(value)
 }
@@ -418,18 +448,26 @@ fn render_segment(
 ) -> Result<String, RenderError> {
     match seg {
         Segment::Literal(s) => Ok(s.clone()),
-        Segment::Answer(id) => answers
-            .get(id)
-            .map(Value::render_text)
-            .ok_or_else(|| RenderError::UnknownAnswer(id.clone())),
-        Segment::Expr(expr) => eval
-            .eval(expr, answers)
-            .map(|v| v.render_text())
-            .map_err(|e| RenderError::Eval {
+        Segment::Answer(id) => {
+            let value = answers
+                .get(id)
+                .ok_or_else(|| RenderError::UnknownAnswer(id.clone()))?;
+            if value.is_list() {
+                return Err(RenderError::ListInContent(id.0.clone()));
+            }
+            Ok(value.render_text())
+        }
+        Segment::Expr(expr) => {
+            let value = eval.eval(expr, answers).map_err(|e| RenderError::Eval {
                 expr: expr.0.clone(),
                 context: "content expression".into(),
                 source: e,
-            }),
+            })?;
+            if value.is_list() {
+                return Err(RenderError::ListInContent(expr.0.clone()));
+            }
+            Ok(value.render_text())
+        }
     }
 }
 
@@ -661,6 +699,35 @@ mod tests {
         assert!(tree_on.get("Dockerfile".into()).is_some());
         assert!(tree_off.get("Dockerfile".into()).is_none());
         assert!(tree_off.get("a.txt".into()).is_some());
+    }
+
+    #[test]
+    fn multichoice_validates_elements_against_choices() {
+        let kind = AnswerKind::MultiChoice {
+            choices: vec!["a".into(), "b".into()],
+        };
+        let ok = Value::List(vec![Value::String("a".into())]);
+        assert!(check_type(&"c".into(), &kind, ok).is_ok());
+        let bad = Value::List(vec![Value::String("z".into())]);
+        assert!(matches!(
+            check_type(&"c".into(), &kind, bad),
+            Err(RenderError::InvalidChoice { .. })
+        ));
+        // a scalar where a list is expected is a type mismatch
+        assert!(matches!(
+            check_type(&"c".into(), &kind, Value::String("a".into())),
+            Err(RenderError::TypeMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn list_in_content_is_rejected() {
+        let a = answers(&[("fonts", Value::List(vec![Value::String("besley".into())]))]);
+        let content = Content(vec![Line(vec![Segment::Answer("fonts".into())])]);
+        assert!(matches!(
+            render_content(&content, &a, &StubEval),
+            Err(RenderError::ListInContent(_))
+        ));
     }
 
     #[test]

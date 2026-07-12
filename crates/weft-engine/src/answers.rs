@@ -82,6 +82,17 @@ fn coerce(kind: &AnswerKind, raw: &str) -> Result<Value> {
             }
             Value::String(raw.to_owned())
         }
+        AnswerKind::MultiChoice { choices } => {
+            // Comma-separated on the CLI; empty string is the empty selection.
+            let mut items = Vec::new();
+            for part in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                if !choices.iter().any(|c| c == part) {
+                    bail!("`{part}` is not one of: {}", choices.join(", "));
+                }
+                items.push(Value::String(part.to_owned()));
+            }
+            Value::List(items)
+        }
         AnswerKind::Secret { .. } => {
             bail!("secret answers are resolved from their declared source, not passed inline")
         }
@@ -196,6 +207,11 @@ pub fn dummy_answers(questions: &[Question]) -> AnswerSet {
             AnswerKind::Choice { choices } => {
                 Value::String(choices.first().cloned().unwrap_or_default())
             }
+            // All choices selected, so `x in components` membership tests and
+            // joins exercise their truthy branch during trial evaluation.
+            AnswerKind::MultiChoice { choices } => {
+                Value::List(choices.iter().cloned().map(Value::String).collect())
+            }
             AnswerKind::Secret { .. } => continue, // not visible to expressions
         };
         set.insert(q.id.clone(), value);
@@ -213,6 +229,18 @@ pub fn json_to_value(kind: &AnswerKind, key: &str, raw: &serde_json::Value) -> R
         }
         AnswerKind::Bool => Value::Bool(raw.as_bool().ok_or_else(|| bad("a boolean"))?),
         AnswerKind::Int => Value::Int(raw.as_i64().ok_or_else(|| bad("an integer"))?),
+        AnswerKind::MultiChoice { .. } => {
+            let arr = raw.as_array().ok_or_else(|| bad("an array of strings"))?;
+            let mut items = Vec::with_capacity(arr.len());
+            for el in arr {
+                let s = el
+                    .as_str()
+                    .ok_or_else(|| bad("an array of strings"))?
+                    .to_owned();
+                items.push(Value::String(s));
+            }
+            Value::List(items)
+        }
         AnswerKind::Secret { .. } => {
             bail!("secret `{key}` cannot be supplied; it resolves through its declared source")
         }

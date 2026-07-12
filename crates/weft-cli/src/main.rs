@@ -540,16 +540,25 @@ fn maybe_wizard(
         let map: std::collections::BTreeMap<String, serde_json::Value> = entered
             .iter()
             .map(|(k, v)| {
-                let json = match v {
-                    weft_core::Value::String(s) => serde_json::Value::String(s.clone()),
-                    weft_core::Value::Bool(b) => serde_json::Value::Bool(*b),
-                    weft_core::Value::Int(i) => serde_json::Value::Number((*i).into()),
-                    weft_core::Value::Secret(_) => unreachable!("wizard never holds secrets"),
-                };
+                let json = value_to_json(v);
                 (k.0.clone(), json)
             })
             .collect();
         *answers_json = Some(serde_json::to_string(&map)?);
     }
     Ok(())
+}
+
+/// JSON projection of a wizard-entered value. The wizard never holds secrets,
+/// so `Value::Secret` (and any list containing one) is unreachable here.
+fn value_to_json(v: &weft_core::Value) -> serde_json::Value {
+    match v {
+        weft_core::Value::String(s) => serde_json::Value::String(s.clone()),
+        weft_core::Value::Bool(b) => serde_json::Value::Bool(*b),
+        weft_core::Value::Int(i) => serde_json::Value::Number((*i).into()),
+        weft_core::Value::List(items) => {
+            serde_json::Value::Array(items.iter().map(value_to_json).collect())
+        }
+        weft_core::Value::Secret(_) => unreachable!("wizard never holds secrets"),
+    }
 }

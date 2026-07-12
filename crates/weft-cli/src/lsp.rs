@@ -209,6 +209,14 @@ fn preview_answers(template: &Template) -> weft_core::AnswerSet {
                 _ => None,
             },
             AnswerKind::Choice { choices } => choices.contains(e).then(|| Value::String(e.clone())),
+            // example is a comma-separated subset of the choices
+            AnswerKind::MultiChoice { choices } => Some(Value::List(
+                e.split(',')
+                    .map(str::trim)
+                    .filter(|s| choices.iter().any(|c| c == s))
+                    .map(|s| Value::String(s.to_owned()))
+                    .collect(),
+            )),
             AnswerKind::Secret { .. } => None,
         });
         let value = from_example
@@ -222,6 +230,9 @@ fn preview_answers(template: &Template) -> weft_core::AnswerSet {
                 AnswerKind::Bool => Some(Value::Bool(true)),
                 AnswerKind::Int => Some(Value::Int(1)),
                 AnswerKind::Choice { choices } => choices.first().cloned().map(Value::String),
+                AnswerKind::MultiChoice { choices } => Some(Value::List(
+                    choices.iter().cloned().map(Value::String).collect(),
+                )),
                 AnswerKind::Secret { .. } => None,
             });
         if let Some(v) = value {

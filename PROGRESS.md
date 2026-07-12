@@ -3,6 +3,35 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — List answers & multi-select (for the web-template port)
+
+Driven by converting a real Copier monorepo template
+(github.com/SoheilSalmani/web-template) that leans hard on `multiselect`
+questions (shadcn components, AI-elements, fonts). Weft had no list type.
+
+- **`Value::List(Vec<Value>)`** — first-class list value. Serializes as a
+  JSON/TOML array; a list containing a secret still refuses serialization
+  (the inner secret errors). `render_text` gives a `, `-joined *display*
+  form, but writing a list into path/content is a hard error
+  (`RenderError::ListInContent`) — lists must be projected via an expression
+  (`', '.join(x)`) first, keeping content substitution unambiguous.
+  Truthiness: non-empty list is true.
+- **`AnswerKind::MultiChoice { choices }`** — `kind = "multichoice"` in
+  `weft.toml`; the answer is a `Value::List` whose every element is one of
+  `choices` (validated in `check_type`). CLI `--answer` takes a
+  comma-separated subset; `--answers-json`/presets take a JSON array.
+- **Starlark list bridge (`weft-lang`)** — core `Value::List` marshals to a
+  Starlark list and back (`AllocList` / `ListRef`), so `when`/`default`/
+  content expressions get native `in`, `join`, and comprehensions
+  (`[f for f in selected_fonts if ...]`). Secrets (and any list transitively
+  containing one) are still never injected into the interpreter. A
+  list-valued `default` (e.g. `selected_fonts = [font_ui, font_text, ...]`)
+  builds the list from earlier scalar answers.
+- Downstream surfaces updated for the new variants: engine answers
+  (coerce/json/dummy), describe JSON projection, terminal `MultiSelect`
+  prompt, ratatui wizard (comma-separated entry), LSP preview answers, and
+  the `weft schema` mirror (`multichoice`). Gate green.
+
 ## Post-MVP — Editor track (schemas, LSP, wizard, shims)
 
 - `weft schema` emits JSON Schemas for patches and weft.toml from

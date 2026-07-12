@@ -10,7 +10,8 @@
 use starlark::environment::{Globals, Module};
 use starlark::eval::Evaluator;
 use starlark::syntax::{AstModule, Dialect};
-use starlark::values::Value as SlValue;
+use starlark::values::list::{AllocList, ListRef};
+use starlark::values::{Heap, Value as SlValue};
 use weft_core::render::{EvalError, ExprEval};
 use weft_core::{AnswerSet, StarlarkExpr, Value};
 
@@ -40,13 +41,12 @@ pub fn eval_expr(expr: &str, answers: &AnswerSet) -> Result<Value, EvalError> {
         })?;
     let globals = Globals::standard();
     Module::with_temp_heap(|module| {
+        let heap = module.heap();
         for (id, value) in answers.iter() {
-            let sl: SlValue = match value {
-                Value::String(s) => module.heap().alloc(s.as_str()),
-                Value::Bool(b) => SlValue::new_bool(*b),
-                Value::Int(i) => module.heap().alloc(*i),
-                // Secrets are opaque to the expression language.
-                Value::Secret(_) => continue,
+            let Some(sl) = to_sl_value(value, heap) else {
+                // Secrets (and lists containing them) are opaque to the
+                // expression language.
+                continue;
             };
             module.set(&id.0, sl);
         }
@@ -60,6 +60,22 @@ pub fn eval_expr(expr: &str, answers: &AnswerSet) -> Result<Value, EvalError> {
     })
 }
 
+/// Marshal a core `Value` into the heap. Returns `None` for secrets (and any
+/// list transitively containing one), which must never enter the interpreter.
+fn to_sl_value<'v>(value: &Value, heap: Heap<'v>) -> Option<SlValue<'v>> {
+    match value {
+        Value::String(s) => Some(heap.alloc(s.as_str())),
+        Value::Bool(b) => Some(SlValue::new_bool(*b)),
+        Value::Int(i) => Some(heap.alloc(*i)),
+        Value::List(items) => {
+            let elems: Option<Vec<SlValue>> =
+                items.iter().map(|it| to_sl_value(it, heap)).collect();
+            Some(heap.alloc(AllocList(elems?)))
+        }
+        Value::Secret(_) => None,
+    }
+}
+
 fn to_core_value(v: SlValue) -> Result<Value, EvalError> {
     if let Some(b) = v.unpack_bool() {
         Ok(Value::Bool(b))
@@ -67,10 +83,13 @@ fn to_core_value(v: SlValue) -> Result<Value, EvalError> {
         Ok(Value::Int(i64::from(i)))
     } else if let Some(s) = v.unpack_str() {
         Ok(Value::String(s.to_owned()))
+    } else if let Some(list) = ListRef::from_value(v) {
+        let items: Result<Vec<Value>, EvalError> = list.iter().map(to_core_value).collect();
+        Ok(Value::List(items?))
     } else {
         Err(EvalError {
             message: format!(
-                "expression produced a {} value; expected string, bool, or int",
+                "expression produced a {} value; expected string, bool, int, or list",
                 v.get_type()
             ),
         })
@@ -127,6 +146,44 @@ mod tests {
     #[test]
     fn unknown_name_is_an_error() {
         assert!(eval_expr("nope", &AnswerSet::new()).is_err());
+    }
+
+    #[test]
+    fn list_membership_and_projection() {
+        let fonts = Value::List(vec![
+            Value::String("besley".into()),
+            Value::String("nunito".into()),
+        ]);
+        let a = answers(&[("selected_fonts", fonts)]);
+        assert!(StarlarkEval
+            .eval_bool(&StarlarkExpr::from("'besley' in selected_fonts"), &a)
+            .unwrap());
+        assert!(!StarlarkEval
+            .eval_bool(&StarlarkExpr::from("'plein' in selected_fonts"), &a)
+            .unwrap());
+        assert_eq!(
+            eval_expr("' '.join(selected_fonts)", &a).unwrap(),
+            Value::String("besley nunito".into())
+        );
+        assert_eq!(
+            eval_expr("[f for f in selected_fonts if f != 'nunito']", &a).unwrap(),
+            Value::List(vec![Value::String("besley".into())])
+        );
+    }
+
+    #[test]
+    fn list_default_built_from_scalars() {
+        let a = answers(&[
+            ("font_ui", Value::String("figtree".into())),
+            ("font_heading", Value::String("besley".into())),
+        ]);
+        assert_eq!(
+            eval_expr("[font_ui, font_heading]", &a).unwrap(),
+            Value::List(vec![
+                Value::String("figtree".into()),
+                Value::String("besley".into()),
+            ])
+        );
     }
 
     #[test]
