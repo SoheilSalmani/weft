@@ -207,11 +207,21 @@ pub struct Task {
     /// `glob:PATTERN`, `answer:ID`, or `task:ID`.
     #[serde(default)]
     pub inputs: Vec<String>,
-    /// Shell command run in the scaffolded directory.
-    pub action: String,
+    /// Shell command run in the scaffolded directory: a plain string when
+    /// fully literal, or an array of segments to interpolate answers/exprs
+    /// (e.g. `["shadcn add ", {"expr": "' '.join(components)"}]`).
+    pub action: TaskCommand,
     /// Starlark gate.
     #[serde(default)]
     pub when: Option<String>,
+}
+
+/// A task command: a plain shell string, or an array of segments.
+#[derive(JsonSchema, Deserialize)]
+#[serde(untagged)]
+pub enum TaskCommand {
+    Shell(String),
+    Segments(Vec<Segment>),
 }
 
 /// The weft template manifest (`weft.toml`).

@@ -38,6 +38,16 @@ questions (shadcn components, AI-elements, fonts). Weft had no list type.
   `when: false` idiom. The wizard resolves them (so later gates see the
   value) but hides them; `describe` marks them `computed` and never
   `required`; `check` requires a default and forbids computed+secret.
+- **Interpolated task commands**: `TaskAction` is now a segment sequence
+  (reusing the content `Segment` model), so a command can splice in answers
+  and expressions — e.g.
+  `action = ["pnpm dlx shadcn@latest add ", { expr = "' '.join(shadcn_ui_components)" }]`.
+  Shorthand: a bare string is a single literal (back-compatible). Rendered
+  against the resolved answers right before `sh -c`
+  (`render::render_segments`, shared with path rendering). `check` parses
+  every command `expr`; `describe` shows a `${…}` source preview. Working
+  directories are expressed with a plain `cd sub && …` in the command
+  rather than a new field.
 
 ## Post-MVP — Editor track (schemas, LSP, wizard, shims)
 

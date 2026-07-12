@@ -72,14 +72,72 @@ impl<'de> Deserialize<'de> for TaskInput {
 #[error("invalid task input {0:?} (expected `glob:...`, `answer:...`, or `task:...`)")]
 pub struct TaskInputError(String);
 
-/// What a task does. Shell only for MVP; the manifest form is a plain string.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct TaskAction(pub String);
+/// What a task does: a shell command, as a sequence of segments so answers
+/// and expressions can be interpolated (e.g.
+/// `["shadcn add ", {expr = "' '.join(components)"}]`). The manifest form is
+/// a plain string for a fully-literal command, or an array of segments.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskAction(pub Vec<crate::segment::Segment>);
 
 impl TaskAction {
-    pub fn shell(&self) -> &str {
-        &self.0
+    /// A fully-literal command from a plain string.
+    pub fn literal(s: &str) -> Self {
+        Self(vec![crate::segment::Segment::Literal(s.to_owned())])
+    }
+
+    /// Human-readable source form for display (`describe`): literals verbatim,
+    /// interpolations shown as `${…}`. Not for execution — use rendering.
+    pub fn source(&self) -> String {
+        use crate::segment::Segment;
+        self.0
+            .iter()
+            .map(|s| match s {
+                Segment::Literal(t) => t.clone(),
+                Segment::Answer(id) => format!("${{{}}}", id.0),
+                Segment::Expr(e) => format!("${{{}}}", e.0),
+            })
+            .collect()
+    }
+}
+
+impl Serialize for TaskAction {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use crate::segment::Segment;
+        // Shorthand: a single literal serializes as a bare string.
+        match self.0.as_slice() {
+            [Segment::Literal(s)] => serializer.serialize_str(s),
+            segs => segs.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for TaskAction {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use crate::segment::Segment;
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = TaskAction;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a shell command string or an array of segments")
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<TaskAction, E> {
+                Ok(TaskAction::literal(v))
+            }
+            fn visit_string<E: serde::de::Error>(self, v: String) -> Result<TaskAction, E> {
+                Ok(TaskAction(vec![Segment::Literal(v)]))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<TaskAction, A::Error> {
+                let mut segs = Vec::new();
+                while let Some(seg) = seq.next_element::<Segment>()? {
+                    segs.push(seg);
+                }
+                Ok(TaskAction(segs))
+            }
+        }
+        deserializer.deserialize_any(V)
     }
 }
 
@@ -94,5 +152,21 @@ mod tests {
             assert_eq!(input.to_string(), s);
         }
         assert!("pyproject.toml".parse::<TaskInput>().is_err());
+    }
+
+    #[test]
+    fn literal_action_serializes_as_string() {
+        let a = TaskAction::literal("pnpm install");
+        let json = serde_json::to_string(&a).unwrap();
+        assert_eq!(json, r#""pnpm install""#);
+        assert_eq!(serde_json::from_str::<TaskAction>(&json).unwrap(), a);
+    }
+
+    #[test]
+    fn segmented_action_round_trips_and_previews() {
+        let json = r#"["shadcn add ",{"expr":"' '.join(components)"}]"#;
+        let a: TaskAction = serde_json::from_str(json).unwrap();
+        assert_eq!(a.source(), "shadcn add ${' '.join(components)}");
+        assert_eq!(serde_json::to_string(&a).unwrap(), json);
     }
 }

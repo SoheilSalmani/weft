@@ -75,7 +75,7 @@ pub fn run(opts: &NewOptions, interaction: &mut dyn Interaction) -> Result<()> {
 
     if !opts.skip_tasks {
         let plan = tasks::plan(&template.manifest.tasks, &resolved, &eval, None)?;
-        tasks::run(&plan, &opts.dest)?;
+        tasks::run(&plan, &opts.dest, &resolved, &eval)?;
     }
 
     eprintln!(

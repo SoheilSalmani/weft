@@ -496,15 +496,25 @@ pub fn render_content(
     Ok(join_lines(&lines?))
 }
 
+/// Concatenate a segment sequence into a single string (paths, task commands).
+pub fn render_segments(
+    segments: &[Segment],
+    answers: &AnswerSet,
+    eval: &dyn ExprEval,
+) -> Result<String, RenderError> {
+    let mut out = String::new();
+    for seg in segments {
+        out.push_str(&render_segment(seg, answers, eval)?);
+    }
+    Ok(out)
+}
+
 pub fn render_path(
     path: &TemplatePath,
     answers: &AnswerSet,
     eval: &dyn ExprEval,
 ) -> Result<Utf8PathBuf, RenderError> {
-    let mut out = String::new();
-    for seg in &path.0 {
-        out.push_str(&render_segment(seg, answers, eval)?);
-    }
+    let out = render_segments(&path.0, answers, eval)?;
     let invalid = out.is_empty()
         || out.starts_with('/')
         || out.ends_with('/')

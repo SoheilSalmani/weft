@@ -187,6 +187,27 @@ mod tests {
     }
 
     #[test]
+    fn task_command_interpolates_a_joined_list() {
+        use weft_core::render::render_segments;
+        use weft_core::segment::Segment;
+        let a = answers(&[(
+            "components",
+            Value::List(vec![
+                Value::String("button".into()),
+                Value::String("card".into()),
+            ]),
+        )]);
+        let segs = vec![
+            Segment::Literal("shadcn add ".into()),
+            Segment::Expr(StarlarkExpr::from("' '.join(components)")),
+        ];
+        assert_eq!(
+            render_segments(&segs, &a, &StarlarkEval).unwrap(),
+            "shadcn add button card"
+        );
+    }
+
+    #[test]
     fn secrets_are_not_visible() {
         let mut a = AnswerSet::new();
         a.insert(

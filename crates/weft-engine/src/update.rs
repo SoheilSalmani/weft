@@ -179,7 +179,7 @@ pub fn run(opts: &UpdateOptions, interaction: &mut dyn Interaction) -> Result<Up
     .save(&opts.dest)?;
 
     if !opts.skip_tasks && report.conflicts.is_empty() {
-        tasks::run(&task_plan, &opts.dest)?;
+        tasks::run(&task_plan, &opts.dest, &new_answers, &eval)?;
     } else if !task_plan.is_empty() && !report.conflicts.is_empty() {
         report.notes.push(format!(
             "skipped {} task(s) because of conflicts; re-run them after resolving",

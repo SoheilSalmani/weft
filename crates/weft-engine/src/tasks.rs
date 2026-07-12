@@ -62,12 +62,21 @@ pub fn plan<'t>(
 }
 
 /// Run planned tasks with `sh -c` in `dest`, stopping at the first failure.
-pub fn run(plan: &[&Task], dest: &Utf8PathBuf) -> Result<()> {
+/// Each command is rendered against `answers` first, so it can interpolate
+/// answers and expressions (`{expr = "' '.join(components)"}`).
+pub fn run(
+    plan: &[&Task],
+    dest: &Utf8PathBuf,
+    answers: &AnswerSet,
+    eval: &dyn ExprEval,
+) -> Result<()> {
     for task in plan {
-        eprintln!("task {}: {}", task.id, task.action.shell());
+        let command = weft_core::render::render_segments(&task.action.0, answers, eval)
+            .with_context(|| format!("rendering command for task `{}`", task.id))?;
+        eprintln!("task {}: {}", task.id, command);
         let status = std::process::Command::new("sh")
             .arg("-c")
-            .arg(task.action.shell())
+            .arg(&command)
             .current_dir(dest)
             .status()
             .with_context(|| format!("spawning task `{}`", task.id))?;

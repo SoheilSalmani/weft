@@ -139,6 +139,19 @@ pub fn run(opts: &CheckOptions) -> Result<CheckReport> {
                 );
             }
         }
+        for seg in &task.action.0 {
+            if let weft_core::Segment::Expr(e) = seg {
+                if let Err(err) = weft_lang::parse_expr(e.as_str()) {
+                    issue(
+                        &mut report,
+                        format!(
+                            "task `{}`: command expression does not parse: {err}",
+                            task.id
+                        ),
+                    );
+                }
+            }
+        }
     }
 
     // Patches: graph structure was validated at load; check expressions and

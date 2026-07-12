@@ -186,7 +186,7 @@ pub fn describe(template: &Template, eval: &dyn ExprEval) -> Result<DescribeDoc>
         .map(|t| TaskDescription {
             id: t.id.to_string(),
             inputs: t.inputs.iter().map(ToString::to_string).collect(),
-            action: t.action.shell().to_owned(),
+            action: t.action.source(),
             when: t.when.as_ref().map(|e| e.as_str().to_owned()),
         })
         .collect();
