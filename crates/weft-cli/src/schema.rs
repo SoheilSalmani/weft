@@ -183,6 +183,10 @@ pub struct Question {
     /// Ask only if this Starlark gate is truthy (earlier answers in scope).
     #[serde(default)]
     pub when: Option<String>,
+    /// A derived value: never prompted, always taken from `default`. Use for
+    /// values computed from other answers. Requires a `default`.
+    #[serde(default)]
+    pub computed: bool,
 }
 
 /// A `[[preset]]` declaration: a named partial answer-set.

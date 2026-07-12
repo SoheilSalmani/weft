@@ -741,6 +741,7 @@ mod tests {
                 example: None,
                 default: Some(StarlarkExpr::from("True")),
                 when: None,
+                computed: false,
             },
             Question {
                 id: "registry".into(),
@@ -750,6 +751,7 @@ mod tests {
                 example: None,
                 default: None,
                 when: Some(StarlarkExpr::from("use_docker")),
+                computed: false,
             },
         ];
         // Gated question unanswered -> error while gate is open

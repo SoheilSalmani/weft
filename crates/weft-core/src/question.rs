@@ -46,6 +46,19 @@ pub struct Question {
     /// Ask only if this evaluates to true (given the answers so far).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<StarlarkExpr>,
+    /// A derived value: never prompted, always taken from `default` (or an
+    /// explicit override). Use for values computed from other answers, e.g.
+    /// `selected_fonts = [font_ui, font_heading, ...]`. Requires a `default`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub computed: bool,
+}
+
+impl Question {
+    /// Whether this question is presented to a human/agent for answering.
+    /// Computed and secret questions are resolved without prompting.
+    pub fn is_promptable(&self) -> bool {
+        !self.computed && !matches!(self.kind, AnswerKind::Secret { .. })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

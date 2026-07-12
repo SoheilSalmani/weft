@@ -103,6 +103,11 @@
             "null"
           ],
           "default": null
+        },
+        "computed": {
+          "description": "A derived value: never prompted, always taken from `default`. Use for\nvalues computed from other answers. Requires a `default`.",
+          "type": "boolean",
+          "default": false
         }
       },
       "required": [
@@ -158,6 +163,26 @@
             "kind": {
               "type": "string",
               "const": "choice"
+            }
+          },
+          "required": [
+            "kind",
+            "choices"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "choices": {
+              "description": "The legal values; the answer is any subset of these.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "multichoice"
             }
           },
           "required": [

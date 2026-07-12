@@ -290,6 +290,7 @@ fn synthetic_secret_question(id: &AnswerId, spec: &weft_core::SecretSpec) -> Que
         example: None,
         default: None,
         when: None,
+        computed: false,
     }
 }
 

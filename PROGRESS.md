@@ -31,6 +31,13 @@ questions (shadcn components, AI-elements, fonts). Weft had no list type.
   (coerce/json/dummy), describe JSON projection, terminal `MultiSelect`
   prompt, ratatui wizard (comma-separated entry), LSP preview answers, and
   the `weft schema` mirror (`multichoice`). Gate green.
+- **Computed questions** (`computed = true`): a derived value, never
+  prompted, always taken from its (required) `default` — for values built
+  from other answers (`selected_fonts = [font_ui, font_heading, ...]`,
+  `add_dotenv = use_prisma or use_cloudinary`). Replaces Copier's
+  `when: false` idiom. The wizard resolves them (so later gates see the
+  value) but hides them; `describe` marks them `computed` and never
+  `required`; `check` requires a default and forbids computed+secret.
 
 ## Post-MVP — Editor track (schemas, LSP, wizard, shims)
 

@@ -57,6 +57,10 @@ pub struct QuestionDescription {
     pub when: Option<String>,
     /// Must be supplied by the caller: no default and not a secret.
     pub required: bool,
+    /// A derived value: computed from other answers, never prompted or
+    /// supplied. Agents should not provide it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub computed: bool,
     /// Secrets resolve through this source, never through supplied answers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secret_source: Option<String>,
@@ -134,7 +138,10 @@ pub fn describe(template: &Template, eval: &dyn ExprEval) -> Result<DescribeDoc>
                 default_expr: q.default.as_ref().map(|e| e.as_str().to_owned()),
                 default_preview,
                 when: q.when.as_ref().map(|e| e.as_str().to_owned()),
-                required: q.default.is_none() && !matches!(q.kind, AnswerKind::Secret { .. }),
+                required: q.default.is_none()
+                    && !q.computed
+                    && !matches!(q.kind, AnswerKind::Secret { .. }),
+                computed: q.computed,
                 secret_source,
             }
         })

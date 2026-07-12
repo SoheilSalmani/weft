@@ -73,6 +73,24 @@ impl<'a> WizardState<'a> {
                     continue;
                 }
             }
+            // Computed questions are derived, not shown: resolve their value so
+            // later gates/defaults see it, but don't emit a display row.
+            if q.computed {
+                let value = self
+                    .entered
+                    .get(&q.id)
+                    .cloned()
+                    .or_else(|| self.provided.get(&q.id).cloned())
+                    .or_else(|| {
+                        q.default
+                            .as_ref()
+                            .and_then(|d| self.eval.eval(d, &resolved).ok())
+                    });
+                if let Some(v) = value {
+                    resolved.insert(q.id.clone(), v);
+                }
+                continue;
+            }
             if matches!(q.kind, AnswerKind::Secret { .. }) {
                 rows.push((i, None, Source::Secret));
                 continue;
@@ -423,6 +441,7 @@ mod tests {
             example: None,
             default: default.map(StarlarkExpr::from),
             when: when.map(StarlarkExpr::from),
+            computed: false,
         }
     }
 
@@ -444,6 +463,39 @@ mod tests {
         assert_eq!(state.resolve().len(), 2);
         assert_eq!(state.missing(), vec![AnswerId::from("registry")]);
         assert!(!state.ready());
+    }
+
+    #[test]
+    fn computed_question_is_hidden_but_feeds_gates() {
+        let mut derived = question("add_dotenv", AnswerKind::Bool, Some("use_prisma"), None);
+        derived.computed = true;
+        let questions = vec![
+            question("use_prisma", AnswerKind::Bool, Some("False"), None),
+            derived,
+            question("dotenv_path", AnswerKind::String, None, Some("add_dotenv")),
+        ];
+        let provided = AnswerSet::new();
+        let mut state = WizardState::new(&questions, &provided, &StubEval);
+
+        // computed row never shows; gate closed -> only use_prisma is a row
+        let ids: Vec<_> = state
+            .resolve()
+            .iter()
+            .map(|(i, _, _)| questions[*i].id.clone())
+            .collect();
+        assert_eq!(ids, vec![AnswerId::from("use_prisma")]);
+
+        // toggle use_prisma on -> add_dotenv derives true -> dotenv_path appears
+        state.activate();
+        let ids: Vec<_> = state
+            .resolve()
+            .iter()
+            .map(|(i, _, _)| questions[*i].id.clone())
+            .collect();
+        assert_eq!(
+            ids,
+            vec![AnswerId::from("use_prisma"), AnswerId::from("dotenv_path")]
+        );
     }
 
     #[test]

@@ -51,9 +51,23 @@ pub fn run(opts: &CheckOptions) -> Result<CheckReport> {
                 }
             }
         }
-        if let AnswerKind::Choice { choices } = &q.kind {
+        if let AnswerKind::Choice { choices } | AnswerKind::MultiChoice { choices } = &q.kind {
             if choices.is_empty() {
                 issue(&mut report, format!("question `{}` has no choices", q.id));
+            }
+        }
+        if q.computed {
+            if q.default.is_none() {
+                issue(
+                    &mut report,
+                    format!("computed question `{}` needs a `default`", q.id),
+                );
+            }
+            if matches!(q.kind, AnswerKind::Secret { .. }) {
+                issue(
+                    &mut report,
+                    format!("question `{}` cannot be both computed and secret", q.id),
+                );
             }
         }
     }
