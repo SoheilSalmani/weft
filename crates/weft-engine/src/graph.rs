@@ -202,6 +202,10 @@ pub struct FileDiff {
     pub change: &'static str,
     /// Unified diff of the file (against empty for created/deleted).
     pub diff: String,
+    /// Full file content on each side (empty string for the missing side).
+    /// UIs render these with real diff widgets instead of the text diff.
+    pub before: String,
+    pub after: String,
 }
 
 /// What `patch_name` contributes under `answers`: render its ancestor
@@ -276,6 +280,8 @@ pub fn node_diff(
             path: path.clone(),
             change,
             diff,
+            before: old.to_owned(),
+            after: new.to_owned(),
         });
     }
 
