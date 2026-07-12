@@ -254,7 +254,78 @@ fn hook_descriptions(template: &Template) -> Vec<HookDescription> {
         }
     }
     rows.sort_by_key(|(phase, pi, di, _)| (*phase, *pi, *di));
-    rows.into_iter().map(|(_, _, _, d)| d).collect()
+    // Present each phase in true execution order: topo-sort over `after`,
+    // with the base (declaration) order as the stable tie-break.
+    let mut out = Vec::with_capacity(rows.len());
+    for phase in [0u8, 1] {
+        let group: Vec<HookDescription> = rows
+            .iter()
+            .filter(|(p, _, _, _)| *p == phase)
+            .map(|(_, _, _, d)| clone_desc(d))
+            .collect();
+        out.extend(topo_by_after(group));
+    }
+    out
+}
+
+fn clone_desc(d: &HookDescription) -> HookDescription {
+    HookDescription {
+        id: d.id.clone(),
+        patch: d.patch.clone(),
+        phase: d.phase,
+        effect: d.effect,
+        label: d.label.clone(),
+        description: d.description.clone(),
+        action: d.action.clone(),
+        when: d.when.clone(),
+        after: d.after.clone(),
+        inputs: d.inputs.clone(),
+    }
+}
+
+/// Stable topological order of one phase's hooks over their `after` edges;
+/// input order is the base tie-break. `after` refs outside the set are ignored.
+fn topo_by_after(hooks: Vec<HookDescription>) -> Vec<HookDescription> {
+    let index: BTreeMap<&str, usize> = hooks
+        .iter()
+        .enumerate()
+        .map(|(i, h)| (h.id.as_str(), i))
+        .collect();
+    let mut indegree = vec![0usize; hooks.len()];
+    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); hooks.len()];
+    for (i, h) in hooks.iter().enumerate() {
+        for a in &h.after {
+            if let Some(&j) = index.get(a.as_str()) {
+                indegree[i] += 1;
+                dependents[j].push(i);
+            }
+        }
+    }
+    let mut ready: std::collections::BTreeSet<usize> =
+        (0..hooks.len()).filter(|&i| indegree[i] == 0).collect();
+    let mut order = Vec::with_capacity(hooks.len());
+    while let Some(&i) = ready.iter().next() {
+        ready.remove(&i);
+        order.push(i);
+        for &d in &dependents[i] {
+            indegree[d] -= 1;
+            if indegree[d] == 0 {
+                ready.insert(d);
+            }
+        }
+    }
+    // A cycle (rejected by `weft check`) leaves some hooks unplaced; append
+    // them in base order so describe still lists everything.
+    for i in 0..hooks.len() {
+        if !order.contains(&i) {
+            order.push(i);
+        }
+    }
+    let mut hooks: Vec<Option<HookDescription>> = hooks.into_iter().map(Some).collect();
+    order
+        .into_iter()
+        .map(|i| hooks[i].take().unwrap())
+        .collect()
 }
 
 fn answer_set_to_json(set: &AnswerSet) -> BTreeMap<String, serde_json::Value> {
