@@ -70,6 +70,13 @@ impl<'a> WizardState<'a> {
         for (i, q) in self.questions.iter().enumerate() {
             if let Some(when) = &q.when {
                 if !self.eval.eval_bool(when, &resolved).unwrap_or(false) {
+                    // Not shown, but keep its default in scope so later gates
+                    // resolve as they will at render time.
+                    if let Some(default) = &q.default {
+                        if let Ok(v) = self.eval.eval(default, &resolved) {
+                            resolved.insert(q.id.clone(), v);
+                        }
+                    }
                     continue;
                 }
             }

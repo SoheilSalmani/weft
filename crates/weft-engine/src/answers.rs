@@ -136,6 +136,13 @@ pub fn gather(
                 .eval_bool(when, &resolved)
                 .with_context(|| format!("evaluating when of question `{}`", q.id))?;
             if !asked {
+                // Not prompted, but keep the name defined via its default so
+                // later Starlark gates/exprs don't hit an undefined name.
+                if let Some(default) = &q.default {
+                    if let Ok(value) = eval.eval(default, &resolved) {
+                        resolved.insert(q.id.clone(), value);
+                    }
+                }
                 continue;
             }
         }

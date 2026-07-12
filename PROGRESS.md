@@ -48,6 +48,19 @@ questions (shadcn components, AI-elements, fonts). Weft had no list type.
   every command `expr`; `describe` shows a `${…}` source preview. Working
   directories are expressed with a plain `cd sub && …` in the command
   rather than a new field.
+- **Gated-off questions fall back to their `default`** (Starlark
+  eager-binding fix). starlark-rust binds *all* referenced free names before
+  evaluating — even the untaken side of `and`/`or` — so
+  `use_shadcn_ui and ('ai-elements' in shadcn_registries)` raises a
+  `NameError` when `shadcn_registries` was gated off, rather than
+  short-circuiting. Fix: a `when:false` question with a `default` still
+  resolves to that default (its name stays defined for later
+  `when`/`default`/content exprs); with no default it stays absent, and a
+  gated-off default that itself can't compute is tolerated (left absent).
+  Mirrored in engine `gather` and the wizard so live gating matches render.
+  This lets a Copier template's short-circuit-reliant conditions port
+  cleanly by giving referenced-but-optional questions an empty/`False`/`[]`
+  default.
 
 ## Post-MVP — Editor track (schemas, LSP, wizard, shims)
 

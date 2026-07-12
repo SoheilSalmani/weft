@@ -99,8 +99,14 @@ pub enum RenderError {
 
 /// Resolve the full answer set for `questions` from layered `provided`
 /// answers: evaluate `when` gates in declaration order, type-check provided
-/// values, evaluate `default` expressions for the rest. Questions whose
-/// `when` is false are absent from the result.
+/// values, evaluate `default` expressions for the rest.
+///
+/// A question whose `when` is false is not prompted, but if it has a
+/// `default` it still resolves to that default so its name stays defined for
+/// later `when`/`default`/content expressions. (Starlark binds free names
+/// eagerly — even the untaken side of `and`/`or` — so an absent name would
+/// raise a `NameError` rather than short-circuit.) A gated-off question with
+/// no default is simply absent.
 pub fn resolve_answers(
     questions: &[Question],
     provided: &AnswerSet,
@@ -108,32 +114,45 @@ pub fn resolve_answers(
 ) -> Result<AnswerSet, RenderError> {
     let mut resolved = AnswerSet::new();
     for q in questions {
-        if let Some(when) = &q.when {
-            let asked = eval
+        let gated_off = if let Some(when) = &q.when {
+            !eval
                 .eval_bool(when, &resolved)
                 .map_err(|e| RenderError::Eval {
                     expr: when.0.clone(),
                     context: format!("when of question `{}`", q.id),
                     source: e,
-                })?;
-            if !asked {
+                })?
+        } else {
+            false
+        };
+        // A provided value for a gated-off question is ignored (the gate
+        // decided it doesn't apply); its default, if any, still stands in.
+        if !gated_off {
+            if let Some(value) = provided.get(&q.id) {
+                let value = check_type(&q.id, &q.kind, value.clone())?;
+                resolved.insert(q.id.clone(), value);
                 continue;
             }
         }
-        if let Some(value) = provided.get(&q.id) {
-            let value = check_type(&q.id, &q.kind, value.clone())?;
-            resolved.insert(q.id.clone(), value);
-        } else if let Some(default) = &q.default {
-            let value = eval
-                .eval(default, &resolved)
-                .map_err(|e| RenderError::Eval {
-                    expr: default.0.clone(),
-                    context: format!("default of question `{}`", q.id),
-                    source: e,
-                })?;
-            let value = check_type(&q.id, &q.kind, value)?;
-            resolved.insert(q.id.clone(), value);
-        } else {
+        if let Some(default) = &q.default {
+            match eval.eval(default, &resolved) {
+                Ok(value) => {
+                    let value = check_type(&q.id, &q.kind, value)?;
+                    resolved.insert(q.id.clone(), value);
+                }
+                // A gated-off question's default is a best-effort convenience
+                // (keep the name defined); if it can't compute, leave the name
+                // absent rather than failing the whole resolve.
+                Err(_) if gated_off => {}
+                Err(e) => {
+                    return Err(RenderError::Eval {
+                        expr: default.0.clone(),
+                        context: format!("default of question `{}`", q.id),
+                        source: e,
+                    })
+                }
+            }
+        } else if !gated_off {
             return Err(RenderError::Unanswered(q.id.clone()));
         }
     }

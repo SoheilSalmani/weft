@@ -208,6 +208,48 @@ mod tests {
     }
 
     #[test]
+    fn gated_off_question_default_keeps_name_defined() {
+        use weft_core::render::resolve_answers;
+        use weft_core::{AnswerKind, Question, StarlarkExpr};
+        let q = |id: &str, default: &str, when: Option<&str>| Question {
+            id: id.into(),
+            kind: AnswerKind::String,
+            prompt: None,
+            description: None,
+            example: None,
+            default: Some(StarlarkExpr::from(default)),
+            when: when.map(StarlarkExpr::from),
+            computed: false,
+        };
+        let questions = vec![
+            Question {
+                id: "use_ui".into(),
+                kind: AnswerKind::Bool,
+                prompt: None,
+                description: None,
+                example: None,
+                default: Some(StarlarkExpr::from("False")),
+                when: None,
+                computed: false,
+            },
+            // gated off (use_ui is False) but still defaults to 'none'
+            q("registries", "'none'", Some("use_ui")),
+            // references `registries` unconditionally — Starlark binds names
+            // eagerly, so this only works because `registries` is defined.
+            q("label", "registries + '-x'", None),
+        ];
+        let resolved = resolve_answers(&questions, &AnswerSet::new(), &StarlarkEval).unwrap();
+        assert_eq!(
+            resolved.get(&AnswerId::from("registries")),
+            Some(&Value::String("none".into()))
+        );
+        assert_eq!(
+            resolved.get(&AnswerId::from("label")),
+            Some(&Value::String("none-x".into()))
+        );
+    }
+
+    #[test]
     fn secrets_are_not_visible() {
         let mut a = AnswerSet::new();
         a.insert(
