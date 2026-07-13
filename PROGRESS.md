@@ -3,6 +3,23 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Composition M5: nested includes + preview parts
+
+- **Recursive composition**: `ComposedPart` gained `children`;
+  `render_composed` recurses, so a child that itself declares includes mounts
+  its own children (platform → workspace → hello, binds chained through each
+  level — e2e proves `# Mega` → `# Mega Acme` → `# Mega Acme Service`).
+  Nested levels resolve from binds + the grandchild's own defaults/secrets
+  (no namespaced pass-through yet); nested `repeat` includes have zero
+  instances (nested instance state is deferred); on update, nested parts
+  re-derive on both sides (grandchild answers aren't pinned). Nested
+  children's hooks don't run yet (known gap).
+- **`compose::preview_parts` + `SecretMode`**: preview-oriented instance
+  resolution — placeholder secrets at every level, never prompting, repeat
+  instances only where namespaced answers imply them. This is what servers
+  and UIs call; `resolve_instance_answers` gained a `presolved` parameter
+  (also lets update pass stored child secrets through without re-prompting).
+
 ## Post-MVP — Composition M4: the contract
 
 - `weft describe --json` gains `includes` — each with its mount, `repeat`,

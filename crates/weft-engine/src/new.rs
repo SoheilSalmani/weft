@@ -86,7 +86,7 @@ pub fn run(opts: &NewOptions, interaction: &mut dyn Interaction) -> Result<()> {
         &eval,
         interaction,
     )?;
-    let parts = compose::full_parts(&template, instances)?;
+    let parts = compose::full_parts(&template, instances, &eval, interaction)?;
 
     let tree = compose::render_composed(&template.patches, &resolved, &parts, &eval)
         .context("rendering template")?;

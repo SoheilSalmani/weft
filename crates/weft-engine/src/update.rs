@@ -107,9 +107,18 @@ pub fn run(opts: &UpdateOptions, interaction: &mut dyn Interaction) -> Result<Up
     for inst in &state.instances {
         let inc = template.include(&inst.include).expect("checked above");
         // Old side: stored answers + re-resolved stored child secrets.
+        // Nested (grandchild) parts re-derive from binds/defaults on both
+        // sides — nested instance state is not pinned yet.
         let child_secrets = resolve_instance_secrets(&inc.template, inst, interaction)?;
         let mut old_child_answers = inst.answers.clone();
         old_child_answers.overlay(&child_secrets);
+        let old_children = compose::resolve_child_parts(
+            &inc.template,
+            &old_child_answers,
+            compose::SecretMode::Resolve,
+            &eval,
+            interaction,
+        )?;
         old_parts.push(compose::ComposedPart {
             template: &inc.template,
             patches: inc
@@ -125,6 +134,7 @@ pub fn run(opts: &UpdateOptions, interaction: &mut dyn Interaction) -> Result<Up
                 mount: Utf8PathBuf::from(&inst.mount),
                 answers: old_child_answers,
             },
+            children: old_children,
         });
         // New side: binds re-seed, stored answers win, new child questions
         // get defaults/prompts (same policy as the parent's answers). Dropped
@@ -141,6 +151,14 @@ pub fn run(opts: &UpdateOptions, interaction: &mut dyn Interaction) -> Result<Up
             &inst.key,
             &new_answers,
             &inst.answers,
+            &weft_core::AnswerSet::new(),
+            &eval,
+            interaction,
+        )?;
+        let new_children = compose::resolve_child_parts(
+            &inc.template,
+            &new_child_answers,
+            compose::SecretMode::Resolve,
             &eval,
             interaction,
         )?;
@@ -153,6 +171,7 @@ pub fn run(opts: &UpdateOptions, interaction: &mut dyn Interaction) -> Result<Up
                 mount: compose::mount_path(&inc.decl.path, &inst.key)?,
                 answers: new_child_answers,
             },
+            children: new_children,
         });
     }
 

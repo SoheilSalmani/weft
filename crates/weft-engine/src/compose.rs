@@ -29,11 +29,13 @@ pub struct ResolvedInstance {
 }
 
 /// An instance paired with the child template and the (possibly pinned-base
-/// filtered) patches to render it from.
+/// filtered) patches to render it from. `children` are the child template's
+/// own includes, resolved recursively (nested composition).
 pub struct ComposedPart<'t> {
     pub instance: ResolvedInstance,
     pub template: &'t Template,
     pub patches: Vec<Patch>,
+    pub children: Vec<ComposedPart<'t>>,
 }
 
 /// Render an include's mount prefix for an instance key. `{key}` in the
@@ -204,8 +206,15 @@ pub fn resolve_instances(
                 .get(&(inc.decl.name.clone(), key.clone()))
                 .cloned()
                 .unwrap_or_default();
-            let answers =
-                resolve_instance_answers(inc, &key, parent_resolved, &provided, eval, interaction)?;
+            let answers = resolve_instance_answers(
+                inc,
+                &key,
+                parent_resolved,
+                &provided,
+                &AnswerSet::new(),
+                eval,
+                interaction,
+            )?;
             out.push(ResolvedInstance {
                 include: inc.decl.name.clone(),
                 key: key.clone(),
@@ -218,11 +227,14 @@ pub fn resolve_instances(
 }
 
 /// Resolve one instance's child answers (see [`resolve_instances`]).
+/// `presolved` is passed through to the child's `gather` — pre-resolved
+/// child secrets (stored refs on update, placeholders for previews).
 pub fn resolve_instance_answers(
     inc: &LoadedInclude,
     key: &str,
     parent_resolved: &AnswerSet,
     provided: &AnswerSet,
+    presolved: &AnswerSet,
     eval: &dyn ExprEval,
     interaction: &mut dyn Interaction,
 ) -> Result<AnswerSet> {
@@ -243,7 +255,7 @@ pub fn resolve_instance_answers(
     // Explicit per-instance answers win over binds.
     seed.overlay(provided);
 
-    answers::gather(&inc.template, &seed, &AnswerSet::new(), eval, interaction).with_context(|| {
+    answers::gather(&inc.template, &seed, presolved, eval, interaction).with_context(|| {
         format!(
             "resolving answers for include `{}` (instance `{key}`); pass child answers as \
                  --answer {}.{{id}}=...",
@@ -252,11 +264,74 @@ pub fn resolve_instance_answers(
     })
 }
 
+/// How child secrets are pre-resolved when building nested parts.
+#[derive(Clone, Copy)]
+pub enum SecretMode {
+    /// Resolve through the declared sources (env/cmd/prompt) — the CLI path.
+    Resolve,
+    /// Substitute `<secret:id>` placeholders — the preview path (servers,
+    /// `weft graph`). Real secrets are never resolved.
+    Placeholders,
+}
+
+fn presolved_for(template: &Template, mode: SecretMode) -> AnswerSet {
+    match mode {
+        SecretMode::Resolve => AnswerSet::new(),
+        SecretMode::Placeholders => answers::placeholder_secrets(&template.manifest.questions),
+    }
+}
+
+/// Recursively resolve a template's *own* includes into nested parts.
+/// Nested levels take no explicit per-instance answers: they resolve from
+/// binds (over the enclosing child's answers) and the grandchild's own
+/// defaults/secrets. Repeat includes at nested levels have zero instances
+/// (nested instance state is not supported yet).
+pub fn resolve_child_parts<'t>(
+    template: &'t Template,
+    answers: &AnswerSet,
+    mode: SecretMode,
+    eval: &dyn ExprEval,
+    interaction: &mut dyn Interaction,
+) -> Result<Vec<ComposedPart<'t>>> {
+    let mut parts = Vec::new();
+    for inc in &template.includes {
+        if inc.decl.repeat {
+            continue;
+        }
+        let key = inc.decl.name.clone();
+        let child_answers = resolve_instance_answers(
+            inc,
+            &key,
+            answers,
+            &AnswerSet::new(),
+            &presolved_for(&inc.template, mode),
+            eval,
+            interaction,
+        )?;
+        let children = resolve_child_parts(&inc.template, &child_answers, mode, eval, interaction)?;
+        parts.push(ComposedPart {
+            instance: ResolvedInstance {
+                include: inc.decl.name.clone(),
+                key: key.clone(),
+                mount: mount_path(&inc.decl.path, &key)?,
+                answers: child_answers,
+            },
+            template: &inc.template,
+            patches: inc.template.patches.clone(),
+            children,
+        });
+    }
+    Ok(parts)
+}
+
 /// Build parts from instances using each child template's *full* patch set
-/// (the `weft new` case; `update` filters to pinned bases instead).
+/// (the `weft new` case; `update` filters to pinned bases instead). Nested
+/// includes of each child are resolved recursively.
 pub fn full_parts<'t>(
     template: &'t Template,
     instances: Vec<ResolvedInstance>,
+    eval: &dyn ExprEval,
+    interaction: &mut dyn Interaction,
 ) -> Result<Vec<ComposedPart<'t>>> {
     instances
         .into_iter()
@@ -264,18 +339,85 @@ pub fn full_parts<'t>(
             let inc = template
                 .include(&instance.include)
                 .with_context(|| format!("unknown include `{}`", instance.include))?;
+            let children = resolve_child_parts(
+                &inc.template,
+                &instance.answers,
+                SecretMode::Resolve,
+                eval,
+                interaction,
+            )?;
             Ok(ComposedPart {
                 template: &inc.template,
                 patches: inc.template.patches.clone(),
                 instance,
+                children,
             })
         })
         .collect()
 }
 
-/// Render the composed tree: parent patches at the root, each part's child
-/// render mounted under its instance prefix, then `foreach` integration
-/// patches applied once per matching instance. Path collisions are errors.
+/// Preview-oriented parts for a whole template: every include (single
+/// instances; repeat instances only where namespaced answers imply them),
+/// child secrets as placeholders, never prompting. Used by servers/UIs.
+pub fn preview_parts<'t>(
+    template: &'t Template,
+    parent_resolved: &AnswerSet,
+    child_provided: &ChildProvided,
+    eval: &dyn ExprEval,
+) -> Result<Vec<ComposedPart<'t>>> {
+    let mut non_interactive = crate::interact::NonInteractive;
+    let mut parts = Vec::new();
+    for inc in &template.includes {
+        let keys: Vec<String> = if inc.decl.repeat {
+            child_provided
+                .keys()
+                .filter(|(i, _)| *i == inc.decl.name)
+                .map(|(_, k)| k.clone())
+                .collect()
+        } else {
+            vec![inc.decl.name.clone()]
+        };
+        for key in keys {
+            let provided = child_provided
+                .get(&(inc.decl.name.clone(), key.clone()))
+                .cloned()
+                .unwrap_or_default();
+            let answers = resolve_instance_answers(
+                inc,
+                &key,
+                parent_resolved,
+                &provided,
+                &presolved_for(&inc.template, SecretMode::Placeholders),
+                eval,
+                &mut non_interactive,
+            )?;
+            let children = resolve_child_parts(
+                &inc.template,
+                &answers,
+                SecretMode::Placeholders,
+                eval,
+                &mut non_interactive,
+            )?;
+            parts.push(ComposedPart {
+                instance: ResolvedInstance {
+                    include: inc.decl.name.clone(),
+                    key: key.clone(),
+                    mount: mount_path(&inc.decl.path, &key)?,
+                    answers,
+                },
+                template: &inc.template,
+                patches: inc.template.patches.clone(),
+                children,
+            });
+        }
+    }
+    Ok(parts)
+}
+
+/// Render the composed tree: this level's patches at the root, each part's
+/// child tree (recursively composed) mounted under its instance prefix, then
+/// this level's `foreach` integration patches applied once per matching
+/// instance. Path collisions are errors.
 pub fn render_composed(
     parent_patches: &[Patch],
     parent_answers: &AnswerSet,
@@ -287,7 +429,8 @@ pub fn render_composed(
     let mut tree = weft_core::render::render(parent_patches, parent_answers, eval)
         .context("rendering parent template")?;
     for part in parts {
-        let child = weft_core::render::render(&part.patches, &part.instance.answers, eval)
+        // Recurse: a child may itself be composed (nested includes).
+        let child = render_composed(&part.patches, &part.instance.answers, &part.children, eval)
             .with_context(|| {
                 format!(
                     "rendering include `{}` (instance `{}`)",

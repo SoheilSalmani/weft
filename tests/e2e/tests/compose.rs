@@ -140,6 +140,66 @@ fn update_propagates_child_template_changes() {
 }
 
 #[test]
+fn nested_includes_render_three_levels() {
+    // platform → workspace → hello: grandchild answers derive from binds
+    // chained through each level.
+    let tpl_root = tempfile::tempdir().unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/templates");
+    for name in ["workspace", "hello"] {
+        copy_dir(&fixtures.join(name), &tpl_root.path().join(name));
+    }
+    let platform = tpl_root.path().join("platform");
+    std::fs::create_dir_all(platform.join("patches")).unwrap();
+    std::fs::write(
+        platform.join("weft.toml"),
+        r#"[template]
+name = "platform"
+weft-version = "0.1"
+
+[[question]]
+id = "platform_name"
+kind = "string"
+
+[[include]]
+name = "acme"
+template = "../workspace"
+path = "teams/acme"
+
+[include.bind]
+workspace_name = "platform_name + ' Acme'"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        platform.join("patches/base.json"),
+        r##"{"ops":[{"op":"create_file","path":"PLATFORM.md","content":[["# ",{"answer":"platform_name"}]]}]}"##,
+    )
+    .unwrap();
+
+    let dest = tempfile::tempdir().unwrap();
+    let out = dest.path().join("out");
+    weft()
+        .arg("new")
+        .arg(&platform)
+        .arg(&out)
+        .arg("--answer")
+        .arg("platform_name=Mega")
+        .arg("--skip-tasks")
+        .arg("--non-interactive")
+        .assert()
+        .success();
+
+    // level 0: platform's own file
+    assert!(read(&out, "PLATFORM.md").contains("# Mega"));
+    // level 1: workspace mounted, bind chained from platform_name
+    assert!(read(&out, "teams/acme/README.md").contains("# Mega Acme"));
+    // level 2: hello mounted inside workspace, bind chained again
+    assert!(read(&out, "teams/acme/services/hello/README.md").contains("# Mega Acme Service"));
+    assert!(read(&out, "teams/acme/services/hello/pyproject.toml")
+        .contains("name = \"mega-acme-service\""));
+}
+
+#[test]
 fn check_validates_composed_templates() {
     weft()
         .arg("check")
