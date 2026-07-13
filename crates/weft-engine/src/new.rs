@@ -20,7 +20,23 @@ pub struct NewOptions {
     pub answers_file: Option<Utf8PathBuf>,
     /// Answers as a JSON object (inline, `@file`, or `-` for stdin).
     pub answers_json: Option<String>,
+    /// Repeatable-include instance declarations (`include=key`). An instance
+    /// is also implicitly declared by any `include.key.answer=…` answer.
+    pub instances: Vec<String>,
     pub skip_tasks: bool,
+}
+
+/// Parse `include=key` instance declarations.
+pub fn parse_instance_args(
+    args: &[String],
+) -> Result<std::collections::BTreeSet<(String, String)>> {
+    args.iter()
+        .map(|arg| {
+            arg.split_once('=')
+                .map(|(i, k)| (i.to_owned(), k.to_owned()))
+                .with_context(|| format!("--instance {arg:?} is not INCLUDE=KEY"))
+        })
+        .collect()
 }
 
 /// Secret specs (`answer id → source string`) for the answered secret
@@ -61,8 +77,15 @@ pub fn run(opts: &NewOptions, interaction: &mut dyn Interaction) -> Result<()> {
         &eval,
         interaction,
     )?;
-    let instances =
-        compose::resolve_instances(&template, &resolved, &child_provided, &eval, interaction)?;
+    let declared = parse_instance_args(&opts.instances)?;
+    let instances = compose::resolve_instances(
+        &template,
+        &resolved,
+        &child_provided,
+        &declared,
+        &eval,
+        interaction,
+    )?;
     let parts = compose::full_parts(&template, instances)?;
 
     let tree = compose::render_composed(&template.patches, &resolved, &parts, &eval)

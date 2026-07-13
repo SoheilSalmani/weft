@@ -3,6 +3,28 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Composition M2: repeat instances + `weft instance` (fleets)
+
+- `repeat = true` includes are instantiated **0..N times per project**.
+  Instance keys are slugs; answers are namespaced `<include>.<key>.<id>`
+  (providing one implicitly declares the instance); `--instance
+  connector=github` declares one explicitly with no answers.
+- **`weft instance add <include> <key> [--answer id=v…]`** pins a new
+  instance with an *empty base* and only the explicit answers, then runs the
+  ordinary update pass — the old side renders nothing for it, so its files
+  land as pure additions and the full resolution (binds, defaults, secrets)
+  is re-pinned. **`remove`** drops the instance from the update's *new* side
+  (`UpdateOptions::drop_instances`): template-deleted semantics — untouched
+  files deleted, user-modified kept + reported, instance unpinned. **`list`**
+  prints `include=key @ mount`.
+- **Fleet update stays one command**: `weft update` re-renders every pinned
+  instance; the e2e lifecycle proves scaffold-with-2 → add → single update
+  propagating a child-template change into all instances (+ the non-repeat
+  include), local edits preserved, then remove.
+- Deliberate scope cuts: no reserved `instances` table in answers files
+  (namespaced flat keys + `--instance` cover it); the MCP `scaffold` tool
+  does not yet declare instances.
+
 ## Post-MVP — Composition M1: `[[include]]` (single instances)
 
 A template can now **include** other templates, mounted at a path prefix —

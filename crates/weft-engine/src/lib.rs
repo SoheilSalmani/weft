@@ -16,6 +16,7 @@ pub mod diff;
 pub mod fsio;
 pub mod graph;
 pub mod hooks;
+pub mod instance;
 pub mod interact;
 pub mod manifest;
 pub mod new;

@@ -16,3 +16,15 @@ path = "services/hello"
 
 [include.bind]
 project_name = "workspace_name + ' Service'"
+
+# A repeatable slot: the *project* declares connector instances
+# (`--instance connector=github`, `weft instance add connector stripe`).
+[[include]]
+name = "connector"
+template = "../hello"
+path = "connectors/{key}"
+repeat = true
+
+[include.bind]
+project_name = "key"
+use_docker = "False"

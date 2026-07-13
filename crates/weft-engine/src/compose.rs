@@ -52,8 +52,17 @@ pub fn mount_path(decl_path: &str, key: &str) -> Result<Utf8PathBuf> {
     Ok(Utf8PathBuf::from(rendered))
 }
 
+/// Is `key` a legal instance key? (slug: lowercase alphanumerics, `-`, `_`)
+pub fn valid_key(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
 /// Resolve a possibly-namespaced flat answer id to its declaring question:
-/// a parent question, or `<include>.<child-id>` into a child's question.
+/// a parent question, `<include>.<child-id>` (non-repeat), or
+/// `<include>.<key>.<child-id>` (repeat).
 pub fn find_question<'t>(template: &'t Template, flat_id: &str) -> Option<&'t Question> {
     if let Some(q) = template
         .manifest
@@ -65,83 +74,145 @@ pub fn find_question<'t>(template: &'t Template, flat_id: &str) -> Option<&'t Qu
     }
     let (ns, rest) = flat_id.split_once('.')?;
     let inc = template.include(ns)?;
+    let child_id = if inc.decl.repeat {
+        let (key, child_id) = rest.split_once('.')?;
+        if !valid_key(key) {
+            return None;
+        }
+        child_id
+    } else {
+        rest
+    };
     inc.template
         .manifest
         .questions
         .iter()
-        .find(|q| q.id.0 == rest)
+        .find(|q| q.id.0 == child_id)
 }
 
-/// Split a flat provided answer set into (parent answers, per-include child
-/// answer sets keyed by include name).
-pub fn split_provided(
-    template: &Template,
-    flat: &AnswerSet,
-) -> Result<(AnswerSet, BTreeMap<String, AnswerSet>)> {
+/// Per-instance child answer sets, keyed by `(include name, instance key)`.
+pub type ChildProvided = BTreeMap<(String, String), AnswerSet>;
+
+/// Split a flat provided answer set into (parent answers, per-instance child
+/// answer sets keyed by `(include name, instance key)`). For non-repeat
+/// includes the key is the include name; for repeat includes, providing any
+/// `<include>.<key>.<id>` answer implicitly declares the instance.
+pub fn split_provided(template: &Template, flat: &AnswerSet) -> Result<(AnswerSet, ChildProvided)> {
     let mut parent = AnswerSet::new();
-    let mut children: BTreeMap<String, AnswerSet> = BTreeMap::new();
+    let mut children: BTreeMap<(String, String), AnswerSet> = BTreeMap::new();
     for (id, value) in flat.iter() {
         if template.manifest.questions.iter().any(|q| q.id == *id) {
             parent.insert(id.clone(), value.clone());
             continue;
         }
-        if let Some((ns, rest)) = id.0.split_once('.') {
-            if let Some(inc) = template.include(ns) {
-                if inc
-                    .template
-                    .manifest
-                    .questions
-                    .iter()
-                    .any(|q| q.id.0 == rest)
-                {
-                    children
-                        .entry(inc.decl.name.clone())
-                        .or_default()
-                        .insert(AnswerId(rest.to_owned()), value.clone());
-                    continue;
+        let routed = (|| {
+            let (ns, rest) = id.0.split_once('.')?;
+            let inc = template.include(ns)?;
+            let (key, child_id) = if inc.decl.repeat {
+                let (key, child_id) = rest.split_once('.')?;
+                if !valid_key(key) {
+                    return None;
                 }
+                (key, child_id)
+            } else {
+                (inc.decl.name.as_str(), rest)
+            };
+            inc.template
+                .manifest
+                .questions
+                .iter()
+                .any(|q| q.id.0 == child_id)
+                .then(|| {
+                    (
+                        (inc.decl.name.clone(), key.to_owned()),
+                        AnswerId(child_id.to_owned()),
+                    )
+                })
+        })();
+        match routed {
+            Some((slot, child_id)) => {
+                children
+                    .entry(slot)
+                    .or_default()
+                    .insert(child_id, value.clone());
             }
+            None => bail!(
+                "answer `{id}` does not match any question in template `{}` or its includes",
+                template.manifest.template.name
+            ),
         }
-        bail!(
-            "answer `{id}` does not match any question in template `{}` or its includes",
-            template.manifest.template.name
-        );
     }
     Ok((parent, children))
 }
 
-/// Resolve every include's instance answers: `bind` expressions evaluated
-/// over the parent's resolved answers (plus `key`), overlaid by explicitly
+/// Resolve every instance's child answers: `bind` expressions evaluated over
+/// the parent's resolved answers (plus `key`), overlaid by explicitly
 /// provided child answers, then gathered like any template (child defaults,
 /// secret resolution, prompting).
+///
+/// Instances: a non-repeat include always has exactly one (key = include
+/// name). A repeat include has one per declared key — the union of
+/// `declared` entries and keys appearing in `child_provided`. Zero declared
+/// instances of a repeat include is valid.
 pub fn resolve_instances(
     template: &Template,
     parent_resolved: &AnswerSet,
-    child_provided: &BTreeMap<String, AnswerSet>,
+    child_provided: &ChildProvided,
+    declared: &std::collections::BTreeSet<(String, String)>,
     eval: &dyn ExprEval,
     interaction: &mut dyn Interaction,
 ) -> Result<Vec<ResolvedInstance>> {
-    let mut out = Vec::new();
-    for inc in &template.includes {
-        if inc.decl.repeat {
+    // Validate declared slots up front.
+    for (include, key) in declared {
+        let inc = template
+            .include(include)
+            .with_context(|| format!("--instance {include}={key}: unknown include `{include}`"))?;
+        if !inc.decl.repeat {
+            bail!("include `{include}` is not repeatable; it always has exactly one instance");
+        }
+        if !valid_key(key) {
             bail!(
-                "include `{}` is repeatable; repeatable instances are not supported yet",
-                inc.decl.name
+                "invalid instance key {key:?} for include `{include}` \
+                 (lowercase alphanumerics, `-`, `_`)"
             );
         }
-        let key = inc.decl.name.clone();
-        let provided = child_provided
-            .get(&inc.decl.name)
-            .cloned()
-            .unwrap_or_default();
-        let answers =
-            resolve_instance_answers(inc, &key, parent_resolved, &provided, eval, interaction)?;
-        out.push(ResolvedInstance {
-            include: inc.decl.name.clone(),
-            key: key.clone(),
-            mount: mount_path(&inc.decl.path, &key)?,
-            answers,
-        });
+    }
+
+    let mut out = Vec::new();
+    for inc in &template.includes {
+        let keys: Vec<String> = if inc.decl.repeat {
+            // Union of explicit declarations and keys implied by provided
+            // answers, in sorted (deterministic) order.
+            declared
+                .iter()
+                .filter(|(i, _)| *i == inc.decl.name)
+                .map(|(_, k)| k.clone())
+                .chain(
+                    child_provided
+                        .keys()
+                        .filter(|(i, _)| *i == inc.decl.name)
+                        .map(|(_, k)| k.clone()),
+                )
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        } else {
+            vec![inc.decl.name.clone()]
+        };
+        for key in keys {
+            let provided = child_provided
+                .get(&(inc.decl.name.clone(), key.clone()))
+                .cloned()
+                .unwrap_or_default();
+            let answers =
+                resolve_instance_answers(inc, &key, parent_resolved, &provided, eval, interaction)?;
+            out.push(ResolvedInstance {
+                include: inc.decl.name.clone(),
+                key: key.clone(),
+                mount: mount_path(&inc.decl.path, &key)?,
+                answers,
+            });
+        }
     }
     Ok(out)
 }

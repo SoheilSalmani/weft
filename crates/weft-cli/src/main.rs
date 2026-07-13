@@ -38,6 +38,11 @@ enum Command {
         /// highest precedence before prompts. Designed for agents.
         #[arg(long = "answers-json")]
         answers_json: Option<String>,
+        /// Declare an instance of a repeatable include as INCLUDE=KEY
+        /// (repeatable). Providing any `include.key.answer=…` answer also
+        /// declares the instance implicitly.
+        #[arg(long = "instance")]
+        instances: Vec<String>,
         /// Do not run template tasks after scaffolding.
         #[arg(long)]
         skip_tasks: bool,
@@ -66,6 +71,11 @@ enum Command {
         /// Never prompt; fail if new questions lack answers.
         #[arg(long)]
         non_interactive: bool,
+    },
+    /// Manage repeatable-include instances of a scaffolded project.
+    Instance {
+        #[command(subcommand)]
+        cmd: InstanceCmd,
     },
     /// Start a recording session: materialize a base state into a scratch
     /// worktree and print its path.
@@ -198,6 +208,44 @@ enum Command {
 }
 
 #[derive(Subcommand)]
+enum InstanceCmd {
+    /// Add an instance of a repeatable include (renders its files in place).
+    Add {
+        /// The [[include]] name in the template.
+        include: String,
+        /// The new instance's key (lowercase alphanumerics, `-`, `_`).
+        key: String,
+        /// Child answers as ID=VALUE (child-scoped; repeatable).
+        #[arg(long = "answer")]
+        answers: Vec<String>,
+        /// Scaffolded project directory (defaults to `.`).
+        #[arg(long, default_value = ".")]
+        dest: Utf8PathBuf,
+        /// Do not run hooks.
+        #[arg(long)]
+        skip_tasks: bool,
+        /// Never prompt; fail if child answers are missing.
+        #[arg(long)]
+        non_interactive: bool,
+    },
+    /// Remove an instance (untouched files deleted, modified ones kept).
+    Remove {
+        include: String,
+        key: String,
+        #[arg(long, default_value = ".")]
+        dest: Utf8PathBuf,
+        /// Do not run hooks.
+        #[arg(long)]
+        skip_tasks: bool,
+    },
+    /// List the project's include instances.
+    List {
+        #[arg(long, default_value = ".")]
+        dest: Utf8PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
 enum PresetsCommand {
     /// List presets declared by a template.
     List {
@@ -222,6 +270,7 @@ fn main() -> anyhow::Result<()> {
             answers,
             answers_file,
             answers_json,
+            instances,
             skip_tasks,
             non_interactive,
             no_wizard,
@@ -233,6 +282,7 @@ fn main() -> anyhow::Result<()> {
                 answers,
                 answers_file,
                 answers_json,
+                instances,
                 skip_tasks,
             };
             maybe_wizard(
@@ -259,6 +309,7 @@ fn main() -> anyhow::Result<()> {
                 dry_run,
                 template_override: template,
                 skip_tasks,
+                drop_instances: vec![],
             };
             let mut interaction = auto_interaction(non_interactive);
             let report = weft_engine::update::run(&opts, interaction.as_mut())?;
@@ -268,6 +319,46 @@ fn main() -> anyhow::Result<()> {
                 weft_engine::update::finish(&report)
             }
         }
+        Command::Instance { cmd } => match cmd {
+            InstanceCmd::Add {
+                include,
+                key,
+                answers,
+                dest,
+                skip_tasks,
+                non_interactive,
+            } => {
+                let mut interaction = auto_interaction(non_interactive);
+                let report = weft_engine::instance::add(
+                    &weft_engine::instance::InstanceAddOptions {
+                        dest,
+                        include,
+                        key,
+                        answers,
+                        skip_tasks,
+                    },
+                    interaction.as_mut(),
+                )?;
+                weft_engine::update::finish(&report)
+            }
+            InstanceCmd::Remove {
+                include,
+                key,
+                dest,
+                skip_tasks,
+            } => {
+                let mut interaction = auto_interaction(false);
+                let report = weft_engine::instance::remove(
+                    &dest,
+                    &include,
+                    &key,
+                    skip_tasks,
+                    interaction.as_mut(),
+                )?;
+                weft_engine::update::finish(&report)
+            }
+            InstanceCmd::List { dest } => weft_engine::instance::list(&dest),
+        },
         Command::Record {
             template,
             base,

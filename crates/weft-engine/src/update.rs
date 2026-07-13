@@ -23,6 +23,10 @@ pub struct UpdateOptions {
     /// Use this template path instead of the one recorded in state.
     pub template_override: Option<Utf8PathBuf>,
     pub skip_tasks: bool,
+    /// Instances `(include, key)` excluded from the *new* side — the
+    /// `weft instance remove` path: their files get template-deleted
+    /// semantics and they are unpinned from state.
+    pub drop_instances: Vec<(String, String)>,
 }
 
 #[derive(Debug, Default)]
@@ -123,7 +127,15 @@ pub fn run(opts: &UpdateOptions, interaction: &mut dyn Interaction) -> Result<Up
             },
         });
         // New side: binds re-seed, stored answers win, new child questions
-        // get defaults/prompts (same policy as the parent's answers).
+        // get defaults/prompts (same policy as the parent's answers). Dropped
+        // instances (`weft instance remove`) have no new side at all.
+        if opts
+            .drop_instances
+            .iter()
+            .any(|(i, k)| *i == inst.include && *k == inst.key)
+        {
+            continue;
+        }
         let new_child_answers = compose::resolve_instance_answers(
             inc,
             &inst.key,
@@ -208,7 +220,14 @@ pub fn run(opts: &UpdateOptions, interaction: &mut dyn Interaction) -> Result<Up
         include: String,
     }
     let mut child_plans: Vec<ChildPlan> = Vec::new();
-    for (old, new) in old_parts.iter().zip(&new_parts) {
+    for new in &new_parts {
+        // Dropped instances make the two sides diverge, so match by identity.
+        let old = old_parts
+            .iter()
+            .find(|o| {
+                o.instance.include == new.instance.include && o.instance.key == new.instance.key
+            })
+            .expect("every new part has an old counterpart");
         let child_collected = hooks::collect(new.template, &new.instance.answers, &eval)?;
         let changed_child_answers: BTreeSet<AnswerId> = old
             .instance

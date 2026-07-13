@@ -231,6 +231,7 @@ impl WeftMcp {
             answers: vec![],
             answers_file: None,
             answers_json: answers_json(&p.answers),
+            instances: vec![],
             skip_tasks: true, // guardrail: agents never run template shell tasks
         };
         weft_engine::new::run(&opts, &mut NonInteractive).map_err(|e| invalid(format!("{e:#}")))?;
