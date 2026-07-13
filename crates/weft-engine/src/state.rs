@@ -18,6 +18,32 @@ pub struct State {
     pub answers: AnswerSet,
     #[serde(default)]
     pub secrets: BTreeMap<AnswerId, String>,
+    /// Include instances (project-side data): which includes were
+    /// instantiated, at which keys, with which answers and pinned child
+    /// bases. Empty for templates without includes.
+    #[serde(default, rename = "instance", skip_serializing_if = "Vec::is_empty")]
+    pub instances: Vec<InstanceState>,
+}
+
+/// One include instance pinned in project state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstanceState {
+    /// The `[[include]]` name in the parent template.
+    pub include: String,
+    /// Instance key (== include name for non-repeat includes).
+    pub key: String,
+    /// Mount prefix this instance was rendered under (stored so updates can
+    /// reproduce the old tree even if the template later moves the mount).
+    pub mount: String,
+    /// Pinned child base: ids of the child patches rendered from.
+    #[serde(default)]
+    pub base: Vec<PatchId>,
+    /// Child answers (secrets excluded — see `secrets`).
+    #[serde(default)]
+    pub answers: AnswerSet,
+    /// Child secret references (answer id → source spec string).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub secrets: BTreeMap<AnswerId, String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -56,7 +82,24 @@ impl State {
             },
             answers: plain,
             secrets: secret_specs.clone(),
+            instances: Vec::new(),
         }
+    }
+
+    /// Attach include instances (builder-style).
+    pub fn with_instances(mut self, instances: Vec<InstanceState>) -> Self {
+        self.instances = instances;
+        self
+    }
+
+    /// Split a resolved answer set into (plain answers, nothing) dropping
+    /// secrets — the storable projection used for instance states.
+    pub fn plain_answers(answers: &AnswerSet) -> AnswerSet {
+        answers
+            .iter()
+            .filter(|(_, v)| !matches!(v, Value::Secret(_)))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 
     pub fn save(&self, dest: &Utf8Path) -> Result<()> {

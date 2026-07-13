@@ -31,17 +31,29 @@ pub fn layered_answers(
     if !answer_args.is_empty() {
         let mut set = AnswerSet::new();
         for arg in answer_args {
-            let (id, value) = parse_answer_arg(&template.manifest.questions, arg)?;
-            set.insert_strict(id, value)
+            let (key, raw) = arg
+                .split_once('=')
+                .with_context(|| format!("--answer {arg:?} is not KEY=VALUE"))?;
+            // Namespaced keys (`<include>.<child-id>`) resolve through the
+            // includes; plain keys through the parent's questions.
+            let question = crate::compose::find_question(template, key)
+                .with_context(|| format!("no question with id `{key}`"))?;
+            let value = coerce(&question.kind, raw).with_context(|| {
+                format!(
+                    "--answer {key}: invalid {} value {raw:?}",
+                    question.kind.name()
+                )
+            })?;
+            set.insert_strict(weft_core::AnswerId(key.to_owned()), value)
                 .map_err(|e| anyhow::anyhow!("--answer {arg}: {e}"))?;
         }
         layers.push(set);
     }
     let layered = weft_core::value::layer(&layers);
     for (id, _) in layered.iter() {
-        if !template.manifest.questions.iter().any(|q| q.id == *id) {
+        if crate::compose::find_question(template, &id.0).is_none() {
             bail!(
-                "answer `{id}` does not match any question in template `{}`",
+                "answer `{id}` does not match any question in template `{}` or its includes",
                 template.manifest.template.name
             );
         }
@@ -197,7 +209,19 @@ pub fn layered_with_json(
                 .with_context(|| format!("reading answers JSON file {}", &s[1..]))?,
             s => s.to_owned(),
         };
-        provided.overlay(&answers_from_json(&template.manifest.questions, &json)?);
+        // Template-aware parse: keys may be namespaced (`<include>.<id>`).
+        let object: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&json)
+            .context("answers JSON must be an object of question id -> value")?;
+        let mut set = AnswerSet::new();
+        for (key, raw) in &object {
+            let question = crate::compose::find_question(template, key)
+                .with_context(|| format!("no question with id `{key}`"))?;
+            set.insert(
+                weft_core::AnswerId(key.clone()),
+                json_to_value(&question.kind, key, raw)?,
+            );
+        }
+        provided.overlay(&set);
     }
     Ok(provided)
 }

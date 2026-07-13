@@ -1,0 +1,18 @@
+[template]
+name = "workspace"
+weft-version = "0.1"
+description = "A workspace that mounts the hello template as a service."
+
+[[question]]
+id = "workspace_name"
+kind = "string"
+prompt = "Workspace name"
+example = "Acme Workspace"
+
+[[include]]
+name = "svc"
+template = "../hello"
+path = "services/hello"
+
+[include.bind]
+project_name = "workspace_name + ' Service'"

@@ -33,7 +33,8 @@ pub struct PatchFile {
     pub hooks: Vec<Hook>,
 }
 
-/// A loaded template: manifest plus the patch DAG with resolved ids.
+/// A loaded template: manifest plus the patch DAG with resolved ids, plus
+/// any included child templates (recursively loaded).
 #[derive(Debug)]
 pub struct Template {
     pub root: Utf8PathBuf,
@@ -42,10 +43,28 @@ pub struct Template {
     pub patches: Vec<Patch>,
     pub name_to_id: BTreeMap<String, PatchId>,
     pub id_to_name: BTreeMap<PatchId, String>,
+    /// Loaded children, in declaration order (parallel to
+    /// `manifest.includes`).
+    pub includes: Vec<LoadedInclude>,
 }
+
+/// An `[[include]]` declaration together with its loaded child template.
+#[derive(Debug)]
+pub struct LoadedInclude {
+    pub decl: crate::manifest::IncludeDecl,
+    pub template: Template,
+}
+
+/// Maximum include nesting depth (defensive; cycles are detected separately).
+const MAX_INCLUDE_DEPTH: usize = 8;
 
 impl Template {
     pub fn load(root: &Utf8Path) -> Result<Self> {
+        let mut seen = Vec::new();
+        Self::load_inner(root, &mut seen, 0)
+    }
+
+    fn load_inner(root: &Utf8Path, seen: &mut Vec<Utf8PathBuf>, depth: usize) -> Result<Self> {
         let manifest_path = root.join(MANIFEST_FILE);
         let manifest_src = std::fs::read_to_string(&manifest_path).with_context(|| {
             format!("`{manifest_path}` not found: is `{root}` a weft template?")
@@ -79,13 +98,58 @@ impl Template {
 
         let (patches, name_to_id) = resolve_patches(files)?;
         let id_to_name = name_to_id.iter().map(|(n, id)| (*id, n.clone())).collect();
+
+        // Recursively load included child templates, guarding against cycles
+        // (via canonicalized roots) and runaway nesting.
+        let mut includes = Vec::with_capacity(manifest.includes.len());
+        if !manifest.includes.is_empty() {
+            if depth >= MAX_INCLUDE_DEPTH {
+                bail!(
+                    "template includes nested deeper than {MAX_INCLUDE_DEPTH} levels at `{root}`"
+                );
+            }
+            let canonical = root.canonicalize_utf8().unwrap_or_else(|_| root.to_owned());
+            seen.push(canonical);
+            let mut names = std::collections::BTreeSet::new();
+            for decl in &manifest.includes {
+                if !names.insert(&decl.name) {
+                    bail!("duplicate include name `{}` in `{root}`", decl.name);
+                }
+                let child_root = root.join(&decl.template);
+                let child_canonical = child_root.canonicalize_utf8().with_context(|| {
+                    format!("include `{}`: template `{child_root}` not found", decl.name)
+                })?;
+                if seen.contains(&child_canonical) {
+                    bail!(
+                        "include cycle: `{child_canonical}` is already being loaded (via include `{}`)",
+                        decl.name
+                    );
+                }
+                let template =
+                    Self::load_inner(&child_root, seen, depth + 1).with_context(|| {
+                        format!("loading include `{}` from `{child_root}`", decl.name)
+                    })?;
+                includes.push(LoadedInclude {
+                    decl: decl.clone(),
+                    template,
+                });
+            }
+            seen.pop();
+        }
+
         Ok(Template {
             root: root.to_owned(),
             manifest,
             patches,
             name_to_id,
             id_to_name,
+            includes,
         })
+    }
+
+    /// The loaded include with the given name.
+    pub fn include(&self, name: &str) -> Option<&LoadedInclude> {
+        self.includes.iter().find(|i| i.decl.name == name)
     }
 
     pub fn preset_names(&self) -> Vec<&str> {

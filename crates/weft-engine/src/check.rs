@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Result};
 use camino::Utf8PathBuf;
+use weft_core::render::ExprEval;
 use weft_core::{AnswerId, AnswerKind, Op, Patch, PatchId, Segment, TemplatePath};
 use weft_lang::StarlarkEval;
 
@@ -109,6 +110,96 @@ pub fn run(opts: &CheckOptions) -> Result<CheckReport> {
     // cycle, parseable when/command expressions.
     for msg in hooks::validate_all(&template) {
         issue(&mut report, msg);
+    }
+
+    // Includes: mount paths render and don't collide; binds parse, reference
+    // real child questions, and trial-evaluate over dummy parent answers;
+    // child templates pass their own checks (issues prefixed).
+    {
+        let mut mounts: BTreeMap<String, &str> = BTreeMap::new();
+        let dummy_parent = answers::dummy_answers(questions);
+        for inc in &template.includes {
+            let key = if inc.decl.repeat {
+                "dummykey"
+            } else {
+                &inc.decl.name
+            };
+            if inc.decl.repeat && !inc.decl.path.contains("{key}") {
+                issue(
+                    &mut report,
+                    format!(
+                        "include `{}`: repeat = true requires `{{key}}` in the mount path",
+                        inc.decl.name
+                    ),
+                );
+            }
+            match crate::compose::mount_path(&inc.decl.path, key) {
+                Err(e) => issue(&mut report, format!("include `{}`: {e:#}", inc.decl.name)),
+                Ok(mount) => {
+                    if let Some(other) = mounts.insert(mount.to_string(), &inc.decl.name) {
+                        issue(
+                            &mut report,
+                            format!(
+                                "includes `{other}` and `{}` mount at the same path `{mount}`",
+                                inc.decl.name
+                            ),
+                        );
+                    }
+                }
+            }
+            let mut bind_scope = dummy_parent.clone();
+            bind_scope.insert(
+                weft_core::AnswerId::from("key"),
+                weft_core::Value::String(key.to_owned()),
+            );
+            for (child_id, expr) in &inc.decl.bind {
+                if !inc
+                    .template
+                    .manifest
+                    .questions
+                    .iter()
+                    .any(|q| q.id.0 == *child_id)
+                {
+                    issue(
+                        &mut report,
+                        format!(
+                            "include `{}`: bind `{child_id}` names no question in the child \
+                             template",
+                            inc.decl.name
+                        ),
+                    );
+                }
+                if let Err(e) = weft_lang::parse_expr(expr.as_str()) {
+                    issue(
+                        &mut report,
+                        format!(
+                            "include `{}`: bind `{child_id}` does not parse: {e}",
+                            inc.decl.name
+                        ),
+                    );
+                } else if let Err(e) = StarlarkEval.eval(expr, &bind_scope) {
+                    issue(
+                        &mut report,
+                        format!(
+                            "include `{}`: bind `{child_id}` cannot be evaluated over the \
+                             parent answers: {e}",
+                            inc.decl.name
+                        ),
+                    );
+                }
+            }
+            // Recurse into the child's own checks (structural only; the
+            // child's render checks need child answers).
+            let child_report = run(&CheckOptions {
+                template: inc.template.root.clone(),
+                presets: vec![],
+                answers: vec![],
+                answers_file: None,
+            })?;
+            for msg in child_report.issues {
+                issue(&mut report, format!("include `{}`: {msg}", inc.decl.name));
+            }
+        }
     }
 
     // Patches: graph structure was validated at load; check expressions and

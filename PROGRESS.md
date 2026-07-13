@@ -3,6 +3,47 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Composition M1: `[[include]]` (single instances)
+
+A template can now **include** other templates, mounted at a path prefix —
+the foundation of multi-instance fleets and Turborepo-style workspaces.
+
+- **Manifest**: `[[include]] { name, template (path, relative to the root),
+  path (mount prefix, `{key}` substitution), repeat (M2), bind }`. Children
+  are ordinary self-contained templates; loading recurses with cycle
+  detection (canonicalized roots) and a depth cap of 8.
+- **Answers**: child answers are namespaced from the parent as
+  `<include>.<id>` (`--answer svc.port=8000`, same in answers files —
+  quote dotted TOML keys — and `--answers-json`). `bind` expressions seed
+  child answers from parent scope (plus `key`); explicit namespaced answers
+  override binds; the rest resolve via the child's own defaults/secrets/
+  prompts (`answers::gather` reused per instance).
+- **Composed render** (`compose.rs`): parent patches render at the root;
+  each instance's child render is path-prefixed under its mount and merged
+  (collision = error). Core stays single-template pure.
+- **Update = fleet update for free**: the old tree is reconstructed from
+  pinned parent + per-instance child bases (`[[instance]]` in
+  `.weft/state.toml`: include, key, stored mount, base ids, answers, secret
+  refs) and stored answers; the new tree from current state; the existing
+  3-way merge applies unchanged. Stored instance answers win over
+  re-evaluated binds (same pinning policy as parent answers). The mount is
+  stored so a template-side mount move behaves as delete+create.
+- **Hooks**: child pre-hooks run at the dest root (mount not yet written),
+  child post-hooks inside their mount, parent post last. On update, child
+  post-hooks re-fire against a child-relative change set (paths under the
+  mount, stripped; changed child answers). `after` does not cross template
+  boundaries.
+- **record** on a composed template bails — patches belong to the child;
+  record against it directly.
+- **check**: mount validation + cross-include collision, `repeat` requires
+  `{key}`, bind parse + trial-eval over dummy parent answers + bind targets
+  must exist in the child, and full recursion into child checks (issues
+  prefixed with the include name).
+- New `workspace` fixture (includes `hello` at `services/hello` with a
+  bind); e2e covers composed scaffold, namespaced overrides, child-template
+  evolution propagating through one `weft update` (local edits preserved,
+  idempotent), and check.
+
 ## Post-MVP — Composition prelude: action patches + question sections
 
 First milestone of the template-composition track (includes/instances/fleet

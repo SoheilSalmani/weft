@@ -14,7 +14,7 @@ use crate::hooks::{self, ChangeSet};
 use crate::interact::Interaction;
 use crate::state::State;
 use crate::template::Template;
-use crate::{answers, fsio, secrets};
+use crate::{answers, compose, fsio, secrets};
 
 pub struct UpdateOptions {
     pub dest: Utf8PathBuf,
@@ -50,6 +50,26 @@ pub fn run(opts: &UpdateOptions, interaction: &mut dyn Interaction) -> Result<Up
             );
         }
     }
+    for inst in &state.instances {
+        let inc = template.include(&inst.include).with_context(|| {
+            format!(
+                "instance `{}` was scaffolded from include `{}`, which no longer exists in \
+                 `{template_path}`",
+                inst.key, inst.include
+            )
+        })?;
+        for id in &inst.base {
+            if !inc.template.id_to_name.contains_key(id) {
+                bail!(
+                    "instance `{}`: pinned child patch {} no longer exists in include `{}`; \
+                     the child template history was rewritten",
+                    inst.key,
+                    id.short(),
+                    inst.include
+                );
+            }
+        }
+    }
 
     // Secrets resolve through the *stored* references — never re-prompted
     // while the reference still resolves.
@@ -68,15 +88,65 @@ pub fn run(opts: &UpdateOptions, interaction: &mut dyn Interaction) -> Result<Up
         interaction,
     )?;
 
+    // Reconstruct the old composed tree: pinned parent base + per-instance
+    // pinned child bases, all with the stored answers. Then produce the new
+    // composed tree from the current template state.
     let base_patches: Vec<_> = template
         .patches
         .iter()
         .filter(|p| state.state.base.contains(&p.id))
         .cloned()
         .collect();
-    let old_render = weft_core::render::render(&base_patches, &old_answers, &eval)
+
+    let mut old_parts: Vec<compose::ComposedPart> = Vec::new();
+    let mut new_parts: Vec<compose::ComposedPart> = Vec::new();
+    for inst in &state.instances {
+        let inc = template.include(&inst.include).expect("checked above");
+        // Old side: stored answers + re-resolved stored child secrets.
+        let child_secrets = resolve_instance_secrets(&inc.template, inst, interaction)?;
+        let mut old_child_answers = inst.answers.clone();
+        old_child_answers.overlay(&child_secrets);
+        old_parts.push(compose::ComposedPart {
+            template: &inc.template,
+            patches: inc
+                .template
+                .patches
+                .iter()
+                .filter(|p| inst.base.contains(&p.id))
+                .cloned()
+                .collect(),
+            instance: compose::ResolvedInstance {
+                include: inst.include.clone(),
+                key: inst.key.clone(),
+                mount: Utf8PathBuf::from(&inst.mount),
+                answers: old_child_answers,
+            },
+        });
+        // New side: binds re-seed, stored answers win, new child questions
+        // get defaults/prompts (same policy as the parent's answers).
+        let new_child_answers = compose::resolve_instance_answers(
+            inc,
+            &inst.key,
+            &new_answers,
+            &inst.answers,
+            &eval,
+            interaction,
+        )?;
+        new_parts.push(compose::ComposedPart {
+            template: &inc.template,
+            patches: inc.template.patches.clone(),
+            instance: compose::ResolvedInstance {
+                include: inst.include.clone(),
+                key: inst.key.clone(),
+                mount: compose::mount_path(&inc.decl.path, &inst.key)?,
+                answers: new_child_answers,
+            },
+        });
+    }
+
+    let old_render = compose::render_composed(&base_patches, &old_answers, &old_parts, &eval)
         .context("re-rendering pinned inputs")?;
-    let new_render = weft_core::render::render(&template.patches, &new_answers, &eval)
+    let new_render = compose::render_composed(&template.patches, &new_answers, &new_parts, &eval)
         .context("rendering new template state")?;
 
     let user_tree = fsio::read_tree(&opts.dest)?;
@@ -127,6 +197,50 @@ pub fn run(opts: &UpdateOptions, interaction: &mut dyn Interaction) -> Result<Up
     let collected = hooks::collect(&template, &new_answers, &eval)?;
     let post_plan = hooks::fire_on_update(&collected.post, Some(&changes), &eval, &new_answers)?;
 
+    // Child hook plans, one per instance: inputs are evaluated against the
+    // child-relative change set (paths under the mount, stripped; the child
+    // answers that changed).
+    struct ChildPlan<'t> {
+        mount: Utf8PathBuf,
+        answers: AnswerSet,
+        pre: Vec<&'t weft_core::Hook>,
+        post: Vec<&'t weft_core::Hook>,
+        include: String,
+    }
+    let mut child_plans: Vec<ChildPlan> = Vec::new();
+    for (old, new) in old_parts.iter().zip(&new_parts) {
+        let child_collected = hooks::collect(new.template, &new.instance.answers, &eval)?;
+        let changed_child_answers: BTreeSet<AnswerId> = old
+            .instance
+            .answers
+            .iter()
+            .map(|(id, _)| id)
+            .chain(new.instance.answers.iter().map(|(id, _)| id))
+            .filter(
+                |id| match (old.instance.answers.get(id), new.instance.answers.get(id)) {
+                    (Some(Value::Secret(_)), Some(Value::Secret(_))) => false,
+                    (a, b) => a != b,
+                },
+            )
+            .cloned()
+            .collect();
+        let child_changes =
+            compose::child_changes(&changes, &new.instance.mount, changed_child_answers);
+        let post = hooks::fire_on_update(
+            &child_collected.post,
+            Some(&child_changes),
+            &eval,
+            &new.instance.answers,
+        )?;
+        child_plans.push(ChildPlan {
+            mount: new.instance.mount.clone(),
+            answers: new.instance.answers.clone(),
+            pre: child_collected.pre,
+            post,
+            include: new.instance.include.clone(),
+        });
+    }
+
     if opts.dry_run {
         if actions.is_empty() {
             eprintln!("dry run: tree already up to date");
@@ -136,6 +250,20 @@ pub fn run(opts: &UpdateOptions, interaction: &mut dyn Interaction) -> Result<Up
         }
         for hook in &collected.pre {
             eprintln!("dry run: would run pre-hook `{}` ({})", hook.id, hook.label);
+        }
+        for plan in &child_plans {
+            for hook in &plan.pre {
+                eprintln!(
+                    "dry run: would run pre-hook `{}` ({}) [include {}]",
+                    hook.id, hook.label, plan.include
+                );
+            }
+            for hook in &plan.post {
+                eprintln!(
+                    "dry run: would run post-hook `{}` ({}) [include {}]",
+                    hook.id, hook.label, plan.include
+                );
+            }
         }
         for hook in &post_plan {
             eprintln!(
@@ -150,6 +278,11 @@ pub fn run(opts: &UpdateOptions, interaction: &mut dyn Interaction) -> Result<Up
     if !opts.skip_tasks {
         hooks::run(&collected.pre, &opts.dest, &new_answers, &eval)
             .context("a pre-render hook failed")?;
+        for plan in &child_plans {
+            hooks::run(&plan.pre, &opts.dest, &plan.answers, &eval).with_context(|| {
+                format!("a pre-render hook of include `{}` failed", plan.include)
+            })?;
+        }
     }
 
     for (path, action) in actions {
@@ -174,8 +307,19 @@ pub fn run(opts: &UpdateOptions, interaction: &mut dyn Interaction) -> Result<Up
         }
     }
 
-    // Pin the new template state.
+    // Pin the new template state, incl. re-pinned include instances.
     let secret_specs = collect_secret_specs(&template, &state, &new_answers);
+    let instance_states: Vec<crate::state::InstanceState> = new_parts
+        .iter()
+        .map(|p| crate::state::InstanceState {
+            include: p.instance.include.clone(),
+            key: p.instance.key.clone(),
+            mount: p.instance.mount.to_string(),
+            base: p.patches.iter().map(|patch| patch.id).collect(),
+            answers: State::plain_answers(&p.instance.answers),
+            secrets: crate::new::secret_specs(&p.template.manifest.questions, &p.instance.answers),
+        })
+        .collect();
     State::new(
         template_path
             .canonicalize_utf8()
@@ -186,14 +330,21 @@ pub fn run(opts: &UpdateOptions, interaction: &mut dyn Interaction) -> Result<Up
         &new_answers,
         &secret_specs,
     )
+    .with_instances(instance_states)
     .save(&opts.dest)?;
 
+    let skipped_child_posts: usize = child_plans.iter().map(|p| p.post.len()).sum();
     if !opts.skip_tasks && report.conflicts.is_empty() {
+        // Child post-hooks first (inside their mounts), then the parent's.
+        for plan in &child_plans {
+            let cwd = opts.dest.join(&plan.mount);
+            hooks::run(&plan.post, &cwd, &plan.answers, &eval)?;
+        }
         hooks::run(&post_plan, &opts.dest, &new_answers, &eval)?;
-    } else if !post_plan.is_empty() && !report.conflicts.is_empty() {
+    } else if (!post_plan.is_empty() || skipped_child_posts > 0) && !report.conflicts.is_empty() {
         report.notes.push(format!(
             "skipped {} post-hook(s) because of conflicts; re-run them after resolving",
-            post_plan.len()
+            post_plan.len() + skipped_child_posts
         ));
     }
 
@@ -262,6 +413,33 @@ fn plan_file(
         }
         (None, None) => unreachable!("path came from some tree"),
     }
+}
+
+/// Re-resolve one instance's stored child secret references.
+fn resolve_instance_secrets(
+    child: &Template,
+    inst: &crate::state::InstanceState,
+    interaction: &mut dyn Interaction,
+) -> Result<AnswerSet> {
+    let mut resolved = AnswerSet::new();
+    for (id, spec_str) in &inst.secrets {
+        let spec: weft_core::SecretSpec = spec_str.parse().with_context(|| {
+            format!(
+                "invalid stored secret reference for `{id}` (instance `{}`)",
+                inst.key
+            )
+        })?;
+        let question = child
+            .manifest
+            .questions
+            .iter()
+            .find(|q| q.id == *id)
+            .cloned()
+            .unwrap_or_else(|| synthetic_secret_question(id, &spec));
+        let value = secrets::resolve(&question, &spec, interaction)?;
+        resolved.insert(id.clone(), Value::Secret(value));
+    }
+    Ok(resolved)
 }
 
 fn resolve_stored_secrets(

@@ -29,6 +29,13 @@ pub struct RecordOptions {
 
 pub fn run(opts: &RecordOptions, interaction: &mut dyn Interaction) -> Result<Utf8PathBuf> {
     let template = Template::load(&opts.template)?;
+    if !template.includes.is_empty() {
+        bail!(
+            "template `{}` has includes; record against the child template directly \
+             (its patches belong to it, not to the parent)",
+            template.manifest.template.name
+        );
+    }
     if Session::exists(&opts.template) {
         if opts.force {
             Session::discard(&opts.template)?;

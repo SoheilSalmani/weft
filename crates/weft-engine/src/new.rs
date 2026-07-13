@@ -4,13 +4,13 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
-use weft_core::AnswerKind;
+use weft_core::{AnswerKind, AnswerSet, Question};
 use weft_lang::StarlarkEval;
 
 use crate::interact::Interaction;
-use crate::state::State;
+use crate::state::{InstanceState, State};
 use crate::template::Template;
-use crate::{answers, fsio, hooks};
+use crate::{answers, compose, fsio, hooks};
 
 pub struct NewOptions {
     pub template: Utf8PathBuf,
@@ -21,6 +21,23 @@ pub struct NewOptions {
     /// Answers as a JSON object (inline, `@file`, or `-` for stdin).
     pub answers_json: Option<String>,
     pub skip_tasks: bool,
+}
+
+/// Secret specs (`answer id → source string`) for the answered secret
+/// questions of a template.
+pub(crate) fn secret_specs(
+    questions: &[Question],
+    resolved: &AnswerSet,
+) -> BTreeMap<weft_core::AnswerId, String> {
+    questions
+        .iter()
+        .filter_map(|q| match &q.kind {
+            AnswerKind::Secret { source } if resolved.contains(&q.id) => {
+                Some((q.id.clone(), source.to_string()))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 pub fn run(opts: &NewOptions, interaction: &mut dyn Interaction) -> Result<()> {
@@ -34,36 +51,61 @@ pub fn run(opts: &NewOptions, interaction: &mut dyn Interaction) -> Result<()> {
         &opts.answers,
         opts.answers_json.as_deref(),
     )?;
+    // Split flat answers into parent + per-include child sets, resolve the
+    // parent, then each include instance (binds → provided → child gather).
+    let (parent_provided, child_provided) = compose::split_provided(&template, &provided)?;
     let resolved = answers::gather(
         &template,
-        &provided,
+        &parent_provided,
         &weft_core::AnswerSet::new(),
         &eval,
         interaction,
     )?;
+    let instances =
+        compose::resolve_instances(&template, &resolved, &child_provided, &eval, interaction)?;
+    let parts = compose::full_parts(&template, instances)?;
 
-    let tree = weft_core::render::render(&template.patches, &resolved, &eval)
+    let tree = compose::render_composed(&template.patches, &resolved, &parts, &eval)
         .context("rendering template")?;
 
-    // Collect the active patches' hooks; run pre-hooks (guards) before writing
-    // anything — a failing pre-hook aborts with nothing but an empty dest dir.
+    // Collect hooks: the parent's, plus each instance's child hooks. Pre-hooks
+    // (guards) run before writing anything — a failure aborts with nothing
+    // but an empty dest dir. Child pre-hooks run at the dest root (their
+    // mount doesn't exist yet); child post-hooks run inside their mount.
     let collected = hooks::collect(&template, &resolved, &eval)?;
+    let child_collected: Vec<_> = parts
+        .iter()
+        .map(|p| hooks::collect(p.template, &p.instance.answers, &eval))
+        .collect::<Result<_>>()?;
+
     fsio::ensure_empty_dest(&opts.dest)?;
     if !opts.skip_tasks {
         hooks::run(&collected.pre, &opts.dest, &resolved, &eval)
             .context("a pre-render hook failed; no files were written")?;
+        for (part, child) in parts.iter().zip(&child_collected) {
+            hooks::run(&child.pre, &opts.dest, &part.instance.answers, &eval).with_context(
+                || {
+                    format!(
+                        "a pre-render hook of include `{}` failed; no files were written",
+                        part.instance.include
+                    )
+                },
+            )?;
+        }
     }
     fsio::write_tree(&opts.dest, &tree)?;
 
-    let secret_specs: BTreeMap<_, _> = template
-        .manifest
-        .questions
+    // Pin state: parent answers/base plus one entry per include instance.
+    let parent_secrets = secret_specs(&template.manifest.questions, &resolved);
+    let instance_states: Vec<InstanceState> = parts
         .iter()
-        .filter_map(|q| match &q.kind {
-            AnswerKind::Secret { source } if resolved.contains(&q.id) => {
-                Some((q.id.clone(), source.to_string()))
-            }
-            _ => None,
+        .map(|p| InstanceState {
+            include: p.instance.include.clone(),
+            key: p.instance.key.clone(),
+            mount: p.instance.mount.to_string(),
+            base: p.patches.iter().map(|patch| patch.id).collect(),
+            answers: State::plain_answers(&p.instance.answers),
+            secrets: secret_specs(&p.template.manifest.questions, &p.instance.answers),
         })
         .collect();
     // Absolutize so `weft update` works from any cwd later.
@@ -76,11 +118,18 @@ pub fn run(opts: &NewOptions, interaction: &mut dyn Interaction) -> Result<()> {
         template.patches.iter().map(|p| p.id).collect(),
         tree.hash(),
         &resolved,
-        &secret_specs,
-    );
+        &parent_secrets,
+    )
+    .with_instances(instance_states);
     state.save(&opts.dest)?;
 
     if !opts.skip_tasks {
+        // Child post-hooks first (inside their mounts), then the parent's —
+        // so parent finalize hooks (format, git commit) run last.
+        for (part, child) in parts.iter().zip(&child_collected) {
+            let cwd = opts.dest.join(&part.instance.mount);
+            hooks::run(&child.post, &cwd, &part.instance.answers, &eval)?;
+        }
         hooks::run(&collected.post, &opts.dest, &resolved, &eval)?;
     }
 

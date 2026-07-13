@@ -1,0 +1,14 @@
+{
+  "description": "Workspace root files.",
+  "ops": [
+    {
+      "op": "create_file",
+      "path": "README.md",
+      "content": [
+        ["# ", { "answer": "workspace_name" }],
+        "",
+        "Composed workspace scaffolded by weft."
+      ]
+    }
+  ]
+}

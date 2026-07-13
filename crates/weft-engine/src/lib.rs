@@ -10,6 +10,7 @@ pub mod abstraction;
 pub mod answers;
 pub mod check;
 pub mod commit;
+pub mod compose;
 pub mod describe;
 pub mod diff;
 pub mod fsio;

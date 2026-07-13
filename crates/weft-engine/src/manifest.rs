@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
+
 use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
-use weft_core::Question;
+use weft_core::{Question, StarlarkExpr};
 
 /// The parsed `weft.toml` at a template root.
 ///
@@ -13,6 +15,34 @@ pub struct Manifest {
     pub questions: Vec<Question>,
     #[serde(default, rename = "preset", skip_serializing_if = "Vec::is_empty")]
     pub presets: Vec<PresetDecl>,
+    #[serde(default, rename = "include", skip_serializing_if = "Vec::is_empty")]
+    pub includes: Vec<IncludeDecl>,
+}
+
+/// A child template mounted at a path prefix. The child is an ordinary,
+/// self-contained weft template; it knows nothing of the parent.
+///
+/// Child answers are addressed from the parent as `<name>.<id>` (and
+/// `<name>.<key>.<id>` once `repeat` instances land); `bind` seeds child
+/// answers from parent answers.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IncludeDecl {
+    /// Include slug; unique per template. Namespaces the child's answers and
+    /// (for non-repeat includes) doubles as the implicit instance key.
+    pub name: String,
+    /// Path to the child template directory, relative to this template root.
+    pub template: Utf8PathBuf,
+    /// Mount prefix inside the rendered tree. May contain `{key}`, which is
+    /// substituted with the instance key (required when `repeat = true`).
+    pub path: String,
+    /// Whether the project may instantiate this include 0..N times.
+    #[serde(default)]
+    pub repeat: bool,
+    /// Child answer id → Starlark expression over *parent* answers (plus
+    /// `key`, the instance key). Explicit per-instance answers override these.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bind: BTreeMap<String, StarlarkExpr>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
