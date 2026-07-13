@@ -348,6 +348,13 @@ pub fn render_ordered(
             skipped.insert(patch.id);
             continue;
         }
+        // Foreach (integration) patches only apply in composed rendering,
+        // once per include instance — a plain render skips them (and any
+        // dependents, though `weft check` forbids depending on them).
+        if patch.foreach.is_some() {
+            skipped.insert(patch.id);
+            continue;
+        }
         if let Some(when) = &patch.when {
             let active = eval
                 .eval_bool(when, answers)
@@ -364,6 +371,19 @@ pub fn render_ordered(
         apply_patch(&mut tree, patch, answers, eval)?;
     }
     Ok(tree)
+}
+
+/// Apply one patch's ops to an existing tree. Used by the engine's composed
+/// rendering for `foreach` integration patches, which run once per include
+/// instance with an instance-scoped answer set. The patch's `when` gate is
+/// **not** evaluated here — the caller decides applicability.
+pub fn apply_ops(
+    tree: &mut Tree,
+    patch: &Patch,
+    answers: &AnswerSet,
+    eval: &dyn ExprEval,
+) -> Result<(), RenderError> {
+    apply_patch(tree, patch, answers, eval)
 }
 
 fn apply_patch(

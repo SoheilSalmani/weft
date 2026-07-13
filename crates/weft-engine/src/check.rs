@@ -214,8 +214,49 @@ pub fn run(opts: &CheckOptions) -> Result<CheckReport> {
                 );
             }
         }
+        // Foreach patches: the include must exist, nothing may depend on
+        // them (graph leaves), and their segments may additionally reference
+        // `key` and `instance_<child-question>`.
+        let foreach_child: Option<&Template> = match &patch.foreach {
+            None => None,
+            Some(include) => match template.include(include) {
+                None => {
+                    issue(
+                        &mut report,
+                        format!("patch `{name}`: foreach names unknown include `{include}`"),
+                    );
+                    None
+                }
+                Some(inc) => Some(&inc.template),
+            },
+        };
+        if patch.foreach.is_some() {
+            for other in &template.patches {
+                if other.depends_on.contains(&patch.id) {
+                    issue(
+                        &mut report,
+                        format!(
+                            "patch `{}` depends on foreach patch `{name}`; foreach patches must \
+                             be graph leaves",
+                            template.id_to_name[&other.id]
+                        ),
+                    );
+                }
+            }
+        }
         for id in answer_refs(patch) {
-            if !declared.contains(&id) {
+            let allowed = declared.contains(&id)
+                || (patch.foreach.is_some()
+                    && (id.0 == "key"
+                        || id
+                            .0
+                            .strip_prefix("instance_")
+                            .and_then(|child| {
+                                foreach_child
+                                    .map(|t| t.manifest.questions.iter().any(|q| q.id.0 == child))
+                            })
+                            .unwrap_or(false)));
+            if !allowed {
                 issue(
                     &mut report,
                     format!("patch `{name}` references unknown answer `{id}`"),
@@ -234,9 +275,52 @@ pub fn run(opts: &CheckOptions) -> Result<CheckReport> {
             let eval = StarlarkEval;
             match weft_core::render::render(&template.patches, &resolved, &eval) {
                 Err(e) => issue(&mut report, format!("full render failed: {e}")),
-                Ok(tree) => report
-                    .notes
-                    .push(format!("render ok ({} files)", tree.len())),
+                Ok(mut tree) => {
+                    report
+                        .notes
+                        .push(format!("render ok ({} files)", tree.len()));
+                    // Trial-apply each foreach patch once with a dummy
+                    // instance scope, so its segments/hunks are validated
+                    // even though check has no real instances.
+                    for patch in &template.patches {
+                        let Some(include) = &patch.foreach else {
+                            continue;
+                        };
+                        let Some(inc) = template.include(include) else {
+                            continue; // reported above
+                        };
+                        let name = &template.id_to_name[&patch.id];
+                        let mut scope = resolved.clone();
+                        scope.insert(
+                            AnswerId::from("key"),
+                            weft_core::Value::String("dummykey".into()),
+                        );
+                        for (id, value) in
+                            answers::dummy_answers(&inc.template.manifest.questions).iter()
+                        {
+                            scope.insert(AnswerId(format!("instance_{id}")), value.clone());
+                        }
+                        let gated_off = patch
+                            .when
+                            .as_ref()
+                            .map(|w| !StarlarkEval.eval_bool(w, &scope).unwrap_or(true))
+                            .unwrap_or(false);
+                        if gated_off {
+                            continue;
+                        }
+                        if let Err(e) =
+                            weft_core::render::apply_ops(&mut tree, patch, &scope, &eval)
+                        {
+                            issue(
+                                &mut report,
+                                format!(
+                                    "foreach patch `{name}` failed a trial application with a \
+                                     dummy instance: {e}"
+                                ),
+                            );
+                        }
+                    }
+                }
             }
             check_commutation(&template, &resolved, &mut report);
         }

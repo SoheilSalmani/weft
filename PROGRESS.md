@@ -3,6 +3,34 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Composition M3: foreach integration patches
+
+- A parent patch may declare `"foreach": "<include>"` — it renders **once per
+  instance** of that include, after the children are mounted. Scope: parent
+  answers + `key` + the instance's child answers flattened as
+  **`instance_<id>`** (underscore, not the planned dot: dots aren't valid
+  Starlark identifiers, and one convention must work in both `{"answer": …}`
+  segments and expressions). Canonical use: a `modify_file` hunk registering
+  each instance in a parent file (pnpm-workspace style).
+- **Hashing**: `foreach` is behavioral, so it joins `PatchBody` — with
+  `skip_serializing_if None`, so every pre-existing patch id is unchanged
+  (tested).
+- **Semantics**: plain (core) render skips foreach patches — they only apply
+  in composed rendering, deterministically (patches by id, instances by
+  key). A part with an **empty patch set** (an instance pinned by
+  `weft instance add` before its realizing update) is skipped: it doesn't
+  exist on that side yet, so it contributes no integration lines either —
+  this is what makes add/remove produce clean registry diffs.
+- **check**: foreach must name a real include; foreach patches must be graph
+  leaves (nothing depends on them); segments may reference `key` /
+  `instance_<child-question>`; after the full render, each foreach patch is
+  trial-applied with a dummy instance so its hunks/segments are validated
+  without real instances. Graph marks foreach nodes active-as-deps (their
+  gate is per-instance).
+- Workspace fixture gains a `registry` foreach patch; the fleet e2e now also
+  proves integration: lines appear per instance at scaffold, on
+  `instance add`, and disappear on `instance remove`.
+
 ## Post-MVP — Composition M2: repeat instances + `weft instance` (fleets)
 
 - `repeat = true` includes are instantiated **0..N times per project**.

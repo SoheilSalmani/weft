@@ -119,6 +119,12 @@ pub struct PatchFile {
     /// Starlark gate: apply this patch (and its dependents) only if truthy.
     #[serde(default)]
     pub when: Option<String>,
+    /// Integration patch: render once per instance of the named include.
+    /// `key` and `instance_<child-question>` are in scope for segments and
+    /// expressions. Behavioral — part of the content hash. Foreach patches
+    /// must be graph leaves.
+    #[serde(default)]
+    pub foreach: Option<String>,
     /// Operations, applied in order. May be omitted for **action patches**
     /// that exist only to carry hooks (e.g. a gated deploy).
     #[serde(default)]

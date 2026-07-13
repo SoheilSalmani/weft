@@ -24,6 +24,11 @@ pub struct Patch {
     pub depends_on: Vec<PatchId>,
     /// Apply only if this evaluates to true.
     pub when: Option<StarlarkExpr>,
+    /// Integration patch: render once per instance of the named include,
+    /// with `key` and `instance.<id>` in scope. **Behavioral — part of the
+    /// canonical hash** (absent serializes to nothing, so patches without it
+    /// keep their existing ids). Foreach patches must be graph leaves.
+    pub foreach: Option<String>,
     pub ops: Vec<Op>,
     /// Descriptive metadata. **Never part of the canonical hash**: editing a
     /// description or tag must not change this patch's id (or any
@@ -45,23 +50,37 @@ pub struct PatchMeta {
 }
 
 /// The hashed portion of a patch. Field order is the canonical key order.
+/// `foreach` is skipped when absent so pre-existing patches keep their ids.
 #[derive(Serialize)]
 struct PatchBody<'a> {
     depends_on: &'a [PatchId],
     when: &'a Option<StarlarkExpr>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    foreach: &'a Option<String>,
     ops: &'a [Op],
 }
 
 impl Patch {
     /// Build a patch, sorting dependencies and computing the content id.
-    pub fn new(mut depends_on: Vec<PatchId>, when: Option<StarlarkExpr>, ops: Vec<Op>) -> Self {
+    pub fn new(depends_on: Vec<PatchId>, when: Option<StarlarkExpr>, ops: Vec<Op>) -> Self {
+        Self::new_foreach(depends_on, when, None, ops)
+    }
+
+    /// Build a patch with an optional `foreach` include binding.
+    pub fn new_foreach(
+        mut depends_on: Vec<PatchId>,
+        when: Option<StarlarkExpr>,
+        foreach: Option<String>,
+        ops: Vec<Op>,
+    ) -> Self {
         depends_on.sort();
         depends_on.dedup();
-        let canonical = canonical_json(&depends_on, &when, &ops);
+        let canonical = canonical_json(&depends_on, &when, &foreach, &ops);
         Patch {
             id: PatchId::from_canonical_bytes(canonical.as_bytes()),
             depends_on,
             when,
+            foreach,
             ops,
             meta: PatchMeta::default(),
         }
@@ -76,15 +95,21 @@ impl Patch {
     /// Canonical serialization: compact JSON, sorted deps, fixed key order.
     /// Same bytes ⇒ same id.
     pub fn canonical_json(&self) -> String {
-        canonical_json(&self.depends_on, &self.when, &self.ops)
+        canonical_json(&self.depends_on, &self.when, &self.foreach, &self.ops)
     }
 }
 
-fn canonical_json(deps: &[PatchId], when: &Option<StarlarkExpr>, ops: &[Op]) -> String {
+fn canonical_json(
+    deps: &[PatchId],
+    when: &Option<StarlarkExpr>,
+    foreach: &Option<String>,
+    ops: &[Op],
+) -> String {
     debug_assert!(deps.windows(2).all(|w| w[0] < w[1]), "deps must be sorted");
     serde_json::to_string(&PatchBody {
         depends_on: deps,
         when,
+        foreach,
         ops,
     })
     .expect("patch body serialization cannot fail")
@@ -203,6 +228,17 @@ mod tests {
         });
         assert_eq!(plain.id, documented.id);
         assert_eq!(plain.canonical_json(), documented.canonical_json());
+    }
+
+    #[test]
+    fn absent_foreach_keeps_existing_ids() {
+        // A patch built without foreach must hash identically to the
+        // pre-foreach format (the field is skipped when None).
+        let p = sample_patch();
+        assert!(!p.canonical_json().contains("foreach"));
+        let with = Patch::new_foreach(vec![], None, Some("connector".into()), vec![]);
+        let without = Patch::new(vec![], None, vec![]);
+        assert_ne!(with.id, without.id, "foreach is behavioral and hashed");
     }
 
     #[test]

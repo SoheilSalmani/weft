@@ -178,6 +178,12 @@ fn skipped_patches(
             skipped.insert(patch.id);
             continue;
         }
+        // Foreach patches gate per instance (`key`/`instance_*` in scope) —
+        // their activity isn't answerable from parent answers alone, so they
+        // are shown as active whenever their dependencies are.
+        if patch.foreach.is_some() {
+            continue;
+        }
         if let Some(when) = &patch.when {
             let active = eval
                 .eval_bool(when, answers)

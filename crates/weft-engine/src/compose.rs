@@ -274,13 +274,16 @@ pub fn full_parts<'t>(
 }
 
 /// Render the composed tree: parent patches at the root, each part's child
-/// render mounted under its instance prefix. Path collisions are errors.
+/// render mounted under its instance prefix, then `foreach` integration
+/// patches applied once per matching instance. Path collisions are errors.
 pub fn render_composed(
     parent_patches: &[Patch],
     parent_answers: &AnswerSet,
     parts: &[ComposedPart<'_>],
     eval: &dyn ExprEval,
 ) -> Result<Tree> {
+    // Plain render skips foreach patches (they only apply here, per
+    // instance, after the children are mounted).
     let mut tree = weft_core::render::render(parent_patches, parent_answers, eval)
         .context("rendering parent template")?;
     for part in parts {
@@ -304,7 +307,61 @@ pub fn render_composed(
             tree.insert(mounted, entry.clone());
         }
     }
+
+    // Foreach integration patches: graph leaves, applied deterministically —
+    // patches in id order, instances in (include, key) order. Scope = parent
+    // answers + `key` + the instance's child answers flattened under
+    // `instance.<id>`.
+    let mut foreach_patches: Vec<&Patch> = parent_patches
+        .iter()
+        .filter(|p| p.foreach.is_some())
+        .collect();
+    foreach_patches.sort_by_key(|p| p.id);
+    for patch in foreach_patches {
+        let include = patch.foreach.as_deref().expect("filtered");
+        // A part with an empty patch set is an instance that doesn't exist on
+        // this side yet (`weft instance add` pins base = [] before the update
+        // realizes it) — it contributed nothing, including integration lines.
+        for part in parts
+            .iter()
+            .filter(|p| p.instance.include == include && !p.patches.is_empty())
+        {
+            let scope = foreach_scope(parent_answers, &part.instance);
+            if let Some(when) = &patch.when {
+                let on = eval.eval_bool(when, &scope).with_context(|| {
+                    format!(
+                        "evaluating when of foreach patch {} (instance `{}`)",
+                        patch.id.short(),
+                        part.instance.key
+                    )
+                })?;
+                if !on {
+                    continue;
+                }
+            }
+            weft_core::render::apply_ops(&mut tree, patch, &scope, eval).with_context(|| {
+                format!(
+                    "applying foreach patch {} for instance `{}` of include `{include}`",
+                    patch.id.short(),
+                    part.instance.key
+                )
+            })?;
+        }
+    }
     Ok(tree)
+}
+
+/// The answer scope a foreach patch sees for one instance: the parent's
+/// answers, plus `key`, plus the instance's child answers as
+/// `instance_<id>` — an underscore (not a dot) so the same name works both
+/// in `{"answer": …}` segments and as a Starlark identifier in expressions.
+fn foreach_scope(parent_answers: &AnswerSet, instance: &ResolvedInstance) -> AnswerSet {
+    let mut scope = parent_answers.clone();
+    scope.insert(AnswerId::from("key"), Value::String(instance.key.clone()));
+    for (id, value) in instance.answers.iter() {
+        scope.insert(AnswerId(format!("instance_{id}")), value.clone());
+    }
+    scope
 }
 
 /// The child-relative view of a change set: paths under `mount` with the

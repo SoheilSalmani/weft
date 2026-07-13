@@ -65,6 +65,14 @@ fn connector_fleet_lifecycle() {
     assert!(!out.join("connectors/github/Dockerfile").exists());
     // the non-repeat include is still there
     assert!(read(&out, "services/hello/README.md").contains("# Acme Service"));
+    // the foreach integration patch registered every instance in the parent
+    // README, with `key` and the child answer `instance_package_name` in scope
+    let readme = read(&out, "README.md");
+    assert!(readme.contains("- connector: github (github)"), "{readme}");
+    assert!(
+        readme.contains("- connector: stripe (stripe-api)"),
+        "{readme}"
+    );
 
     // 2. Add a third connector post-scaffold.
     weft()
@@ -79,6 +87,8 @@ fn connector_fleet_lifecycle() {
         .assert()
         .success();
     assert!(read(&out, "connectors/jira/README.md").contains("# jira"));
+    // the integration patch re-rendered: jira is registered too
+    assert!(read(&out, "README.md").contains("- connector: jira (jira)"));
 
     // 3. List shows all instances.
     weft()
@@ -142,6 +152,10 @@ fn connector_fleet_lifecycle() {
         .success();
     assert!(!out.join("connectors/stripe/README.md").exists());
     assert!(out.join("connectors/github/README.md").exists());
+    // …and its registry line is gone while the others remain
+    let readme = read(&out, "README.md");
+    assert!(!readme.contains("stripe"), "{readme}");
+    assert!(readme.contains("- connector: github (github)"), "{readme}");
 
     // state no longer pins stripe
     let state = read(&out, ".weft/state.toml");

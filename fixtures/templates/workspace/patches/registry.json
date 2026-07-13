@@ -1,0 +1,18 @@
+{
+  "description": "Integration: register every connector instance in the workspace README.",
+  "tags": ["integration"],
+  "depends_on": ["base"],
+  "foreach": "connector",
+  "ops": [
+    {
+      "op": "modify_file",
+      "path": "README.md",
+      "hunks": [
+        {
+          "context_before": ["Composed workspace scaffolded by weft."],
+          "added": [["- connector: ", { "answer": "key" }, " (", { "answer": "instance_package_name" }, ")"]]
+        }
+      ]
+    }
+  ]
+}

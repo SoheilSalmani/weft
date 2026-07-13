@@ -24,6 +24,10 @@ pub struct PatchFile {
     pub depends_on: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<StarlarkExpr>,
+    /// Integration patch: render once per instance of the named include
+    /// (`key` and `instance.<id>` in scope). Behavioral — part of the hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreach: Option<String>,
     /// Operations. Defaults to empty so **action patches** — patches that
     /// exist only to carry hooks (deploy, provision) — can omit it entirely.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -226,6 +230,7 @@ impl Template {
             tags: meta.tags,
             depends_on,
             when,
+            foreach: None,
             ops,
             hooks: meta.hooks,
         };
@@ -272,11 +277,13 @@ fn resolve_patches(
                 .iter()
                 .map(|d| resolved[d])
                 .collect::<Vec<_>>();
-            let patch = Patch::new(dep_ids, file.when, file.ops).with_meta(weft_core::PatchMeta {
-                description: file.description,
-                tags: file.tags,
-                hooks: file.hooks,
-            });
+            let patch = Patch::new_foreach(dep_ids, file.when, file.foreach, file.ops).with_meta(
+                weft_core::PatchMeta {
+                    description: file.description,
+                    tags: file.tags,
+                    hooks: file.hooks,
+                },
+            );
             resolved.insert(name, patch.id);
             patches.push(patch);
         }

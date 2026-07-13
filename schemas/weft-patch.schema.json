@@ -36,6 +36,14 @@
       ],
       "default": null
     },
+    "foreach": {
+      "description": "Integration patch: render once per instance of the named include.\n`key` and `instance_<child-question>` are in scope for segments and\nexpressions. Behavioral — part of the content hash. Foreach patches\nmust be graph leaves.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
     "ops": {
       "description": "Operations, applied in order. May be omitted for **action patches**\nthat exist only to carry hooks (e.g. a gated deploy).",
       "type": "array",
