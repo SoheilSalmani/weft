@@ -23,7 +23,31 @@ pub struct DescribeDoc {
     /// All hooks across all patches, ordered `pre` then `post`, each in patch
     /// render order then declaration order (execution order).
     pub hooks: Vec<HookDescription>,
+    /// Included child templates (composition). Answers for a child are
+    /// namespaced `<name>.<id>` (non-repeat) / `<name>.<key>.<id>` (repeat);
+    /// repeat instances are declared with `--instance <name>=<key>`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub includes: Vec<IncludeDescription>,
     pub usage: Usage,
+}
+
+/// One `[[include]]`: the declaration plus the child's question schema, so
+/// an agent knows exactly which namespaced answers each instance accepts.
+#[derive(Serialize)]
+pub struct IncludeDescription {
+    pub name: String,
+    /// The child template path, relative to this template's root.
+    pub template: String,
+    /// Mount prefix; `{key}` substitutes the instance key.
+    pub path: String,
+    /// Whether the project may instantiate this include 0..N times.
+    pub repeat: bool,
+    /// Child answer id → Starlark source seeded from parent answers (+ `key`).
+    /// Explicit per-instance answers override these.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub bind: BTreeMap<String, String>,
+    /// The child template's questions (answered per instance, namespaced).
+    pub questions: Vec<QuestionDescription>,
 }
 
 #[derive(Serialize)]
@@ -86,6 +110,9 @@ pub struct PatchDescription {
     pub tags: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub when: Option<String>,
+    /// Integration patch: renders once per instance of this include.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub foreach: Option<String>,
     pub depends_on: Vec<String>,
     pub ops: Vec<graph::OpSummary>,
 }
@@ -127,11 +154,12 @@ pub struct Usage {
     pub author: Vec<String>,
 }
 
-pub fn describe(template: &Template, eval: &dyn ExprEval) -> Result<DescribeDoc> {
-    let questions = &template.manifest.questions;
-    let dummies = crate::answers::dummy_answers(questions);
-
-    let question_docs: Vec<QuestionDescription> = questions
+/// Build question descriptions for one question list (parent or child).
+fn question_descriptions(
+    questions: &[weft_core::Question],
+    eval: &dyn ExprEval,
+) -> Vec<QuestionDescription> {
+    questions
         .iter()
         .map(|q| {
             let default_preview = q.default.as_ref().and_then(|expr| {
@@ -166,7 +194,14 @@ pub fn describe(template: &Template, eval: &dyn ExprEval) -> Result<DescribeDoc>
                 secret_source,
             }
         })
-        .collect();
+        .collect()
+}
+
+pub fn describe(template: &Template, eval: &dyn ExprEval) -> Result<DescribeDoc> {
+    let questions = &template.manifest.questions;
+    let dummies = crate::answers::dummy_answers(questions);
+
+    let question_docs = question_descriptions(questions, eval);
 
     let presets = template
         .manifest
@@ -191,6 +226,7 @@ pub fn describe(template: &Template, eval: &dyn ExprEval) -> Result<DescribeDoc>
             description: p.meta.description.clone(),
             tags: p.meta.tags.clone(),
             when: p.when.as_ref().map(|e| e.as_str().to_owned()),
+            foreach: p.foreach.clone(),
             depends_on: p
                 .depends_on
                 .iter()
@@ -201,6 +237,24 @@ pub fn describe(template: &Template, eval: &dyn ExprEval) -> Result<DescribeDoc>
         .collect();
 
     let hooks = hook_descriptions(template);
+
+    let includes = template
+        .includes
+        .iter()
+        .map(|inc| IncludeDescription {
+            name: inc.decl.name.clone(),
+            template: inc.decl.template.to_string(),
+            path: inc.decl.path.clone(),
+            repeat: inc.decl.repeat,
+            bind: inc
+                .decl
+                .bind
+                .iter()
+                .map(|(k, e)| (k.clone(), e.as_str().to_owned()))
+                .collect(),
+            questions: question_descriptions(&inc.template.manifest.questions, eval),
+        })
+        .collect();
 
     let usage = build_usage(template, &question_docs, &dummies);
 
@@ -214,6 +268,7 @@ pub fn describe(template: &Template, eval: &dyn ExprEval) -> Result<DescribeDoc>
         presets,
         patches,
         hooks,
+        includes,
         usage,
     })
 }
@@ -526,6 +581,33 @@ pub fn agents_md(doc: &DescribeDoc) -> String {
                 h.patch,
                 h.action,
                 h.when.as_deref().unwrap_or("—"),
+            ));
+        }
+        w("");
+    }
+
+    if !doc.includes.is_empty() {
+        w("## Includes (composition)");
+        w("");
+        w("This template mounts child templates. Answer a child's questions with");
+        w("namespaced ids: `<include>.<id>` (single) or `<include>.<key>.<id>`");
+        w("(repeatable; declare instances with `--instance <include>=<key>`).");
+        w("");
+        w("| include | template | mount | repeat | bound answers |");
+        w("| --- | --- | --- | --- | --- |");
+        for inc in &doc.includes {
+            let bound: Vec<String> = inc.bind.keys().map(|k| format!("`{k}`")).collect();
+            w(&format!(
+                "| `{}` | `{}` | `{}` | {} | {} |",
+                inc.name,
+                inc.template,
+                inc.path,
+                if inc.repeat { "0..N" } else { "1" },
+                if bound.is_empty() {
+                    "—".to_owned()
+                } else {
+                    bound.join(", ")
+                },
             ));
         }
         w("");

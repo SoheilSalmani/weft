@@ -24,6 +24,23 @@ pub struct GraphDoc {
     pub presets: Vec<String>,
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
+    /// Included child templates as nested (structural) graphs — the feed for
+    /// UI subflows. Empty for templates without includes.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub includes: Vec<IncludeGraph>,
+}
+
+/// An `[[include]]` with its child template's structural graph.
+#[derive(Debug, Serialize)]
+pub struct IncludeGraph {
+    pub name: String,
+    /// Child template path, relative to the parent root.
+    pub template: String,
+    /// Mount prefix (`{key}` substitutes the instance key).
+    pub path: String,
+    pub repeat: bool,
+    /// The child's own graph (structural — no answers applied).
+    pub graph: GraphDoc,
 }
 
 #[derive(Debug, Serialize)]
@@ -45,6 +62,9 @@ pub struct GraphNode {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     pub ops: Vec<OpSummary>,
+    /// Integration patch: renders once per instance of this include.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub foreach: Option<String>,
     /// This patch's hooks (declaration order), for the UI's pre/post panels.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hooks: Vec<HookSummary>,
@@ -133,6 +153,7 @@ pub fn graph_doc(
             description: patch.meta.description.clone(),
             tags: patch.meta.tags.clone(),
             ops: patch.ops.iter().map(op_summary).collect(),
+            foreach: patch.foreach.clone(),
             hooks: patch.meta.hooks.iter().map(hook_summary).collect(),
             active: skipped.as_ref().map(|s| !s.contains(&patch.id)),
         });
@@ -146,6 +167,21 @@ pub fn graph_doc(
     // Stable output: nodes by name, edges by (source, target).
     nodes.sort_by(|a, b| a.name.cmp(&b.name));
     edges.sort_by_key(|e| (e.source, e.target));
+
+    // Nested child graphs (structural), for UI subflows.
+    let includes = template
+        .includes
+        .iter()
+        .map(|inc| {
+            Ok(IncludeGraph {
+                name: inc.decl.name.clone(),
+                template: inc.decl.template.to_string(),
+                path: inc.decl.path.clone(),
+                repeat: inc.decl.repeat,
+                graph: graph_doc(&inc.template, None, eval)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(GraphDoc {
         template: TemplateInfo {
@@ -161,6 +197,7 @@ pub fn graph_doc(
             .collect(),
         nodes,
         edges,
+        includes,
     })
 }
 

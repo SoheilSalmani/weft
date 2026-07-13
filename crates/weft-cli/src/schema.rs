@@ -269,6 +269,26 @@ pub struct PresetDecl {
     pub file: String,
 }
 
+/// A `[[include]]`: a child template mounted at a path prefix. Child answers
+/// are namespaced `<name>.<id>` (or `<name>.<key>.<id>` for repeat).
+#[derive(JsonSchema, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IncludeDecl {
+    /// Include slug; unique per template.
+    pub name: String,
+    /// Path to the child template directory, relative to this template root.
+    pub template: String,
+    /// Mount prefix in the rendered tree; `{key}` substitutes the instance
+    /// key (required when `repeat = true`).
+    pub path: String,
+    /// Whether the project may instantiate this include 0..N times.
+    #[serde(default)]
+    pub repeat: bool,
+    /// Child answer id → Starlark expression over parent answers (+ `key`).
+    #[serde(default)]
+    pub bind: std::collections::BTreeMap<String, String>,
+}
+
 /// The weft template manifest (`weft.toml`). Side-effects live on patches
 /// (`patches/<name>.json` `hooks`), not here.
 #[derive(JsonSchema, Deserialize)]
@@ -279,6 +299,8 @@ pub struct Manifest {
     pub questions: Vec<Question>,
     #[serde(default, rename = "preset")]
     pub presets: Vec<PresetDecl>,
+    #[serde(default, rename = "include")]
+    pub includes: Vec<IncludeDecl>,
 }
 
 /// Generate both schemas into `out` (created if needed).

@@ -18,6 +18,12 @@
       "items": {
         "$ref": "#/$defs/PresetDecl"
       }
+    },
+    "include": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/IncludeDecl"
+      }
     }
   },
   "required": [
@@ -227,6 +233,43 @@
       "required": [
         "name",
         "file"
+      ]
+    },
+    "IncludeDecl": {
+      "description": "A `[[include]]`: a child template mounted at a path prefix. Child answers\nare namespaced `<name>.<id>` (or `<name>.<key>.<id>` for repeat).",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Include slug; unique per template.",
+          "type": "string"
+        },
+        "template": {
+          "description": "Path to the child template directory, relative to this template root.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Mount prefix in the rendered tree; `{key}` substitutes the instance\nkey (required when `repeat = true`).",
+          "type": "string"
+        },
+        "repeat": {
+          "description": "Whether the project may instantiate this include 0..N times.",
+          "type": "boolean",
+          "default": false
+        },
+        "bind": {
+          "description": "Child answer id → Starlark expression over parent answers (+ `key`).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "template",
+        "path"
       ]
     }
   }

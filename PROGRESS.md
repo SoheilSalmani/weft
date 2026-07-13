@@ -3,6 +3,21 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Composition M4: the contract
+
+- `weft describe --json` gains `includes` — each with its mount, `repeat`,
+  bind sources, and the **child's full question schema** (so agents know
+  exactly which namespaced answers each instance accepts) — and patches gain
+  `foreach`. AGENTS.md gets an includes table.
+- `weft graph --json` gains `includes` (nested structural child GraphDocs —
+  the future cloud subflow feed) and per-node `foreach`.
+- Manifest schema mirrors `[[include]]`; patch schema mirrors `foreach`;
+  `schemas/` regenerated.
+- weft-cloud server still compiles untouched (all additions were additive);
+  surfacing includes in the UI is the next pass. Docs: new
+  `weft/guides/composition.mdx` + manifest/patch-format/cli/state reference
+  updates.
+
 ## Post-MVP — Composition M3: foreach integration patches
 
 - A parent patch may declare `"foreach": "<include>"` — it renders **once per
