@@ -301,6 +301,7 @@ fn synthetic_secret_question(id: &AnswerId, spec: &weft_core::SecretSpec) -> Que
         default: None,
         when: None,
         computed: false,
+        section: None,
     }
 }
 

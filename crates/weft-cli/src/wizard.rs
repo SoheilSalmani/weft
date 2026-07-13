@@ -449,6 +449,7 @@ mod tests {
             default: default.map(StarlarkExpr::from),
             when: when.map(StarlarkExpr::from),
             computed: false,
+            section: None,
         }
     }
 

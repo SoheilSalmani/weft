@@ -24,6 +24,9 @@ pub struct PatchFile {
     pub depends_on: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<StarlarkExpr>,
+    /// Operations. Defaults to empty so **action patches** — patches that
+    /// exist only to carry hooks (deploy, provision) — can omit it entirely.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ops: Vec<Op>,
     /// Pre/post-render side-effects owned by this patch (never hashed).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

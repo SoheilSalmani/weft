@@ -24,16 +24,22 @@ fn graph_json_with_answers_reports_active_nodes() {
     assert_eq!(doc["template"]["name"], "hello");
     let nodes = doc["nodes"].as_array().unwrap();
     let edges = doc["edges"].as_array().unwrap();
-    assert_eq!(nodes.len(), 2);
-    assert_eq!(edges.len(), 1);
+    assert_eq!(nodes.len(), 3);
+    assert_eq!(edges.len(), 2);
 
     let docker = nodes.iter().find(|n| n["name"] == "docker").unwrap();
     assert_eq!(docker["active"], true, "use_docker defaults to True");
     assert_eq!(docker["when"], "use_docker");
-    // the edge goes base -> docker
+    // one edge goes base -> docker
     let base = nodes.iter().find(|n| n["name"] == "base").unwrap();
-    assert_eq!(edges[0]["source"], base["id"]);
-    assert_eq!(edges[0]["target"], docker["id"]);
+    assert!(edges
+        .iter()
+        .any(|e| e["source"] == base["id"] && e["target"] == docker["id"]));
+
+    // the zero-op action patch appears as a node carrying its hook
+    let deploy = nodes.iter().find(|n| n["name"] == "deploy").unwrap();
+    assert_eq!(deploy["ops"].as_array().unwrap().len(), 0);
+    assert_eq!(deploy["hooks"][0]["effect"], "deploy");
 }
 
 #[test]
@@ -93,6 +99,6 @@ fn text_summary_lists_nodes_and_ops() {
         .arg(hello_template())
         .assert()
         .success()
-        .stdout(predicates::str::contains("2 node(s), 1 edge(s)"))
+        .stdout(predicates::str::contains("3 node(s), 2 edge(s)"))
         .stdout(predicates::str::contains("create_file Dockerfile"));
 }

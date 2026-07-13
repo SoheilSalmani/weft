@@ -63,6 +63,9 @@ pub struct QuestionDescription {
     /// supplied. Agents should not provide it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub computed: bool,
+    /// Display grouping (sidebar sections); presentation only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
     /// Secrets resolve through this source, never through supplied answers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secret_source: Option<String>,
@@ -159,6 +162,7 @@ pub fn describe(template: &Template, eval: &dyn ExprEval) -> Result<DescribeDoc>
                     && !q.computed
                     && !matches!(q.kind, AnswerKind::Secret { .. }),
                 computed: q.computed,
+                section: q.section.clone(),
                 secret_source,
             }
         })

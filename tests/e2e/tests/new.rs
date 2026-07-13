@@ -35,8 +35,10 @@ fn scaffolds_with_answers_and_defaults() {
     assert!(read(&dest_path, "pyproject.toml").contains("name = \"my-demo\""));
     // use_docker defaults to True
     assert!(read(&dest_path, "Dockerfile").contains("COPY . /app/my-demo"));
-    // task fired on initial scaffold
+    // hook fired on initial scaffold
     assert_eq!(read(&dest_path, ".task-ran").trim(), "synced");
+    // the zero-op action patch's deploy hook fired too, after mark-synced
+    assert_eq!(read(&dest_path, ".deployed").trim(), "deployed");
 
     let state = read(&dest_path, ".weft/state.toml");
     let parsed: toml::Value = state.parse().unwrap();
@@ -47,8 +49,8 @@ fn scaffolds_with_answers_and_defaults() {
     );
     assert_eq!(
         parsed["state"]["base"].as_array().map(Vec::len),
-        Some(2),
-        "both patches pinned: {state}"
+        Some(3),
+        "all patches pinned: {state}"
     );
 }
 

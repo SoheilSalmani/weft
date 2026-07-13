@@ -37,7 +37,7 @@
       "default": null
     },
     "ops": {
-      "description": "Operations, applied in order.",
+      "description": "Operations, applied in order. May be omitted for **action patches**\nthat exist only to carry hooks (e.g. a gated deploy).",
       "type": "array",
       "items": {
         "$ref": "#/$defs/Op"
@@ -52,9 +52,6 @@
     }
   },
   "additionalProperties": false,
-  "required": [
-    "ops"
-  ],
   "$defs": {
     "Op": {
       "description": "A single tree operation, applied in order.",

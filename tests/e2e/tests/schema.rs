@@ -85,7 +85,6 @@ fn patch_schema_rejects_malformed_ops() {
             "create without content",
             serde_json::json!({"ops": [{"op": "create_file", "path": "x"}]}),
         ),
-        ("missing ops", serde_json::json!({"description": "no ops"})),
         (
             "bad segment key",
             serde_json::json!({"ops": [{"op": "create_file", "path": "x", "content": [[{"bogus": "y"}]]}]}),
@@ -97,6 +96,19 @@ fn patch_schema_rejects_malformed_ops() {
     ] {
         assert!(!validator.is_valid(&bad), "schema accepted {label}: {bad}");
     }
+
+    // `ops` is optional by design: action patches carry only hooks.
+    let action_patch = serde_json::json!({
+        "when": "deploy_to_vercel",
+        "hooks": [{
+            "id": "deploy", "phase": "post", "effect": "deploy",
+            "label": "Deploy", "action": "vercel deploy --prod"
+        }]
+    });
+    assert!(
+        validator.is_valid(&action_patch),
+        "schema must accept a zero-op action patch"
+    );
 }
 
 #[test]

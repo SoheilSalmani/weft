@@ -102,6 +102,14 @@
           "description": "A derived value: never prompted, always taken from `default`. Use for\nvalues computed from other answers. Requires a `default`.",
           "type": "boolean",
           "default": false
+        },
+        "section": {
+          "description": "Display grouping for UIs (sidebar sections, wizard groups). Pure\npresentation metadata.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         }
       },
       "required": [

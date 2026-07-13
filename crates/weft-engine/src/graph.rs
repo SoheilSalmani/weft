@@ -368,8 +368,8 @@ mod tests {
     #[test]
     fn structural_graph_without_answers() {
         let doc = graph_doc(&hello_template(), None, &StarlarkEval).unwrap();
-        assert_eq!(doc.nodes.len(), 2);
-        assert_eq!(doc.edges.len(), 1);
+        assert_eq!(doc.nodes.len(), 3);
+        assert_eq!(doc.edges.len(), 2);
         assert!(doc.nodes.iter().all(|n| n.active.is_none()));
         let docker = doc.nodes.iter().find(|n| n.name == "docker").unwrap();
         assert_eq!(docker.when.as_deref(), Some("use_docker"));

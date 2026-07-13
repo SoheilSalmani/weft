@@ -3,6 +3,22 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Composition prelude: action patches + question sections
+
+First milestone of the template-composition track (includes/instances/fleet
+updates — see the plan). Two small model blessings:
+
+- **Action patches**: a patch may omit `ops` entirely (`#[serde(default)]` on
+  `PatchFile.ops` + schema) and exist purely to carry hooks + a `when` gate —
+  the home for code-free actions (deploy, provision). Decided *against*
+  attaching hooks to questions: questions are inputs, hooks are effects; a
+  multi-answer hook has no owning question; and patches already provide DAG
+  ordering/gating/graph visibility. `hello` fixture gained a zero-op `deploy`
+  patch; e2e covers graph/describe presence + hook firing + schema acceptance.
+- **`Question.section`**: optional display-grouping metadata (sidebar
+  sections, wizard groups), carried through describe; no effect on
+  resolution.
+
 ## Post-MVP — Patch-scoped hooks (pre/post-render actions)
 
 Replaces template-level `[[task]]` with **hooks** owned by patches. A hook is

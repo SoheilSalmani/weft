@@ -119,7 +119,9 @@ pub struct PatchFile {
     /// Starlark gate: apply this patch (and its dependents) only if truthy.
     #[serde(default)]
     pub when: Option<String>,
-    /// Operations, applied in order.
+    /// Operations, applied in order. May be omitted for **action patches**
+    /// that exist only to carry hooks (e.g. a gated deploy).
+    #[serde(default)]
     pub ops: Vec<Op>,
     /// Pre/post-render side-effects owned by this patch. Metadata: never part
     /// of the content hash, so adding/editing a hook never changes patch ids.
@@ -246,6 +248,10 @@ pub struct Question {
     /// values computed from other answers. Requires a `default`.
     #[serde(default)]
     pub computed: bool,
+    /// Display grouping for UIs (sidebar sections, wizard groups). Pure
+    /// presentation metadata.
+    #[serde(default)]
+    pub section: Option<String>,
 }
 
 /// A `[[preset]]` declaration: a named partial answer-set.

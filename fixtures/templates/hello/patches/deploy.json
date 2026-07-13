@@ -1,0 +1,15 @@
+{
+  "description": "Action patch: no ops, only a deploy hook. Exercises pure-action patches.",
+  "tags": ["action"],
+  "depends_on": ["base"],
+  "hooks": [
+    {
+      "id": "deploy",
+      "phase": "post",
+      "effect": "deploy",
+      "label": "Record a deployment marker",
+      "action": "echo deployed > .deployed",
+      "after": ["mark-synced"]
+    }
+  ]
+}

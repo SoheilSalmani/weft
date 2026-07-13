@@ -41,7 +41,14 @@ fn describe_json_is_a_complete_contract() {
         .unwrap()
         .contains("--answers-json"));
     let patches = doc["patches"].as_array().unwrap();
-    assert_eq!(patches.len(), 2);
+    assert_eq!(patches.len(), 3);
+    // the action patch's hook is in the execution-ordered hooks list, after
+    // the base patch's mark-synced (its `after` edge)
+    let hooks = doc["hooks"].as_array().unwrap();
+    let pos = |id: &str| hooks.iter().position(|h| h["id"] == id).unwrap();
+    assert!(pos("mark-synced") < pos("deploy"));
+    assert_eq!(hooks[pos("deploy")]["effect"], "deploy");
+    assert_eq!(hooks[pos("deploy")]["patch"], "deploy");
 }
 
 #[test]
