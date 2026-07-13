@@ -3,6 +3,20 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Patch titles + preview instance declarations
+
+- **`PatchMeta.title`**: display name ("Add Prisma support") — metadata,
+  never hashed, alongside description/tags. Flows through the patch file,
+  `graph` (`GraphNode.title`), `describe` (`PatchDescription.title`),
+  `weft commit --title`, and the cloud commit input. UIs show
+  `title ?? prettified(kebab-name)`; ids/hashes move to advanced details.
+- **`IncludeGraph.bind`**: bind sources exposed in `graph --json` so UIs can
+  mark child questions as seeded "from parent".
+- **`preview_parts` takes explicit instance declarations** (`declared`
+  set), so a repeat-include instance with zero overridden answers (fully
+  bound) still previews; the cloud `TemplateInput` gained `instances:
+  ["include=key"]`.
+
 ## Post-MVP — Composition M5: nested includes + preview parts
 
 - **Recursive composition**: `ComposedPart` gained `children`;

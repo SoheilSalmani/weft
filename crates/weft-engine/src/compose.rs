@@ -363,21 +363,38 @@ pub fn preview_parts<'t>(
     template: &'t Template,
     parent_resolved: &AnswerSet,
     child_provided: &ChildProvided,
+    declared: &std::collections::BTreeSet<(String, String)>,
     eval: &dyn ExprEval,
 ) -> Result<Vec<ComposedPart<'t>>> {
     let mut non_interactive = crate::interact::NonInteractive;
     let mut parts = Vec::new();
     for inc in &template.includes {
         let keys: Vec<String> = if inc.decl.repeat {
-            child_provided
-                .keys()
+            // Union of explicit declarations and keys implied by provided
+            // answers, sorted (deterministic).
+            declared
+                .iter()
                 .filter(|(i, _)| *i == inc.decl.name)
                 .map(|(_, k)| k.clone())
+                .chain(
+                    child_provided
+                        .keys()
+                        .filter(|(i, _)| *i == inc.decl.name)
+                        .map(|(_, k)| k.clone()),
+                )
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
                 .collect()
         } else {
             vec![inc.decl.name.clone()]
         };
         for key in keys {
+            if !valid_key(&key) {
+                bail!(
+                    "invalid instance key {key:?} for include `{}`",
+                    inc.decl.name
+                );
+            }
             let provided = child_provided
                 .get(&(inc.decl.name.clone(), key.clone()))
                 .cloned()

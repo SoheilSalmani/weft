@@ -39,6 +39,10 @@ pub struct Patch {
 /// Human/agent-facing patch metadata, excluded from content addressing.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PatchMeta {
+    /// Display title, e.g. "Add Prisma support". UIs prefer this over the
+    /// kebab-case file name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -212,6 +216,7 @@ mod tests {
         use crate::hook::{Command, Hook, HookEffect, HookPhase};
         let plain = sample_patch();
         let documented = sample_patch().with_meta(PatchMeta {
+            title: Some("Add Docker support".into()),
             description: Some("adds docker support".into()),
             tags: vec!["docker".into(), "infra".into()],
             hooks: vec![Hook {

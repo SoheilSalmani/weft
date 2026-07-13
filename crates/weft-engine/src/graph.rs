@@ -39,6 +39,9 @@ pub struct IncludeGraph {
     /// Mount prefix (`{key}` substitutes the instance key).
     pub path: String,
     pub repeat: bool,
+    /// Child answer id → Starlark bind source (seeded from parent answers).
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub bind: std::collections::BTreeMap<String, String>,
     /// The child's own graph (structural — no answers applied).
     pub graph: GraphDoc,
 }
@@ -55,6 +58,9 @@ pub struct GraphNode {
     pub id: PatchId,
     /// Human name (the patch's file stem).
     pub name: String,
+    /// Display title (metadata) — UIs prefer this over `name`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub when: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -149,6 +155,7 @@ pub fn graph_doc(
         nodes.push(GraphNode {
             id: patch.id,
             name,
+            title: patch.meta.title.clone(),
             when: patch.when.as_ref().map(|w| w.as_str().to_owned()),
             description: patch.meta.description.clone(),
             tags: patch.meta.tags.clone(),
@@ -178,6 +185,12 @@ pub fn graph_doc(
                 template: inc.decl.template.to_string(),
                 path: inc.decl.path.clone(),
                 repeat: inc.decl.repeat,
+                bind: inc
+                    .decl
+                    .bind
+                    .iter()
+                    .map(|(k, e)| (k.clone(), e.as_str().to_owned()))
+                    .collect(),
                 graph: graph_doc(&inc.template, None, eval)?,
             })
         })

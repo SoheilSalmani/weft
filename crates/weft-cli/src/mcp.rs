@@ -383,6 +383,7 @@ impl WeftMcp {
             template: dir,
             name: Some(p.name.clone()),
             when: p.when.clone(),
+            title: None,
             describe: p.description.clone(),
             tags: p.tags.clone(),
             decisions: Some(p.decisions.clone()),

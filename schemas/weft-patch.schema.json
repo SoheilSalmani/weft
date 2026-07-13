@@ -4,6 +4,14 @@
   "description": "A weft patch file (`patches/<name>.json`): one recorded unit of template\nbehavior. The file name (stem) is the patch's name; its content id is\ncomputed on load and never stored.",
   "type": "object",
   "properties": {
+    "title": {
+      "description": "Display title, e.g. \"Add Prisma support\" — metadata, never hashed.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
     "description": {
       "description": "What this patch does — metadata, never part of the content hash.",
       "type": [

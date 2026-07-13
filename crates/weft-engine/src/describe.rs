@@ -104,6 +104,9 @@ pub struct PresetDescription {
 #[derive(Serialize)]
 pub struct PatchDescription {
     pub name: String,
+    /// Display title (metadata).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -223,6 +226,7 @@ pub fn describe(template: &Template, eval: &dyn ExprEval) -> Result<DescribeDoc>
         .iter()
         .map(|p| PatchDescription {
             name: template.id_to_name[&p.id].clone(),
+            title: p.meta.title.clone(),
             description: p.meta.description.clone(),
             tags: p.meta.tags.clone(),
             when: p.when.as_ref().map(|e| e.as_str().to_owned()),

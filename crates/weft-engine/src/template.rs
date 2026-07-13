@@ -15,6 +15,9 @@ pub const PATCHES_DIR: &str = "patches";
 /// content ids are recomputed on load, which is also what validates them.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PatchFile {
+    /// Display title, e.g. "Add Prisma support" (never hashed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Descriptive metadata (never hashed; see `weft_core::PatchMeta`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -226,6 +229,7 @@ impl Template {
             .collect::<Result<_>>()?;
         let patch = Patch::new(dep_ids, when.clone(), ops.clone());
         let file = PatchFile {
+            title: meta.title,
             description: meta.description,
             tags: meta.tags,
             depends_on,
@@ -279,6 +283,7 @@ fn resolve_patches(
                 .collect::<Vec<_>>();
             let patch = Patch::new_foreach(dep_ids, file.when, file.foreach, file.ops).with_meta(
                 weft_core::PatchMeta {
+                    title: file.title,
                     description: file.description,
                     tags: file.tags,
                     hooks: file.hooks,

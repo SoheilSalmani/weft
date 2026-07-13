@@ -20,6 +20,8 @@ pub struct CommitOptions {
     pub name: Option<String>,
     /// Optional `when` condition for the new patch.
     pub when: Option<String>,
+    /// Display title, e.g. "Add Prisma support" (metadata, not hashed).
+    pub title: Option<String>,
     /// Human/agent-facing description stored in the patch file (not hashed).
     pub describe: Option<String>,
     pub tags: Vec<String>,
@@ -118,6 +120,7 @@ pub fn run(opts: &CommitOptions, interaction: &mut dyn Interaction) -> Result<()
         when,
         ops.clone(),
         weft_core::PatchMeta {
+            title: opts.title.clone(),
             description: opts.describe.clone(),
             tags: opts.tags.clone(),
             hooks: vec![],

@@ -117,6 +117,9 @@ enum Command {
         /// Starlark condition gating the new patch.
         #[arg(long)]
         when: Option<String>,
+        /// Display title, e.g. "Add Prisma support" (metadata, not hashed).
+        #[arg(long)]
+        title: Option<String>,
         /// Human/agent-facing description stored with the patch (not hashed).
         #[arg(long)]
         describe: Option<String>,
@@ -396,6 +399,7 @@ fn main() -> anyhow::Result<()> {
             template,
             name,
             when,
+            title,
             describe,
             tags,
             yes,
@@ -404,6 +408,7 @@ fn main() -> anyhow::Result<()> {
                 template,
                 name,
                 when,
+                title,
                 describe,
                 tags,
                 decisions: None,

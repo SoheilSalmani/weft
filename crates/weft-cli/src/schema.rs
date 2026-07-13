@@ -106,6 +106,9 @@ pub enum Op {
 #[serde(deny_unknown_fields)]
 #[schemars(title = "weft patch")]
 pub struct PatchFile {
+    /// Display title, e.g. "Add Prisma support" — metadata, never hashed.
+    #[serde(default)]
+    pub title: Option<String>,
     /// What this patch does — metadata, never part of the content hash.
     #[serde(default)]
     pub description: Option<String>,
