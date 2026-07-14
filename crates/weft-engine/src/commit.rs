@@ -118,7 +118,11 @@ pub fn run(opts: &CommitOptions, interaction: &mut dyn Interaction) -> Result<()
         None => format!("patch-{:03}", template.patches.len() + 1),
     };
     let when = opts.when.clone().map(StarlarkExpr);
-    let depends_on = base_leaves(&template, &sess.session.base);
+    // Depend only on the *active* leaves of the base: a patch gated off
+    // under the session answers contributed nothing to the recorded state,
+    // and depending on it would gate the new patch off with it.
+    let active_base = active_ids(&base_patches, &answers, &eval)?;
+    let depends_on = base_leaves(&template, &active_base);
 
     // Validation before writing: the new patch applied to the base must
     // reproduce the worktree byte-for-byte (this also catches ambiguous
@@ -167,6 +171,33 @@ pub fn run(opts: &CommitOptions, interaction: &mut dyn Interaction) -> Result<()
         template.manifest.template.name
     );
     Ok(())
+}
+
+/// The subset of ordered patches that actually apply under `answers`
+/// (gates evaluated, skips propagated to dependents) — mirrors render.
+fn active_ids(
+    patches: &[weft_core::Patch],
+    answers: &AnswerSet,
+    eval: &dyn weft_core::render::ExprEval,
+) -> Result<Vec<weft_core::PatchId>> {
+    let mut skipped = std::collections::BTreeSet::new();
+    let mut active = Vec::new();
+    for patch in patches {
+        if patch.depends_on.iter().any(|d| skipped.contains(d)) {
+            skipped.insert(patch.id);
+            continue;
+        }
+        let open = match &patch.when {
+            None => true,
+            Some(expr) => eval.eval_bool(expr, answers)?,
+        };
+        if open {
+            active.push(patch.id);
+        } else {
+            skipped.insert(patch.id);
+        }
+    }
+    Ok(active)
 }
 
 fn eval_gate(expr: &StarlarkExpr, answers: &AnswerSet) -> Result<bool> {

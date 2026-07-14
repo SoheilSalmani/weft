@@ -3,6 +3,27 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Hand-edit-free authoring
+
+- **`weft init` / `weft hook add|rm|ls` / `weft patch set|ls`**: template
+  skeletons and metadata editing from the CLI. Hook edits validate with the
+  same checks as `weft check` and roll the file back on failure; e2e proves
+  ids never move under metadata edits.
+- **`weft record --foreach include=key`**: foreach patches are now recorded
+  — one *sample* instance mounts into the base, the author registers it in
+  parent files, and commit abstracts the sample into `key`/`instance_<id>`
+  references (`key` canonical when values tie). Plain record works on
+  composed templates (parent-only); commit rejects edits under mounts.
+- **Base excludes foreach patches** (record + commit): nothing may depend
+  on them, and their per-instance output must not leak into recorded hunk
+  contexts.
+- **Deps from *active* leaves**: a patch gated off under the session's
+  answers no longer becomes a dependency of the recorded patch (found by
+  the dbt tutorial's two-branch profile — conn-remote must not depend on
+  the gated-off conn-duckdb).
+- **Rename detection at commit**: exact-content move → `rename_path`
+  (+ `set_mode` when modes differ).
+
 ## Post-MVP — Patch titles + preview instance declarations
 
 - **`PatchMeta.title`**: display name ("Add Prisma support") — metadata,
