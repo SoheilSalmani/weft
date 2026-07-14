@@ -205,6 +205,31 @@ impl Template {
         closure
     }
 
+    /// Read one patch's on-disk file by name (for read-modify-write edits).
+    pub fn patch_file(&self, name: &str) -> Result<PatchFile> {
+        let path = self.patch_path(name);
+        let src = std::fs::read_to_string(&path)
+            .with_context(|| format!("no patch `{name}` in this template ({path})"))?;
+        serde_json::from_str(&src).with_context(|| format!("parsing patch {path}"))
+    }
+
+    /// Write a patch's on-disk file back (must already exist). Callers are
+    /// responsible for keeping edits metadata-only unless they intend to
+    /// change the patch's content id.
+    pub fn save_patch_file(&self, name: &str, file: &PatchFile) -> Result<()> {
+        let path = self.patch_path(name);
+        if !path.is_file() {
+            bail!("no patch `{name}` in this template");
+        }
+        let json = serde_json::to_string_pretty(file)?;
+        std::fs::write(&path, json + "\n").with_context(|| format!("writing {path}"))
+    }
+
+    /// The on-disk path of a patch by name.
+    pub fn patch_path(&self, name: &str) -> Utf8PathBuf {
+        self.root.join(PATCHES_DIR).join(format!("{name}.json"))
+    }
+
     /// Write a new patch file and return its resolved id. `depends_on` are
     /// patch names that must already exist.
     pub fn write_patch(

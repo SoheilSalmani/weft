@@ -8,6 +8,7 @@
 
 pub mod abstraction;
 pub mod answers;
+pub mod author;
 pub mod check;
 pub mod commit;
 pub mod compose;
@@ -16,6 +17,7 @@ pub mod diff;
 pub mod fsio;
 pub mod graph;
 pub mod hooks;
+pub mod init;
 pub mod instance;
 pub mod interact;
 pub mod manifest;

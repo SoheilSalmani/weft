@@ -77,6 +77,26 @@ enum Command {
         #[command(subcommand)]
         cmd: InstanceCmd,
     },
+    /// Create a blank template skeleton (weft.toml + patches/).
+    Init {
+        /// Directory to initialize (created if absent). Defaults to `.`.
+        #[arg(default_value = ".")]
+        dir: Utf8PathBuf,
+        /// Template name (defaults to the directory name).
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Manage patch hooks without editing patch JSON (hooks are metadata —
+    /// patch ids never change).
+    Hook {
+        #[command(subcommand)]
+        cmd: HookCmd,
+    },
+    /// Inspect and edit patch metadata (title, description, tags).
+    Patch {
+        #[command(subcommand)]
+        cmd: PatchCmd,
+    },
     /// Start a recording session: materialize a base state into a scratch
     /// worktree and print its path.
     Record {
@@ -249,6 +269,85 @@ enum InstanceCmd {
 }
 
 #[derive(Subcommand)]
+enum HookCmd {
+    /// Add a hook to a patch.
+    Add {
+        /// Patch name (file stem) that owns the hook.
+        patch: String,
+        /// Template directory (defaults to `.`).
+        #[arg(long, default_value = ".")]
+        template: Utf8PathBuf,
+        /// Unique hook id (referenced by --after / hook: inputs).
+        #[arg(long)]
+        id: String,
+        /// `pre` (guard, before writing) or `post` (after writing).
+        #[arg(long)]
+        phase: String,
+        /// `check` (read-only), `setup` (idempotent local), `deploy` (external).
+        #[arg(long)]
+        effect: String,
+        /// Short human label, e.g. "Verify the Go toolchain is installed".
+        #[arg(long)]
+        label: String,
+        /// Shell command to run.
+        #[arg(long)]
+        action: String,
+        #[arg(long)]
+        description: Option<String>,
+        /// Starlark gate.
+        #[arg(long)]
+        when: Option<String>,
+        /// Hook id this one must run after (repeatable).
+        #[arg(long = "after")]
+        after: Vec<String>,
+        /// Post-only update re-fire input: `glob:P`, `answer:ID`, `hook:ID`
+        /// (repeatable).
+        #[arg(long = "input")]
+        inputs: Vec<String>,
+    },
+    /// Remove a hook from a patch by id.
+    Rm {
+        patch: String,
+        id: String,
+        #[arg(long, default_value = ".")]
+        template: Utf8PathBuf,
+    },
+    /// List every hook in execution order.
+    Ls {
+        #[arg(long, default_value = ".")]
+        template: Utf8PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum PatchCmd {
+    /// Edit a patch's display metadata (never changes its content id).
+    Set {
+        /// Patch name (file stem).
+        name: String,
+        #[arg(long, default_value = ".")]
+        template: Utf8PathBuf,
+        /// Display title, e.g. "Add Prisma support" (empty string clears it).
+        #[arg(long)]
+        title: Option<String>,
+        /// Description (empty string clears it).
+        #[arg(long)]
+        describe: Option<String>,
+        /// Add a tag (repeatable).
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        /// Remove all existing tags first.
+        #[arg(long)]
+        clear_tags: bool,
+    },
+    /// List patches with their metadata.
+    Ls {
+        #[arg(long, default_value = ".")]
+        template: Utf8PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
 enum PresetsCommand {
     /// List presets declared by a template.
     List {
@@ -361,6 +460,62 @@ fn main() -> anyhow::Result<()> {
                 weft_engine::update::finish(&report)
             }
             InstanceCmd::List { dest } => weft_engine::instance::list(&dest),
+        },
+        Command::Init { dir, name } => weft_engine::init::run(&dir, name.as_deref()),
+        Command::Hook { cmd } => match cmd {
+            HookCmd::Add {
+                patch,
+                template,
+                id,
+                phase,
+                effect,
+                label,
+                action,
+                description,
+                when,
+                after,
+                inputs,
+            } => weft_engine::author::hook_add(
+                &template,
+                &weft_engine::author::HookAddOptions {
+                    patch,
+                    id,
+                    phase,
+                    effect,
+                    label,
+                    action,
+                    description,
+                    when,
+                    after,
+                    inputs,
+                },
+            ),
+            HookCmd::Rm {
+                patch,
+                id,
+                template,
+            } => weft_engine::author::hook_rm(&template, &patch, &id),
+            HookCmd::Ls { template } => weft_engine::author::hook_ls(&template),
+        },
+        Command::Patch { cmd } => match cmd {
+            PatchCmd::Set {
+                name,
+                template,
+                title,
+                describe,
+                tags,
+                clear_tags,
+            } => weft_engine::author::patch_set(
+                &template,
+                &weft_engine::author::PatchSetOptions {
+                    name,
+                    title,
+                    describe,
+                    tags,
+                    clear_tags,
+                },
+            ),
+            PatchCmd::Ls { template } => weft_engine::author::patch_ls(&template),
         },
         Command::Record {
             template,
