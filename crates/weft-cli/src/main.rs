@@ -115,6 +115,11 @@ enum Command {
         /// TOML file with answers.
         #[arg(long = "answers-file")]
         answers_file: Option<Utf8PathBuf>,
+        /// Record a foreach integration patch: mount one sample instance of
+        /// a repeatable include as INCLUDE=KEY; commit abstracts the sample
+        /// back out into a `foreach` patch.
+        #[arg(long)]
+        foreach: Option<String>,
         /// Discard an existing session instead of failing.
         #[arg(long)]
         force: bool,
@@ -523,6 +528,7 @@ fn main() -> anyhow::Result<()> {
             presets,
             answers,
             answers_file,
+            foreach,
             force,
             non_interactive,
             no_wizard,
@@ -534,6 +540,7 @@ fn main() -> anyhow::Result<()> {
                 answers,
                 answers_file,
                 answers_json: None,
+                foreach,
                 force,
             };
             maybe_wizard(

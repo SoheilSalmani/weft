@@ -22,6 +22,20 @@ pub struct Session {
     /// Secret answers as source references, re-resolved at commit time.
     #[serde(default)]
     pub secrets: BTreeMap<AnswerId, String>,
+    /// Present when recording a `foreach` integration patch: the sample
+    /// instance mounted into the base so the author edits against a
+    /// concrete example.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreach: Option<ForeachSession>,
+}
+
+/// The sample instance of a `weft record --foreach include=key` session.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct ForeachSession {
+    pub include: String,
+    pub key: String,
+    /// The sample instance's resolved child answers.
+    pub answers: AnswerSet,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

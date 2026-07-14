@@ -282,6 +282,7 @@ impl WeftMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let template_dir = self.template_dir(&p.template)?;
         let opts = weft_engine::record::RecordOptions {
+            foreach: None,
             template: template_dir,
             base: "latest".into(),
             presets: p.presets.clone(),

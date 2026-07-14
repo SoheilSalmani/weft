@@ -200,6 +200,100 @@ workspace_name = "platform_name + ' Acme'"
 }
 
 #[test]
+fn record_foreach_authors_an_integration_patch() {
+    // The workspace fixture already has a hand-written foreach patch
+    // (`registry`); this authors an equivalent one with `record --foreach`
+    // and proves it renders per instance.
+    let tpl_root = tempfile::tempdir().unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/templates");
+    for name in ["workspace", "hello"] {
+        copy_dir(&fixtures.join(name), &tpl_root.path().join(name));
+    }
+    let parent = tpl_root.path().join("workspace");
+
+    // Mount one sample `connector` instance into the recording base.
+    weft()
+        .arg("record")
+        .arg("--template")
+        .arg(&parent)
+        .arg("--answer")
+        .arg("workspace_name=Acme")
+        .arg("--foreach")
+        .arg("connector=stripe")
+        .assert()
+        .success();
+    let worktree = parent.join(".weft-record/worktree");
+    assert!(
+        worktree.join("connectors/stripe/README.md").is_file(),
+        "sample instance must be mounted in the worktree"
+    );
+
+    // Edits under the sample mount are rejected — child files belong to the
+    // child template.
+    std::fs::write(worktree.join("connectors/stripe/HACK.md"), "nope\n").unwrap();
+    weft()
+        .arg("commit")
+        .arg("--template")
+        .arg(&parent)
+        .arg("--name")
+        .arg("bad")
+        .arg("--yes")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "inside include `connector`'s mount",
+        ));
+    std::fs::remove_file(worktree.join("connectors/stripe/HACK.md")).unwrap();
+
+    // Register the sample in a parent file, referencing the sample key.
+    let readme = worktree.join("README.md");
+    let mut content = std::fs::read_to_string(&readme).unwrap();
+    content.push_str("Connector directory: connectors/stripe\n");
+    std::fs::write(&readme, content).unwrap();
+    weft()
+        .arg("commit")
+        .arg("--template")
+        .arg(&parent)
+        .arg("--name")
+        .arg("directory")
+        .arg("--title")
+        .arg("List connector directories")
+        .arg("--yes")
+        .assert()
+        .success();
+
+    // The sample key was abstracted to `key`…
+    let patch = std::fs::read_to_string(parent.join("patches/directory.json")).unwrap();
+    assert!(patch.contains("\"foreach\": \"connector\""), "{patch}");
+    assert!(patch.contains("\"answer\": \"key\""), "{patch}");
+    assert!(
+        !patch.contains("stripe"),
+        "sample key must not leak: {patch}"
+    );
+
+    // …so it renders once per real instance.
+    let dest = tempfile::tempdir().unwrap();
+    let out = dest.path().join("out");
+    weft()
+        .arg("new")
+        .arg(&parent)
+        .arg(&out)
+        .arg("--answer")
+        .arg("workspace_name=Acme")
+        .arg("--instance")
+        .arg("connector=github")
+        .arg("--instance")
+        .arg("connector=jira")
+        .arg("--skip-tasks")
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    let rendered = read(&out, "README.md");
+    assert!(rendered.contains("Connector directory: connectors/github"));
+    assert!(rendered.contains("Connector directory: connectors/jira"));
+}
+
+#[test]
 fn check_validates_composed_templates() {
     weft()
         .arg("check")

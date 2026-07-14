@@ -62,8 +62,41 @@ pub fn build_ops_with(
 ) -> Vec<Op> {
     let mut ops = Vec::new();
 
+    // Rename detection: a deleted file whose exact content reappears at a
+    // created path records as `rename_path` (plus `set_mode` if the mode
+    // moved) instead of delete + create. First match wins, by path order.
+    let mut renamed_from: std::collections::BTreeSet<&camino::Utf8PathBuf> = Default::default();
+    let mut renamed_to: std::collections::BTreeSet<&camino::Utf8PathBuf> = Default::default();
+    for (from, base_entry) in base.iter() {
+        if work.get(from).is_some() {
+            continue;
+        }
+        let target = work.iter().find(|(to, entry)| {
+            base.get(to).is_none()
+                && !renamed_to.contains(to)
+                && entry.content == base_entry.content
+        });
+        if let Some((to, entry)) = target {
+            ops.push(Op::RenamePath {
+                from: abstractor.path(from.as_str(), confirmed),
+                to: abstractor.path(to.as_str(), confirmed),
+            });
+            if entry.mode != base_entry.mode {
+                ops.push(Op::SetMode {
+                    path: abstractor.path(to.as_str(), confirmed),
+                    mode: entry.mode,
+                });
+            }
+            renamed_from.insert(from);
+            renamed_to.insert(to);
+        }
+    }
+
     // Deletions first (sorted by path via Tree's BTreeMap).
-    for path in base.paths().filter(|p| work.get(p).is_none()) {
+    for path in base
+        .paths()
+        .filter(|p| work.get(p).is_none() && !renamed_from.contains(p))
+    {
         ops.push(Op::DeleteFile {
             path: abstractor.path(path.as_str(), confirmed),
         });
@@ -90,7 +123,7 @@ pub fn build_ops_with(
     }
     // Then creations.
     for (path, entry) in work.iter() {
-        if base.get(path).is_none() {
+        if base.get(path).is_none() && !renamed_to.contains(path) {
             ops.push(Op::CreateFile {
                 path: abstractor.path(path.as_str(), confirmed),
                 content: abstract_content(&entry.content, abstractor, confirmed),
@@ -185,6 +218,35 @@ where
 mod tests {
     use super::*;
     use weft_core::Line;
+
+    #[test]
+    fn moved_file_records_as_rename() {
+        let mut base = Tree::new();
+        base.insert(
+            "old/name.txt".into(),
+            weft_core::FileEntry::text("same content\n"),
+        );
+        let mut work = Tree::new();
+        work.insert(
+            "new/name.txt".into(),
+            weft_core::FileEntry::text("same content\n"),
+        );
+        let abstractor = Abstractor::from_answers(&weft_core::AnswerSet::new());
+        let ops = build_ops_with(&base, &work, &abstractor, &Default::default());
+        assert_eq!(ops.len(), 1);
+        assert!(matches!(&ops[0], Op::RenamePath { .. }), "got {ops:?}");
+    }
+
+    #[test]
+    fn changed_content_is_not_a_rename() {
+        let mut base = Tree::new();
+        base.insert("a.txt".into(), weft_core::FileEntry::text("one\n"));
+        let mut work = Tree::new();
+        work.insert("b.txt".into(), weft_core::FileEntry::text("two\n"));
+        let abstractor = Abstractor::from_answers(&weft_core::AnswerSet::new());
+        let ops = build_ops_with(&base, &work, &abstractor, &Default::default());
+        assert_eq!(ops.len(), 2, "delete + create, not rename: {ops:?}");
+    }
 
     #[test]
     fn single_change_gets_surrounding_context() {

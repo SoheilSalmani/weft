@@ -515,7 +515,9 @@ pub fn render_composed(
 /// answers, plus `key`, plus the instance's child answers as
 /// `instance_<id>` — an underscore (not a dot) so the same name works both
 /// in `{"answer": …}` segments and as a Starlark identifier in expressions.
-fn foreach_scope(parent_answers: &AnswerSet, instance: &ResolvedInstance) -> AnswerSet {
+/// The expression/segment scope of one foreach render: parent answers plus
+/// `key` and `instance_<id>` for the instance.
+pub fn foreach_scope(parent_answers: &AnswerSet, instance: &ResolvedInstance) -> AnswerSet {
     let mut scope = parent_answers.clone();
     scope.insert(AnswerId::from("key"), Value::String(instance.key.clone()));
     for (id, value) in instance.answers.iter() {

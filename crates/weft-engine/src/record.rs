@@ -23,19 +23,16 @@ pub struct RecordOptions {
     pub answers_file: Option<Utf8PathBuf>,
     /// Answers as a JSON object (agents).
     pub answers_json: Option<String>,
+    /// Record a foreach integration patch: `include=key` mounts one sample
+    /// instance of the include into the base; commit abstracts the sample
+    /// key back out and writes a `foreach` patch.
+    pub foreach: Option<String>,
     /// Discard an existing session instead of erroring.
     pub force: bool,
 }
 
 pub fn run(opts: &RecordOptions, interaction: &mut dyn Interaction) -> Result<Utf8PathBuf> {
     let template = Template::load(&opts.template)?;
-    if !template.includes.is_empty() {
-        bail!(
-            "template `{}` has includes; record against the child template directly \
-             (its patches belong to it, not to the parent)",
-            template.manifest.template.name
-        );
-    }
     if Session::exists(&opts.template) {
         if opts.force {
             Session::discard(&opts.template)?;
@@ -65,14 +62,60 @@ pub fn run(opts: &RecordOptions, interaction: &mut dyn Interaction) -> Result<Ut
     )?;
 
     let pinned = pin_base(&template, &opts.base)?;
+    // Foreach patches are excluded from the base: nothing may depend on
+    // them (graph-leaf rule), and a foreach session's worktree must not
+    // contain other foreach patches' output — recorded hunk contexts would
+    // otherwise anchor on lines that only exist for the sample instance.
     let base_patches: Vec<_> = template
         .patches
         .iter()
-        .filter(|p| pinned.contains(&p.id))
+        .filter(|p| pinned.contains(&p.id) && p.foreach.is_none())
         .cloned()
         .collect();
-    let tree = weft_core::render::render(&base_patches, &resolved, &eval)
-        .context("rendering base state")?;
+
+    // A `--foreach include=key` session mounts one *sample* instance of the
+    // include into the base, so the author edits parent files against a
+    // concrete example (e.g. adds `use ./services/payments` to go.work).
+    // Commit later abstracts the sample key/answers into `key` /
+    // `instance_<id>` references. Otherwise, a template with includes
+    // renders its own patches only (children belong to their template).
+    let foreach = match &opts.foreach {
+        Some(spec) => {
+            let (include, key) = spec
+                .split_once('=')
+                .with_context(|| format!("--foreach expects `include=key`, got {spec:?}"))?;
+            let inc = template.include(include).with_context(|| {
+                format!("--foreach {include}={key}: unknown include `{include}`")
+            })?;
+            if !crate::compose::valid_key(key) {
+                bail!("invalid sample key {key:?} (lowercase alphanumerics, `-`, `_`)");
+            }
+            let instance_answers = crate::compose::resolve_instance_answers(
+                inc,
+                key,
+                &resolved,
+                &weft_core::AnswerSet::new(),
+                &weft_core::AnswerSet::new(),
+                &eval,
+                interaction,
+            )?;
+            Some(crate::session::ForeachSession {
+                include: include.to_owned(),
+                key: key.to_owned(),
+                answers: instance_answers,
+            })
+        }
+        None => None,
+    };
+    let tree = match &foreach {
+        Some(f) => {
+            let parts = vec![sample_part(&template, f, &eval, interaction)?];
+            crate::compose::render_composed(&base_patches, &resolved, &parts, &eval)
+                .context("rendering base state with the sample instance")?
+        }
+        None => weft_core::render::render(&base_patches, &resolved, &eval)
+            .context("rendering base state")?,
+    };
 
     let worktree = session::worktree_dir(&opts.template);
     std::fs::create_dir_all(&worktree)?;
@@ -96,10 +139,44 @@ pub fn run(opts: &RecordOptions, interaction: &mut dyn Interaction) -> Result<Ut
         },
         answers: strip_secrets(&resolved),
         secrets: secret_specs,
+        foreach,
     };
     sess.save(&opts.template)?;
 
     Ok(worktree)
+}
+
+/// Reconstruct the sample instance's composed part from a foreach session.
+pub fn sample_part<'t>(
+    template: &'t Template,
+    foreach: &crate::session::ForeachSession,
+    eval: &dyn weft_core::render::ExprEval,
+    interaction: &mut dyn Interaction,
+) -> Result<crate::compose::ComposedPart<'t>> {
+    let inc = template.include(&foreach.include).with_context(|| {
+        format!(
+            "foreach session references include `{}` which no longer exists",
+            foreach.include
+        )
+    })?;
+    let children = crate::compose::resolve_child_parts(
+        &inc.template,
+        &foreach.answers,
+        crate::compose::SecretMode::Resolve,
+        eval,
+        interaction,
+    )?;
+    Ok(crate::compose::ComposedPart {
+        instance: crate::compose::ResolvedInstance {
+            include: foreach.include.clone(),
+            key: foreach.key.clone(),
+            mount: crate::compose::mount_path(&inc.decl.path, &foreach.key)?,
+            answers: foreach.answers.clone(),
+        },
+        template: &inc.template,
+        patches: inc.template.patches.clone(),
+        children,
+    })
 }
 
 fn strip_secrets(answers: &weft_core::AnswerSet) -> weft_core::AnswerSet {

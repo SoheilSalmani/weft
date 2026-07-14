@@ -240,6 +240,19 @@ impl Template {
         ops: Vec<Op>,
         meta: weft_core::PatchMeta,
     ) -> Result<PatchId> {
+        self.write_patch_full(name, depends_on, when, None, ops, meta)
+    }
+
+    /// [`Self::write_patch`] with a `foreach` include (integration patches).
+    pub fn write_patch_full(
+        &self,
+        name: &str,
+        depends_on: Vec<String>,
+        when: Option<StarlarkExpr>,
+        foreach: Option<String>,
+        ops: Vec<Op>,
+        meta: weft_core::PatchMeta,
+    ) -> Result<PatchId> {
         if self.name_to_id.contains_key(name) {
             bail!("patch `{name}` already exists in this template");
         }
@@ -252,14 +265,14 @@ impl Template {
                     .with_context(|| format!("unknown patch dependency `{n}`"))
             })
             .collect::<Result<_>>()?;
-        let patch = Patch::new(dep_ids, when.clone(), ops.clone());
+        let patch = Patch::new_foreach(dep_ids, when.clone(), foreach.clone(), ops.clone());
         let file = PatchFile {
             title: meta.title,
             description: meta.description,
             tags: meta.tags,
             depends_on,
             when,
-            foreach: None,
+            foreach,
             ops,
             hooks: meta.hooks,
         };
