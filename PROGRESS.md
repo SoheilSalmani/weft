@@ -3,6 +3,30 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Hub-composed templates (version reqs + lockfile)
+
+- **IncludeResolver trait** threads through `Template::load_inner`; the
+  engine stays network-free (`PathResolver` default errors on hub refs).
+  `Template::load` unchanged; `load_with` takes a resolver, and the
+  consumer entry points (new/update/check/record/commit/instance) gained a
+  resolver arg.
+- **`[[include]] template = "hub:owner/name" version = "^1"`** + `lock.rs`
+  (`weft.lock`, Cargo-shaped: reqs in weft.toml, exact versions+sha256 in
+  the lock, committed & published). Template-side because a scaffolded
+  project already pins child *patch ids* — the lock makes composed
+  *loading* reproducible.
+- **CLI `HubResolver`**: per-root lock (lazy load, flush on change),
+  resolve req → highest matching → download+verify+cache → pin. `weft lock
+  [--upgrade]`, `--frozen` on new/update/check, publish packs the lock.
+- **Hub server `RegistryResolver`**: resolves a composed publish's hub
+  includes against its OWN stored versions (hermetic, same-registry),
+  verifies the lock's sha256, stores + renders the dependency set. Rejects
+  unpinned/stale/missing.
+- e2e: CLI composes a hub include (lock written, --frozen gate); server
+  hosts a composed template (deps page) + rejects stale locks. Real smoke:
+  publish child → author+lock+publish composed parent → `weft new
+  hub:parent` composes the tree.
+
 ## Post-MVP — Weft Hub (registry MVP)
 
 - **Standalone repo `weft-hub`**: single-binary axum registry (filesystem
