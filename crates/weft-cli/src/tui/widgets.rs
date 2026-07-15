@@ -355,7 +355,12 @@ mod tests {
         let mut state = FormState::new(
             "weft hook add",
             "",
-            vec![Field::select("phase", "Phase", vec![Choice::new("pre")], None)],
+            vec![Field::select(
+                "phase",
+                "Phase",
+                vec![Choice::new("pre")],
+                None,
+            )],
         );
         let mut terminal = Terminal::new(TestBackend::new(0, 0)).unwrap();
         terminal.draw(|f| draw_form(f, &state)).unwrap();
