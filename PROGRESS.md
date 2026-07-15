@@ -3,6 +3,22 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Interactive completion forms (TUI)
+
+- **One form engine, one theme** (`weft-cli/src/tui/`): accent focus bar,
+  right-aligned labels, popup pickers (no enter-cycling), cursor-based
+  text editing, inline validation under the field, adaptive footer keymap,
+  submit row. The answers wizard was restyled onto the same theme.
+- **Uniform activation rule**: a command with required options missing, in
+  a real terminal, without `--no-tui`, opens a prefilled form (provided
+  flags = defaults). Non-TTY behavior is byte-for-byte unchanged (e2e
+  proves it). Submitting echoes the equivalent flag invocation.
+- Wired: `new` (template picker → wizard), `commit` (prefilled patch-NNN),
+  `hook add`, `patch set`, `instance add`.
+- The PTY smoke test (script(1), 0×0 pty) caught a real `clamp` panic in
+  popup sizing on tiny terminals — fixed with a 0×0 render unit test; a
+  full form submission was driven end-to-end through the pty.
+
 ## Post-MVP — Hand-edit-free authoring
 
 - **`weft init` / `weft hook add|rm|ls` / `weft patch set|ls`**: template

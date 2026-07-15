@@ -184,3 +184,69 @@ fn invalid_hook_edits_roll_back() {
         .failure()
         .stderr(predicates::str::contains("pre-hook"));
 }
+
+// ---- non-TTY behavior of the interactive forms ------------------------
+// e2e runs pipe stdio, so the TUI must never open; missing options fail
+// with a message pointing at the interactive form.
+
+#[test]
+fn missing_hook_flags_error_without_a_tty() {
+    let dir = tempfile::tempdir().unwrap();
+    let tpl = dir.path().join("tpl");
+    scaffold_template(&tpl);
+    weft()
+        .args(["hook", "add", "base", "--id", "x"])
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("run in a terminal"));
+}
+
+#[test]
+fn missing_new_template_errors_without_a_tty() {
+    weft()
+        .arg("new")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("missing TEMPLATE"));
+}
+
+#[test]
+fn patch_set_without_changes_errors_without_a_tty() {
+    let dir = tempfile::tempdir().unwrap();
+    let tpl = dir.path().join("tpl");
+    scaffold_template(&tpl);
+    weft()
+        .args(["patch", "set", "base"])
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("nothing to change"));
+}
+
+#[test]
+fn commit_without_name_still_defaults_without_a_tty() {
+    let dir = tempfile::tempdir().unwrap();
+    let tpl = dir.path().join("tpl");
+    scaffold_template(&tpl);
+    weft()
+        .arg("record")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--answer")
+        .arg("project_name=Demo Project")
+        .assert()
+        .success();
+    std::fs::write(tpl.join(".weft-record/worktree/EXTRA.md"), "x\n").unwrap();
+    // No --name, no TTY: the historical auto-name (patch-NNN) still applies.
+    weft()
+        .arg("commit")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--yes")
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("patch-002"));
+}

@@ -11,9 +11,11 @@ use std::collections::BTreeMap;
 use anyhow::{bail, Result};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
+
+use crate::tui::theme::Theme;
 use weft_core::render::ExprEval;
 use weft_core::{AnswerId, AnswerKind, AnswerSet, Question, Value};
 
@@ -43,8 +45,10 @@ pub struct WizardState<'a> {
     /// Answers the user set in the wizard.
     pub entered: BTreeMap<AnswerId, Value>,
     selected: usize,
-    /// In-progress text edit for the selected row.
-    editing: Option<String>,
+    /// In-progress text edit for the selected row (buffer, cursor).
+    editing: Option<(String, usize)>,
+    /// Open choice popup: (cursor, per-option toggles for multichoice).
+    choosing: Option<(usize, Option<Vec<bool>>)>,
     error: Option<String>,
 }
 
@@ -57,6 +61,7 @@ impl<'a> WizardState<'a> {
             entered: BTreeMap::new(),
             selected: 0,
             editing: None,
+            choosing: None,
             error: None,
         }
     }
@@ -174,6 +179,7 @@ impl<'a> WizardState<'a> {
         let next = (self.selected as i64 + delta).rem_euclid(len as i64);
         self.selected = next as usize;
         self.editing = None;
+        self.choosing = None;
         self.error = None;
     }
 
@@ -240,9 +246,26 @@ impl<'a> WizardState<'a> {
                         Value::String(s) => choices.iter().position(|c| *c == s),
                         _ => None,
                     })
-                    .map(|i| (i + 1) % choices.len())
                     .unwrap_or(0);
-                self.entered.insert(id, Value::String(choices[idx].clone()));
+                let _ = id;
+                self.choosing = Some((idx, None));
+            }
+            AnswerKind::MultiChoice { choices } => {
+                let rows = self.resolve();
+                let current = rows.get(self.selected).and_then(|(_, v, _)| v.clone());
+                let selected: Vec<bool> = match current {
+                    Some(Value::List(items)) => choices
+                        .iter()
+                        .map(|c| {
+                            items
+                                .iter()
+                                .any(|v| matches!(v, Value::String(s) if s == c))
+                        })
+                        .collect(),
+                    _ => vec![false; choices.len()],
+                };
+                let _ = id;
+                self.choosing = Some((0, Some(selected)));
             }
             AnswerKind::Secret { .. } => {}
             _ => {
@@ -252,7 +275,8 @@ impl<'a> WizardState<'a> {
                     .filter(|r| r.source == Source::You)
                     .map(|r| r.value_display.clone())
                     .unwrap_or_default();
-                self.editing = Some(current);
+                let cursor = current.chars().count();
+                self.editing = Some((current, cursor));
             }
         }
     }
@@ -291,24 +315,88 @@ fn event_loop(
         if key.kind != KeyEventKind::Press {
             continue;
         }
-        if let Some(buffer) = &mut state.editing {
+        // Choice popup (single or multi).
+        if state.choosing.is_some() {
+            let qi = selected_question_index(state);
+            let choices = match state.questions.get(qi) {
+                Some(q) => match &q.kind {
+                    AnswerKind::Choice { choices } | AnswerKind::MultiChoice { choices } => {
+                        choices.clone()
+                    }
+                    _ => vec![],
+                },
+                None => vec![],
+            };
+            let Some((cursor, multi)) = &mut state.choosing else {
+                continue;
+            };
+            let len = choices.len().max(1);
+            match key.code {
+                KeyCode::Up | KeyCode::Char('k') => *cursor = (*cursor + len - 1) % len,
+                KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => *cursor = (*cursor + 1) % len,
+                KeyCode::Char(' ') => match multi {
+                    Some(on) => {
+                        if let Some(flag) = on.get_mut(*cursor) {
+                            *flag = !*flag;
+                        }
+                    }
+                    None => {
+                        commit_choice(state, &choices);
+                    }
+                },
+                KeyCode::Enter => commit_choice(state, &choices),
+                KeyCode::Esc => state.choosing = None,
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    bail!("cancelled")
+                }
+                _ => {}
+            }
+            continue;
+        }
+        // In-place text editing with a cursor.
+        if let Some((buffer, cursor)) = &mut state.editing {
             match key.code {
                 KeyCode::Enter => {
                     let raw = buffer.clone();
                     state.commit_text(&raw);
                 }
                 KeyCode::Esc => state.editing = None,
+                KeyCode::Left => *cursor = cursor.saturating_sub(1),
+                KeyCode::Right => *cursor = (*cursor + 1).min(buffer.chars().count()),
+                KeyCode::Home => *cursor = 0,
+                KeyCode::End => *cursor = buffer.chars().count(),
                 KeyCode::Backspace => {
-                    buffer.pop();
+                    if *cursor > 0 {
+                        let byte = char_byte(buffer, *cursor - 1);
+                        buffer.remove(byte);
+                        *cursor -= 1;
+                    }
                 }
-                KeyCode::Char(c) => buffer.push(c),
+                KeyCode::Delete => {
+                    if *cursor < buffer.chars().count() {
+                        let byte = char_byte(buffer, *cursor);
+                        buffer.remove(byte);
+                    }
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    buffer.clear();
+                    *cursor = 0;
+                }
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    bail!("cancelled")
+                }
+                KeyCode::Char(c) => {
+                    let byte = char_byte(buffer, *cursor);
+                    buffer.insert(byte, c);
+                    *cursor += 1;
+                }
                 _ => {}
             }
             continue;
         }
         match key.code {
-            KeyCode::Up | KeyCode::Char('k') => state.move_selection(-1),
-            KeyCode::Down | KeyCode::Char('j') => state.move_selection(1),
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::BackTab => state.move_selection(-1),
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => state.move_selection(1),
             KeyCode::Enter | KeyCode::Char(' ') => state.activate(),
             KeyCode::Char('s') if state.ready() => return Ok(()),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -320,49 +408,121 @@ fn event_loop(
     }
 }
 
+fn char_byte(s: &str, char_idx: usize) -> usize {
+    s.char_indices()
+        .nth(char_idx)
+        .map(|(b, _)| b)
+        .unwrap_or(s.len())
+}
+
+/// The questions-index of the currently selected row.
+fn selected_question_index(state: &WizardState) -> usize {
+    state
+        .resolve()
+        .get(state.selected)
+        .map(|(i, _, _)| *i)
+        .unwrap_or(0)
+}
+
+/// Commit the open popup's selection into `entered`.
+fn commit_choice(state: &mut WizardState, choices: &[String]) {
+    let Some((cursor, multi)) = state.choosing.take() else {
+        return;
+    };
+    let idx = selected_question_index(state);
+    let Some(q) = state.questions.get(idx) else {
+        return;
+    };
+    let value = match (&q.kind, multi) {
+        (AnswerKind::MultiChoice { .. }, Some(on)) => Value::List(
+            choices
+                .iter()
+                .zip(on)
+                .filter(|(_, sel)| *sel)
+                .map(|(c, _)| Value::String(c.clone()))
+                .collect(),
+        ),
+        _ => Value::String(choices.get(cursor).cloned().unwrap_or_default()),
+    };
+    state.entered.insert(q.id.clone(), value);
+    state.error = None;
+}
+
 fn draw(frame: &mut ratatui::Frame, state: &WizardState, template_name: &str) {
     let rows = state.rows();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(2),
             Constraint::Min(5),
             Constraint::Length(4),
             Constraint::Length(1),
         ])
         .split(frame.area());
 
+    // Header: command + context, same grammar as the command forms.
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "weft answers".to_owned(),
+                Style::default()
+                    .fg(Theme::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(format!("template {template_name}"), Theme::dim()),
+        ])),
+        chunks[0],
+    );
+
     let items: Vec<ListItem> = rows
         .iter()
         .enumerate()
         .map(|(i, row)| {
-            let marker = if i == state.selected { "❯ " } else { "  " };
-            let source = match row.source {
-                Source::You => Span::styled(" (you)", Style::default().fg(Color::Green)),
-                Source::Provided => {
-                    Span::styled(" (flag/preset)", Style::default().fg(Color::Cyan))
-                }
-                Source::Default => Span::styled(" (default)", Style::default().fg(Color::DarkGray)),
-                Source::Secret => Span::raw(""),
-                Source::Unset => Span::styled(" required", Style::default().fg(Color::Red)),
-            };
-            let value = if let (true, Some(buffer)) = (i == state.selected, &state.editing) {
-                Span::styled(
-                    format!("{buffer}▏"),
-                    Style::default().add_modifier(Modifier::UNDERLINED),
-                )
+            let focused = i == state.selected;
+            let bar = if focused {
+                Span::styled("▎ ", Theme::accent())
             } else {
-                Span::styled(row.value_display.clone(), Style::default().fg(Color::White))
+                Span::raw("  ")
+            };
+            let label_style = if row.required_missing {
+                Style::default()
+                    .fg(Theme::ERROR)
+                    .add_modifier(Modifier::BOLD)
+            } else if focused {
+                Theme::label_focused()
+            } else {
+                Theme::label()
+            };
+            let source = match row.source {
+                Source::You => Span::styled(" (you)", Style::default().fg(Theme::OK)),
+                Source::Provided => Span::styled(" (flag/preset)", Theme::accent()),
+                Source::Default => Span::styled(" (default)", Theme::dim()),
+                Source::Secret => Span::raw(""),
+                Source::Unset => Span::styled(" required", Theme::error()),
+            };
+            // In-place edit shows a real cursor.
+            if let (true, Some((buffer, cursor))) = (focused, &state.editing) {
+                let chars: Vec<char> = buffer.chars().collect();
+                let before: String = chars[..*cursor].iter().collect();
+                let after: String = chars[*cursor..].iter().collect();
+                return ListItem::new(Line::from(vec![
+                    bar,
+                    Span::styled(format!("{:>16}  ", row.label), label_style),
+                    Span::styled(before, Theme::text()),
+                    Span::styled("▏", Theme::accent()),
+                    Span::styled(after, Theme::text()),
+                ]));
+            }
+            let value = if row.value_display.is_empty() && row.source == Source::Unset {
+                Span::styled("—".to_owned(), Theme::dim().add_modifier(Modifier::ITALIC))
+            } else {
+                Span::styled(row.value_display.clone(), Theme::text())
             };
             let mut spans = vec![
-                Span::raw(marker),
-                Span::styled(
-                    format!("{:<16}", row.label),
-                    if row.required_missing {
-                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().add_modifier(Modifier::BOLD)
-                    },
-                ),
+                bar,
+                Span::styled(format!("{:>16}  ", row.label), label_style),
                 value,
             ];
             if row.editable || row.source == Source::Secret {
@@ -371,19 +531,12 @@ fn draw(frame: &mut ratatui::Frame, state: &WizardState, template_name: &str) {
             ListItem::new(Line::from(spans))
         })
         .collect();
-    frame.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" {template_name} — answers ")),
-        ),
-        chunks[0],
-    );
+    frame.render_widget(List::new(items).block(Theme::panel("answers")), chunks[1]);
 
     let detail = state
         .error
         .clone()
-        .map(|e| format!("✗ {e}"))
+        .map(|e| Line::from(Span::styled(format!("✗ {e}"), Theme::error())))
         .or_else(|| {
             rows.get(state.selected).map(|row| {
                 let mut d = row.detail.clone();
@@ -391,30 +544,104 @@ fn draw(frame: &mut ratatui::Frame, state: &WizardState, template_name: &str) {
                     if let Some(example) = &q.example {
                         d.push_str(&format!("  (e.g. {example})"));
                     }
-                    if let AnswerKind::Choice { choices } = &q.kind {
-                        d.push_str(&format!("  [{}]", choices.join(" | ")));
-                    }
                 }
-                d
+                Line::from(Span::styled(d, Theme::dim()))
             })
         })
         .unwrap_or_default();
     frame.render_widget(
         Paragraph::new(detail)
             .wrap(Wrap { trim: true })
-            .block(Block::default().borders(Borders::ALL).title(" about ")),
-        chunks[1],
-    );
-
-    let footer = if state.ready() {
-        "↑↓ move · enter edit/toggle/cycle · s scaffold · q cancel"
-    } else {
-        "↑↓ move · enter edit/toggle/cycle · answer required fields to continue · q cancel"
-    };
-    frame.render_widget(
-        Paragraph::new(footer).style(Style::default().fg(Color::DarkGray)),
+            .block(Theme::panel("about")),
         chunks[2],
     );
+
+    let keys: Vec<(&str, &str)> = if state.choosing.is_some() {
+        vec![
+            ("↑↓", "move"),
+            ("space", "toggle"),
+            ("enter", "choose"),
+            ("esc", "close"),
+        ]
+    } else if state.editing.is_some() {
+        vec![
+            ("enter", "done"),
+            ("←→", "cursor"),
+            ("^u", "clear"),
+            ("esc", "back"),
+        ]
+    } else if state.ready() {
+        vec![
+            ("↑↓", "move"),
+            ("enter", "edit"),
+            ("s", "continue"),
+            ("q", "cancel"),
+        ]
+    } else {
+        vec![
+            ("↑↓", "move"),
+            ("enter", "edit"),
+            ("answer required fields", "to continue"),
+            ("q", "cancel"),
+        ]
+    };
+    frame.render_widget(Paragraph::new(Theme::keymap(&keys)), chunks[3]);
+
+    // Choice popup overlay (single or multi).
+    if let Some((cursor, multi)) = &state.choosing {
+        if let Some(q) = state.selected_question() {
+            let choices = match &q.kind {
+                AnswerKind::Choice { choices } | AnswerKind::MultiChoice { choices } => choices,
+                _ => return,
+            };
+            // Never let the min exceed the available max (tiny terminals).
+            let max_width = (frame.area().width.saturating_sub(6) as usize).max(1);
+            let width = choices
+                .iter()
+                .map(|c| c.len() + 10)
+                .max()
+                .unwrap_or(20)
+                .max(24.min(max_width))
+                .min(max_width) as u16;
+            let height =
+                (choices.len() as u16 + 2).min(frame.area().height.saturating_sub(4).max(3));
+            let x = frame.area().x + frame.area().width.saturating_sub(width) / 2;
+            let y = frame.area().y + frame.area().height.saturating_sub(height) / 2;
+            let area = ratatui::layout::Rect {
+                x,
+                y,
+                width,
+                height,
+            };
+            let items: Vec<ListItem> = choices
+                .iter()
+                .enumerate()
+                .map(|(i, choice)| {
+                    let marker = match multi {
+                        Some(on) if on.get(i).copied().unwrap_or(false) => {
+                            Span::styled("◉ ", Theme::accent())
+                        }
+                        Some(_) => Span::styled("○ ", Theme::dim()),
+                        None => Span::raw("  "),
+                    };
+                    let style = if i == *cursor {
+                        Style::default()
+                            .fg(Theme::ACCENT)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Theme::text()
+                    };
+                    ListItem::new(Line::from(vec![
+                        Span::raw(if i == *cursor { "❯ " } else { "  " }),
+                        marker,
+                        Span::styled(choice.clone(), style),
+                    ]))
+                })
+                .collect();
+            frame.render_widget(Clear, area);
+            frame.render_widget(List::new(items).block(Theme::popup_panel(&q.id.0)), area);
+        }
+    }
 }
 
 #[cfg(test)]

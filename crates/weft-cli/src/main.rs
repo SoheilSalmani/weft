@@ -1,6 +1,8 @@
+mod forms;
 mod lsp;
 mod mcp;
 mod schema;
+mod tui;
 mod wizard;
 
 use camino::Utf8PathBuf;
@@ -18,10 +20,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Scaffold a template into a destination directory.
+    /// Scaffold a template into a destination directory. Run without a
+    /// template in a terminal to pick one interactively.
     New {
-        /// Path to the template (a directory containing weft.toml).
-        template: Utf8PathBuf,
+        /// Path to the template (a directory containing weft.toml). Omit it
+        /// (in a terminal) to pick from templates found here.
+        template: Option<Utf8PathBuf>,
         /// Destination directory (must be empty or absent). Defaults to `.`.
         #[arg(default_value = ".")]
         dest: Utf8PathBuf,
@@ -52,6 +56,9 @@ enum Command {
         /// Use sequential prompts instead of the full-screen wizard.
         #[arg(long)]
         no_wizard: bool,
+        /// Never open the interactive template picker.
+        #[arg(long)]
+        no_tui: bool,
     },
     /// Re-render against the current template state and 3-way merge the
     /// changes over local edits.
@@ -154,6 +161,9 @@ enum Command {
         /// Accept all abstraction proposals without prompting.
         #[arg(long)]
         yes: bool,
+        /// Never open the interactive form; use the default patch name.
+        #[arg(long)]
+        no_tui: bool,
     },
     /// List or show template presets.
     Presets {
@@ -237,12 +247,13 @@ enum Command {
 
 #[derive(Subcommand)]
 enum InstanceCmd {
-    /// Add an instance of a repeatable include (renders its files in place).
+    /// Add an instance of a repeatable include (renders its files in
+    /// place). Run bare in a terminal for an interactive form.
     Add {
         /// The [[include]] name in the template.
-        include: String,
+        include: Option<String>,
         /// The new instance's key (lowercase alphanumerics, `-`, `_`).
-        key: String,
+        key: Option<String>,
         /// Child answers as ID=VALUE (child-scoped; repeatable).
         #[arg(long = "answer")]
         answers: Vec<String>,
@@ -255,6 +266,9 @@ enum InstanceCmd {
         /// Never prompt; fail if child answers are missing.
         #[arg(long)]
         non_interactive: bool,
+        /// Never open the interactive form; fail on missing arguments.
+        #[arg(long)]
+        no_tui: bool,
     },
     /// Remove an instance (untouched files deleted, modified ones kept).
     Remove {
@@ -275,28 +289,29 @@ enum InstanceCmd {
 
 #[derive(Subcommand)]
 enum HookCmd {
-    /// Add a hook to a patch.
+    /// Add a hook to a patch. Missing options open an interactive form in
+    /// a terminal; provided flags prefill it.
     Add {
         /// Patch name (file stem) that owns the hook.
-        patch: String,
+        patch: Option<String>,
         /// Template directory (defaults to `.`).
         #[arg(long, default_value = ".")]
         template: Utf8PathBuf,
         /// Unique hook id (referenced by --after / hook: inputs).
         #[arg(long)]
-        id: String,
+        id: Option<String>,
         /// `pre` (guard, before writing) or `post` (after writing).
         #[arg(long)]
-        phase: String,
+        phase: Option<String>,
         /// `check` (read-only), `setup` (idempotent local), `deploy` (external).
         #[arg(long)]
-        effect: String,
+        effect: Option<String>,
         /// Short human label, e.g. "Verify the Go toolchain is installed".
         #[arg(long)]
-        label: String,
+        label: Option<String>,
         /// Shell command to run.
         #[arg(long)]
-        action: String,
+        action: Option<String>,
         #[arg(long)]
         description: Option<String>,
         /// Starlark gate.
@@ -309,6 +324,9 @@ enum HookCmd {
         /// (repeatable).
         #[arg(long = "input")]
         inputs: Vec<String>,
+        /// Never open the interactive form; fail on missing options.
+        #[arg(long)]
+        no_tui: bool,
     },
     /// Remove a hook from a patch by id.
     Rm {
@@ -327,9 +345,10 @@ enum HookCmd {
 #[derive(Subcommand)]
 enum PatchCmd {
     /// Edit a patch's display metadata (never changes its content id).
+    /// Run bare in a terminal for an interactive form.
     Set {
         /// Patch name (file stem).
-        name: String,
+        name: Option<String>,
         #[arg(long, default_value = ".")]
         template: Utf8PathBuf,
         /// Display title, e.g. "Add Prisma support" (empty string clears it).
@@ -344,6 +363,9 @@ enum PatchCmd {
         /// Remove all existing tags first.
         #[arg(long)]
         clear_tags: bool,
+        /// Never open the interactive form; fail on missing options.
+        #[arg(long)]
+        no_tui: bool,
     },
     /// List patches with their metadata.
     Ls {
@@ -381,7 +403,20 @@ fn main() -> anyhow::Result<()> {
             skip_tasks,
             non_interactive,
             no_wizard,
+            no_tui,
         } => {
+            // No template given: pick one interactively (terminal only).
+            let (template, dest, presets) = match template {
+                Some(t) => (t, dest, presets),
+                None if tui::interactive(no_tui || non_interactive) => {
+                    let form = forms::new_picker(&dest, &presets)?;
+                    (form.template, form.dest, form.presets)
+                }
+                None => anyhow::bail!(
+                    "missing TEMPLATE (weft new <template> [dest]); \
+                     run in a terminal to pick one interactively"
+                ),
+            };
             let mut opts = NewOptions {
                 template,
                 dest,
@@ -434,7 +469,19 @@ fn main() -> anyhow::Result<()> {
                 dest,
                 skip_tasks,
                 non_interactive,
+                no_tui,
             } => {
+                let (include, key) = match (include, key) {
+                    (Some(include), Some(key)) => (include, key),
+                    (include, key) if tui::interactive(no_tui || non_interactive) => {
+                        let form = forms::instance_add(&dest, include, key)?;
+                        (form.include, form.key)
+                    }
+                    _ => anyhow::bail!(
+                        "missing INCLUDE and KEY (weft instance add <include> <key>); \
+                         run in a terminal for the interactive form"
+                    ),
+                };
                 let mut interaction = auto_interaction(non_interactive);
                 let report = weft_engine::instance::add(
                     &weft_engine::instance::InstanceAddOptions {
@@ -480,21 +527,50 @@ fn main() -> anyhow::Result<()> {
                 when,
                 after,
                 inputs,
-            } => weft_engine::author::hook_add(
-                &template,
-                &weft_engine::author::HookAddOptions {
-                    patch,
-                    id,
-                    phase,
-                    effect,
-                    label,
-                    action,
-                    description,
-                    when,
-                    after,
-                    inputs,
-                },
-            ),
+                no_tui,
+            } => {
+                let opts = match (patch, id, phase, effect, label, action) {
+                    (
+                        Some(patch),
+                        Some(id),
+                        Some(phase),
+                        Some(effect),
+                        Some(label),
+                        Some(action),
+                    ) => weft_engine::author::HookAddOptions {
+                        patch,
+                        id,
+                        phase,
+                        effect,
+                        label,
+                        action,
+                        description,
+                        when,
+                        after,
+                        inputs,
+                    },
+                    (patch, id, phase, effect, label, action) if tui::interactive(no_tui) => {
+                        forms::hook_add(
+                            &template,
+                            patch,
+                            id,
+                            phase,
+                            effect,
+                            label,
+                            action,
+                            description,
+                            when,
+                            after,
+                            inputs,
+                        )?
+                    }
+                    _ => anyhow::bail!(
+                        "missing required options (PATCH, --id, --phase, --effect, --label, \
+                         --action); run in a terminal for the interactive form or pass the flags"
+                    ),
+                };
+                weft_engine::author::hook_add(&template, &opts)
+            }
             HookCmd::Rm {
                 patch,
                 id,
@@ -510,16 +586,28 @@ fn main() -> anyhow::Result<()> {
                 describe,
                 tags,
                 clear_tags,
-            } => weft_engine::author::patch_set(
-                &template,
-                &weft_engine::author::PatchSetOptions {
-                    name,
-                    title,
-                    describe,
-                    tags,
-                    clear_tags,
-                },
-            ),
+                no_tui,
+            } => {
+                let has_changes =
+                    title.is_some() || describe.is_some() || !tags.is_empty() || clear_tags;
+                let opts = match (&name, has_changes) {
+                    (Some(_), true) => weft_engine::author::PatchSetOptions {
+                        name: name.expect("matched Some"),
+                        title,
+                        describe,
+                        tags,
+                        clear_tags,
+                    },
+                    _ if tui::interactive(no_tui) => {
+                        forms::patch_set(&template, name, title, describe, tags, clear_tags)?
+                    }
+                    _ => anyhow::bail!(
+                        "nothing to change; pass NAME plus --title/--describe/--tag/--clear-tags, \
+                         or run in a terminal for the interactive form"
+                    ),
+                };
+                weft_engine::author::patch_set(&template, &opts)
+            }
             PatchCmd::Ls { template } => weft_engine::author::patch_ls(&template),
         },
         Command::Record {
@@ -565,7 +653,22 @@ fn main() -> anyhow::Result<()> {
             describe,
             tags,
             yes,
+            no_tui,
         } => {
+            let (name, title, describe, when, tags) = match name {
+                Some(name) => (Some(name), title, describe, when, tags),
+                None if tui::interactive(no_tui) => {
+                    let form = forms::commit(&template, title, describe, when, tags)?;
+                    (
+                        Some(form.name),
+                        form.title,
+                        form.describe,
+                        form.when,
+                        form.tags,
+                    )
+                }
+                None => (None, title, describe, when, tags),
+            };
             let opts = weft_engine::commit::CommitOptions {
                 template,
                 name,
