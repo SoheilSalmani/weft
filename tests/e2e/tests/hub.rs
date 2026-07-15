@@ -176,6 +176,125 @@ fn sha256_mismatch_refuses_to_install() {
     assert!(!home.path().join(".weft/hub/acme/hello/1.0.0").exists());
 }
 
+/// A local parent template that composes `hub:acme/hello` at a version
+/// requirement, mounted under `services/hello`.
+fn write_parent(dir: &Path) {
+    std::fs::create_dir_all(dir.join("patches")).unwrap();
+    std::fs::write(
+        dir.join("weft.toml"),
+        r#"[template]
+name = "platform"
+weft-version = "0.1"
+
+[[question]]
+id = "platform_name"
+kind = "string"
+
+[[include]]
+name = "svc"
+template = "hub:acme/hello"
+version = "^1"
+path = "services/hello"
+
+[include.bind]
+project_name = "platform_name"
+use_docker = "False"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("patches/base.json"),
+        r##"{"ops":[{"op":"create_file","path":"PLATFORM.md","content":[["# ",{"answer":"platform_name"}]]}]}"##,
+    )
+    .unwrap();
+}
+
+#[test]
+fn composes_a_hub_include_and_writes_the_lock() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let parent = work.path().join("platform");
+    write_parent(&parent);
+    let (url, _server) = stub_registry(hello_tarball(), false);
+
+    weft()
+        .env("HOME", home.path())
+        .env("WEFT_HUB_URL", &url)
+        .arg("new")
+        .arg(&parent)
+        .arg(work.path().join("out"))
+        .arg("--answer")
+        .arg("platform_name=Mega")
+        .arg("--skip-tasks")
+        .arg("--non-interactive")
+        .assert()
+        .success();
+
+    let out = work.path().join("out");
+    // parent + composed child both rendered
+    assert!(std::fs::read_to_string(out.join("PLATFORM.md"))
+        .unwrap()
+        .contains("# Mega"));
+    assert!(
+        std::fs::read_to_string(out.join("services/hello/README.md"))
+            .unwrap()
+            .contains("# Mega")
+    );
+    // the lockfile was written next to the parent's weft.toml, pinning 0.1.0
+    let lock = std::fs::read_to_string(parent.join("weft.lock")).unwrap();
+    assert!(lock.contains("hub:acme/hello"), "{lock}");
+    assert!(lock.contains("1.0.0"), "{lock}");
+}
+
+#[test]
+fn frozen_requires_the_lock_to_exist() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let parent = work.path().join("platform");
+    write_parent(&parent);
+    let (url, _server) = stub_registry(hello_tarball(), false);
+
+    // No lock yet + --frozen → refuse to resolve.
+    weft()
+        .env("HOME", home.path())
+        .env("WEFT_HUB_URL", &url)
+        .arg("new")
+        .arg(&parent)
+        .arg(work.path().join("out"))
+        .arg("--answer")
+        .arg("platform_name=Mega")
+        .arg("--frozen")
+        .arg("--skip-tasks")
+        .arg("--non-interactive")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("weft.lock"));
+
+    // `weft lock` fills it, then --frozen succeeds.
+    weft()
+        .env("HOME", home.path())
+        .env("WEFT_HUB_URL", &url)
+        .arg("lock")
+        .arg(&parent)
+        .assert()
+        .success();
+    assert!(parent.join("weft.lock").is_file());
+
+    weft()
+        .env("HOME", home.path())
+        .env("WEFT_HUB_URL", &url)
+        .arg("new")
+        .arg(&parent)
+        .arg(work.path().join("out2"))
+        .arg("--answer")
+        .arg("platform_name=Mega")
+        .arg("--frozen")
+        .arg("--skip-tasks")
+        .arg("--non-interactive")
+        .assert()
+        .success();
+}
+
 #[test]
 fn missing_registry_is_a_clear_error() {
     weft()

@@ -60,6 +60,9 @@ enum Command {
         /// Never open the interactive template picker.
         #[arg(long)]
         no_tui: bool,
+        /// Fail if a hub include isn't already pinned in weft.lock (CI).
+        #[arg(long)]
+        frozen: bool,
     },
     /// Re-render against the current template state and 3-way merge the
     /// changes over local edits.
@@ -79,6 +82,9 @@ enum Command {
         /// Never prompt; fail if new questions lack answers.
         #[arg(long)]
         non_interactive: bool,
+        /// Fail if a hub include isn't already pinned in weft.lock (CI).
+        #[arg(long)]
+        frozen: bool,
     },
     /// Manage repeatable-include instances of a scaffolded project.
     Instance {
@@ -109,6 +115,19 @@ enum Command {
     Hub {
         #[command(subcommand)]
         cmd: HubCmd,
+    },
+    /// Resolve `hub:` includes and write/refresh weft.lock.
+    Lock {
+        /// Template directory (defaults to `.`).
+        #[arg(default_value = ".")]
+        template: Utf8PathBuf,
+        /// Bump every include to the newest version satisfying its
+        /// requirement (default only fills missing entries).
+        #[arg(long)]
+        upgrade: bool,
+        /// Registry base URL (default: WEFT_HUB_URL).
+        #[arg(long)]
+        registry: Option<String>,
     },
     /// Start a recording session: materialize a base state into a scratch
     /// worktree and print its path.
@@ -248,6 +267,9 @@ enum Command {
         /// Emit {ok, issues, notes} as JSON (exit code still reflects ok).
         #[arg(long)]
         json: bool,
+        /// Fail if a hub include isn't already pinned in weft.lock (CI).
+        #[arg(long)]
+        frozen: bool,
     },
 }
 
@@ -444,6 +466,7 @@ fn main() -> anyhow::Result<()> {
             non_interactive,
             no_wizard,
             no_tui,
+            frozen,
         } => {
             // No template given: pick one interactively (terminal only).
             let (template, dest, presets) = match template {
@@ -489,11 +512,10 @@ fn main() -> anyhow::Result<()> {
                 no_wizard,
             )?;
             let mut interaction = auto_interaction(non_interactive);
-            weft_engine::new::run(
-                &opts,
-                &mut weft_engine::template::PathResolver,
-                interaction.as_mut(),
-            )
+            let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), frozen);
+            let result = weft_engine::new::run(&opts, &mut resolver, interaction.as_mut());
+            resolver.flush()?;
+            result
         }
         Command::Update {
             dest,
@@ -501,6 +523,7 @@ fn main() -> anyhow::Result<()> {
             template,
             skip_tasks,
             non_interactive,
+            frozen,
         } => {
             // A hub-ref project resolves its pinned version from the cache
             // (offline once cached) and hints when the index moved on.
@@ -546,11 +569,9 @@ fn main() -> anyhow::Result<()> {
                 drop_instances: vec![],
             };
             let mut interaction = auto_interaction(non_interactive);
-            let report = weft_engine::update::run(
-                &opts,
-                &mut weft_engine::template::PathResolver,
-                interaction.as_mut(),
-            )?;
+            let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), frozen);
+            let report = weft_engine::update::run(&opts, &mut resolver, interaction.as_mut())?;
+            resolver.flush()?;
             if opts.dry_run {
                 Ok(())
             } else {
@@ -579,6 +600,7 @@ fn main() -> anyhow::Result<()> {
                     ),
                 };
                 let mut interaction = auto_interaction(non_interactive);
+                let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
                 let report = weft_engine::instance::add(
                     &weft_engine::instance::InstanceAddOptions {
                         dest,
@@ -587,9 +609,10 @@ fn main() -> anyhow::Result<()> {
                         answers,
                         skip_tasks,
                     },
-                    &mut weft_engine::template::PathResolver,
+                    &mut resolver,
                     interaction.as_mut(),
                 )?;
+                resolver.flush()?;
                 weft_engine::update::finish(&report)
             }
             InstanceCmd::Remove {
@@ -599,14 +622,16 @@ fn main() -> anyhow::Result<()> {
                 skip_tasks,
             } => {
                 let mut interaction = auto_interaction(false);
+                let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
                 let report = weft_engine::instance::remove(
                     &dest,
                     &include,
                     &key,
                     skip_tasks,
-                    &mut weft_engine::template::PathResolver,
+                    &mut resolver,
                     interaction.as_mut(),
                 )?;
+                resolver.flush()?;
                 weft_engine::update::finish(&report)
             }
             InstanceCmd::List { dest } => weft_engine::instance::list(&dest),
@@ -725,6 +750,11 @@ fn main() -> anyhow::Result<()> {
                 let (owner, name) = spec
                     .split_once('/')
                     .ok_or_else(|| anyhow::anyhow!("expected owner/name, got `{spec}`"))?;
+                // Ensure a complete, fresh lockfile before packing (so the
+                // published tarball carries pinned child versions).
+                let mut resolver = hub::HubResolver::new(Some(registry.clone()), false);
+                Template::load_with(&template, &mut resolver)?;
+                resolver.flush()?;
                 hub::publish(&registry, &token, owner, name, &version, &template)
             }
             HubCmd::Search { query, registry } => {
@@ -736,6 +766,21 @@ fn main() -> anyhow::Result<()> {
                 hub::info(&registry, &spec)
             }
         },
+        Command::Lock {
+            template,
+            upgrade,
+            registry,
+        } => {
+            let registry = hub::registry_url(registry.as_deref()).ok();
+            let mut resolver = hub::HubResolver::new(registry, false);
+            if upgrade {
+                resolver.clear_lock(&template)?;
+            }
+            Template::load_with(&template, &mut resolver)?;
+            resolver.flush()?;
+            eprintln!("lock up to date");
+            Ok(())
+        }
         Command::Record {
             template,
             base,
@@ -767,11 +812,9 @@ fn main() -> anyhow::Result<()> {
                 no_wizard,
             )?;
             let mut interaction = auto_interaction(non_interactive);
-            let worktree = weft_engine::record::run(
-                &opts,
-                &mut weft_engine::template::PathResolver,
-                interaction.as_mut(),
-            )?;
+            let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
+            let worktree = weft_engine::record::run(&opts, &mut resolver, interaction.as_mut())?;
+            resolver.flush()?;
             weft_engine::record::announce(&worktree);
             Ok(())
         }
@@ -809,22 +852,25 @@ fn main() -> anyhow::Result<()> {
                 decisions: None,
             };
             let mut interaction = auto_interaction(yes);
-            weft_engine::commit::run(
-                &opts,
-                &mut weft_engine::template::PathResolver,
-                interaction.as_mut(),
-            )
+            let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
+            let result = weft_engine::commit::run(&opts, &mut resolver, interaction.as_mut());
+            resolver.flush()?;
+            result
         }
         Command::Presets { command } => match command {
             PresetsCommand::List { template } => {
-                let template = Template::load(&template)?;
+                let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
+                let template = Template::load_with(&template, &mut resolver)?;
+                resolver.flush()?;
                 for preset in &template.manifest.presets {
                     println!("{}\t{}", preset.name, preset.file);
                 }
                 Ok(())
             }
             PresetsCommand::Show { name, template } => {
-                let template = Template::load(&template)?;
+                let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
+                let template = Template::load_with(&template, &mut resolver)?;
+                resolver.flush()?;
                 let answers = template.preset(&name)?;
                 print!("{}", toml::to_string_pretty(&answers)?);
                 Ok(())
@@ -839,7 +885,9 @@ fn main() -> anyhow::Result<()> {
             diff,
         } => {
             use weft_engine::interact::NonInteractive;
-            let template = Template::load(&template)?;
+            let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
+            let template = Template::load_with(&template, &mut resolver)?;
+            resolver.flush()?;
             let eval = weft_engine::eval();
 
             // Resolve answers when any were supplied, or when defaults alone
@@ -935,7 +983,9 @@ fn main() -> anyhow::Result<()> {
             json,
             agents_md,
         } => {
-            let tpl = Template::load(&template)?;
+            let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
+            let tpl = Template::load_with(&template, &mut resolver)?;
+            resolver.flush()?;
             let eval = weft_engine::eval();
             let doc = weft_engine::describe::describe(&tpl, &eval)?;
             if let Some(path) = agents_md {
@@ -966,15 +1016,21 @@ fn main() -> anyhow::Result<()> {
             answers,
             answers_file,
             json,
+            frozen,
         } => {
-            let name = Template::load(&template)?.manifest.template.name;
+            let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), frozen);
+            let name = Template::load_with(&template, &mut resolver)?
+                .manifest
+                .template
+                .name;
             let opts = weft_engine::check::CheckOptions {
                 template,
                 presets,
                 answers,
                 answers_file,
             };
-            let report = weft_engine::check::run(&opts, &mut weft_engine::template::PathResolver)?;
+            let report = weft_engine::check::run(&opts, &mut resolver)?;
+            resolver.flush()?;
             if json {
                 println!(
                     "{}",
