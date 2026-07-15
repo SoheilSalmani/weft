@@ -3,6 +3,26 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Weft Hub (registry MVP)
+
+- **Standalone repo `weft-hub`**: single-binary axum registry (filesystem
+  storage, no DB). Publish-side validation runs the weft crates in-process
+  (safe unpack, `Template::load`, hook validation, `describe`); the
+  DescribeDoc becomes the version's stored metadata and powers
+  server-rendered pages where **hooks with effect badges are the trust
+  surface** (deploy hooks warned above the install snippet). Versions are
+  semver, strictly increasing, immutable; yank hides without deleting.
+- **CLI**: `hub:owner/name[@version]` refs resolve via `WEFT_HUB_URL`
+  through a sha256-verified cache (`~/.weft/hub/…`, atomic staging;
+  pinned cached versions are fully offline); `weft new hub:` stores the
+  *resolved* ref in state (`NewOptions.stored_ref`); update resolves the
+  pin from cache and hints on newer versions. `weft hub
+  publish/search/info`.
+- e2e drives a hand-rolled stub registry (resolve→pin→cache, offline
+  hit, sha-tamper rejection); the real API is tested in weft-hub (7
+  tests incl. hand-crafted-header path traversal). Real smoke: published
+  the dbt templates, scaffolded from `hub:`, page rendered with badges.
+
 ## Post-MVP — Interactive completion forms (TUI)
 
 - **One form engine, one theme** (`weft-cli/src/tui/`): accent focus bar,
