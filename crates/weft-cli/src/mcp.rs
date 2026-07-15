@@ -225,6 +225,7 @@ impl WeftMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let template_dir = self.template_dir(&p.template)?;
         let opts = weft_engine::new::NewOptions {
+            stored_ref: None,
             template: template_dir,
             dest: Utf8PathBuf::from(&p.dest),
             presets: p.presets.clone(),

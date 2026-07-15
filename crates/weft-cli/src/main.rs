@@ -1,4 +1,5 @@
 mod forms;
+mod hub;
 mod lsp;
 mod mcp;
 mod schema;
@@ -103,6 +104,11 @@ enum Command {
     Patch {
         #[command(subcommand)]
         cmd: PatchCmd,
+    },
+    /// Interact with a Weft Hub registry (WEFT_HUB_URL or --registry).
+    Hub {
+        #[command(subcommand)]
+        cmd: HubCmd,
     },
     /// Start a recording session: materialize a base state into a scratch
     /// worktree and print its path.
@@ -375,6 +381,40 @@ enum PatchCmd {
 }
 
 #[derive(Subcommand)]
+enum HubCmd {
+    /// Publish the template directory as owner/name@version.
+    Publish {
+        /// `owner/name` on the registry.
+        spec: String,
+        /// The version to publish (semver, greater than the latest).
+        #[arg(long)]
+        version: String,
+        /// Template directory (defaults to `.`).
+        #[arg(long, default_value = ".")]
+        template: Utf8PathBuf,
+        /// Registry base URL (default: WEFT_HUB_URL).
+        #[arg(long)]
+        registry: Option<String>,
+        /// Bearer token (default: WEFT_HUB_TOKEN).
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// Search the registry.
+    Search {
+        query: String,
+        #[arg(long)]
+        registry: Option<String>,
+    },
+    /// Show a template's versions.
+    Info {
+        /// `owner/name`.
+        spec: String,
+        #[arg(long)]
+        registry: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum PresetsCommand {
     /// List presets declared by a template.
     List {
@@ -417,6 +457,17 @@ fn main() -> anyhow::Result<()> {
                      run in a terminal to pick one interactively"
                 ),
             };
+            // Hub refs resolve through the verified cache; the state file
+            // records the resolved `hub:…@version` instead of the path.
+            let (template, stored_ref) = match hub::parse_ref(template.as_str()) {
+                Some(parsed) => {
+                    let r = parsed?;
+                    let registry = hub::registry_url(None)?;
+                    let (dir, resolved) = hub::fetch(&registry, &r)?;
+                    (dir, Some(resolved))
+                }
+                None => (template, None),
+            };
             let mut opts = NewOptions {
                 template,
                 dest,
@@ -426,6 +477,7 @@ fn main() -> anyhow::Result<()> {
                 answers_json,
                 instances,
                 skip_tasks,
+                stored_ref,
             };
             maybe_wizard(
                 &opts.template,
@@ -446,6 +498,42 @@ fn main() -> anyhow::Result<()> {
             skip_tasks,
             non_interactive,
         } => {
+            // A hub-ref project resolves its pinned version from the cache
+            // (offline once cached) and hints when the index moved on.
+            let template = match template {
+                Some(t) => Some(t),
+                None => match weft_engine::state::State::load(&dest) {
+                    Ok(state) => match hub::parse_ref(&state.state.template) {
+                        Some(parsed) => {
+                            let r = parsed?;
+                            let registry = hub::registry_url(None)?;
+                            let (dir, _) = hub::fetch(&registry, &r)?;
+                            if let (Some(pinned), Ok((latest, _))) = (
+                                &r.version,
+                                hub::resolve(
+                                    &registry,
+                                    &hub::HubRef {
+                                        owner: r.owner.clone(),
+                                        name: r.name.clone(),
+                                        version: None,
+                                    },
+                                ),
+                            ) {
+                                if *pinned != latest {
+                                    eprintln!(
+                                        "note: {}/{} has {latest} on the registry (project pins {pinned}); \
+                                         re-scaffold or wait for `weft update --to-latest`",
+                                        r.owner, r.name
+                                    );
+                                }
+                            }
+                            Some(dir)
+                        }
+                        None => None,
+                    },
+                    Err(_) => None,
+                },
+            };
             let opts = weft_engine::update::UpdateOptions {
                 dest,
                 dry_run,
@@ -609,6 +697,34 @@ fn main() -> anyhow::Result<()> {
                 weft_engine::author::patch_set(&template, &opts)
             }
             PatchCmd::Ls { template } => weft_engine::author::patch_ls(&template),
+        },
+        Command::Hub { cmd } => match cmd {
+            HubCmd::Publish {
+                spec,
+                version,
+                template,
+                registry,
+                token,
+            } => {
+                let registry = hub::registry_url(registry.as_deref())?;
+                let token = token
+                    .or_else(|| std::env::var("WEFT_HUB_TOKEN").ok())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("no token; set WEFT_HUB_TOKEN or pass --token")
+                    })?;
+                let (owner, name) = spec
+                    .split_once('/')
+                    .ok_or_else(|| anyhow::anyhow!("expected owner/name, got `{spec}`"))?;
+                hub::publish(&registry, &token, owner, name, &version, &template)
+            }
+            HubCmd::Search { query, registry } => {
+                let registry = hub::registry_url(registry.as_deref())?;
+                hub::search(&registry, &query)
+            }
+            HubCmd::Info { spec, registry } => {
+                let registry = hub::registry_url(registry.as_deref())?;
+                hub::info(&registry, &spec)
+            }
         },
         Command::Record {
             template,

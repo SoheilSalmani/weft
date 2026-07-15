@@ -16,6 +16,11 @@ anyhow.workspace = true
 rmcp = { version = "2", features = ["server", "transport-io", "macros"] }
 schemars = "1"
 ratatui = "0.29"
+ureq = "3"
+tar = "0.4"
+flate2 = "1"
+sha2 = "0.10"
+semver = "1"
 tower-lsp = "0.20"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }

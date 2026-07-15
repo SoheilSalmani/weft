@@ -24,6 +24,9 @@ pub struct NewOptions {
     /// is also implicitly declared by any `include.key.answer=…` answer.
     pub instances: Vec<String>,
     pub skip_tasks: bool,
+    /// What `.weft/state.toml` records as the template (e.g. a resolved
+    /// `hub:owner/name@version` ref). Defaults to the template path.
+    pub stored_ref: Option<String>,
 }
 
 /// Parse `include=key` instance declarations.
@@ -132,12 +135,14 @@ pub fn run(opts: &NewOptions, interaction: &mut dyn Interaction) -> Result<()> {
         })
         .collect();
     // Absolutize so `weft update` works from any cwd later.
-    let template_abs = opts
-        .template
-        .canonicalize_utf8()
-        .unwrap_or_else(|_| opts.template.clone());
+    let stored_ref = opts.stored_ref.clone().unwrap_or_else(|| {
+        opts.template
+            .canonicalize_utf8()
+            .unwrap_or_else(|_| opts.template.clone())
+            .to_string()
+    });
     let state = State::new(
-        template_abs.to_string(),
+        stored_ref,
         template.patches.iter().map(|p| p.id).collect(),
         tree.hash(),
         &resolved,
