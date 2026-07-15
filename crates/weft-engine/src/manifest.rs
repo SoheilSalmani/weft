@@ -31,8 +31,16 @@ pub struct IncludeDecl {
     /// Include slug; unique per template. Namespaces the child's answers and
     /// (for non-repeat includes) doubles as the implicit instance key.
     pub name: String,
-    /// Path to the child template directory, relative to this template root.
+    /// The child template. Either a directory path relative to this template
+    /// root (`../go-service`) or a registry ref (`hub:owner/name`); the
+    /// latter must carry a `version` requirement and resolves through the
+    /// lockfile.
     pub template: Utf8PathBuf,
+    /// Semver requirement for a `hub:` template (e.g. `^1.0`). Required for
+    /// hub refs, forbidden for path refs. Resolved to an exact version in
+    /// `weft.lock`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     /// Mount prefix inside the rendered tree. May contain `{key}`, which is
     /// substituted with the instance key (required when `repeat = true`).
     pub path: String,
@@ -43,6 +51,18 @@ pub struct IncludeDecl {
     /// `key`, the instance key). Explicit per-instance answers override these.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub bind: BTreeMap<String, StarlarkExpr>,
+}
+
+impl IncludeDecl {
+    /// Is this a registry (`hub:`) include rather than a relative path?
+    pub fn is_hub(&self) -> bool {
+        self.template.as_str().starts_with("hub:")
+    }
+
+    /// The `hub:owner/name` ref string, if this is a hub include.
+    pub fn hub_ref(&self) -> Option<&str> {
+        self.is_hub().then(|| self.template.as_str())
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

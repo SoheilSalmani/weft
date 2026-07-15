@@ -36,13 +36,17 @@ pub struct UpdateReport {
     pub written: usize,
 }
 
-pub fn run(opts: &UpdateOptions, interaction: &mut dyn Interaction) -> Result<UpdateReport> {
+pub fn run(
+    opts: &UpdateOptions,
+    resolver: &mut dyn crate::template::IncludeResolver,
+    interaction: &mut dyn Interaction,
+) -> Result<UpdateReport> {
     let state = State::load(&opts.dest)?;
     let template_path = opts
         .template_override
         .clone()
         .unwrap_or_else(|| Utf8PathBuf::from(&state.state.template));
-    let template = Template::load(&template_path)?;
+    let template = Template::load_with(&template_path, resolver)?;
     let eval = StarlarkEval;
 
     for id in &state.state.base {

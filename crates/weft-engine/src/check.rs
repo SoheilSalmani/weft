@@ -28,8 +28,11 @@ pub struct CheckReport {
     pub notes: Vec<String>,
 }
 
-pub fn run(opts: &CheckOptions) -> Result<CheckReport> {
-    let template = Template::load(&opts.template)?;
+pub fn run(
+    opts: &CheckOptions,
+    resolver: &mut dyn crate::template::IncludeResolver,
+) -> Result<CheckReport> {
+    let template = Template::load_with(&opts.template, resolver)?;
     let mut report = CheckReport::default();
     let issue = |report: &mut CheckReport, msg: String| report.issues.push(msg);
 
@@ -119,6 +122,38 @@ pub fn run(opts: &CheckOptions) -> Result<CheckReport> {
         let mut mounts: BTreeMap<String, &str> = BTreeMap::new();
         let dummy_parent = answers::dummy_answers(questions);
         for inc in &template.includes {
+            // Hub includes need a version requirement; path includes must
+            // not carry one.
+            if inc.decl.is_hub() {
+                match &inc.decl.version {
+                    None => issue(
+                        &mut report,
+                        format!(
+                            "include `{}`: hub template `{}` needs a `version` requirement",
+                            inc.decl.name, inc.decl.template
+                        ),
+                    ),
+                    Some(req) => {
+                        if semver::VersionReq::parse(req).is_err() {
+                            issue(
+                                &mut report,
+                                format!(
+                                    "include `{}`: `{req}` is not a valid semver requirement",
+                                    inc.decl.name
+                                ),
+                            );
+                        }
+                    }
+                }
+            } else if inc.decl.version.is_some() {
+                issue(
+                    &mut report,
+                    format!(
+                        "include `{}`: `version` only applies to `hub:` templates, not path `{}`",
+                        inc.decl.name, inc.decl.template
+                    ),
+                );
+            }
             let key = if inc.decl.repeat {
                 "dummykey"
             } else {
@@ -190,12 +225,15 @@ pub fn run(opts: &CheckOptions) -> Result<CheckReport> {
             }
             // Recurse into the child's own checks (structural only; the
             // child's render checks need child answers).
-            let child_report = run(&CheckOptions {
-                template: inc.template.root.clone(),
-                presets: vec![],
-                answers: vec![],
-                answers_file: None,
-            })?;
+            let child_report = run(
+                &CheckOptions {
+                    template: inc.template.root.clone(),
+                    presets: vec![],
+                    answers: vec![],
+                    answers_file: None,
+                },
+                resolver,
+            )?;
             for msg in child_report.issues {
                 issue(&mut report, format!("include `{}`: {msg}", inc.decl.name));
             }

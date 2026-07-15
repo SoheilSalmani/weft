@@ -65,13 +65,61 @@ pub struct LoadedInclude {
 /// Maximum include nesting depth (defensive; cycles are detected separately).
 const MAX_INCLUDE_DEPTH: usize = 8;
 
+/// Resolves an `[[include]]` to a local template directory. Path includes
+/// are trivial; `hub:` includes need a resolver that consults the lockfile,
+/// downloads, and verifies (the CLI/registry provide one) — the engine
+/// itself never touches the network.
+pub trait IncludeResolver {
+    /// The local directory holding the child template for `decl`, declared
+    /// in the template rooted at `parent_root`.
+    fn resolve(
+        &mut self,
+        parent_root: &Utf8Path,
+        decl: &crate::manifest::IncludeDecl,
+    ) -> Result<Utf8PathBuf>;
+}
+
+/// The default resolver: relative-path includes only. A `hub:` include is an
+/// error (there is no registry to consult from the pure engine).
+pub struct PathResolver;
+
+impl IncludeResolver for PathResolver {
+    fn resolve(
+        &mut self,
+        parent_root: &Utf8Path,
+        decl: &crate::manifest::IncludeDecl,
+    ) -> Result<Utf8PathBuf> {
+        if decl.is_hub() {
+            bail!(
+                "include `{}` references `{}` (a registry template); \
+                 resolve it through the CLI (`weft new`/`weft lock`) or a registry",
+                decl.name,
+                decl.template
+            );
+        }
+        Ok(parent_root.join(&decl.template))
+    }
+}
+
 impl Template {
+    /// Load a template resolving path includes only. Errors on `hub:`
+    /// includes — use [`Self::load_with`] with a hub-aware resolver.
     pub fn load(root: &Utf8Path) -> Result<Self> {
-        let mut seen = Vec::new();
-        Self::load_inner(root, &mut seen, 0)
+        Self::load_with(root, &mut PathResolver)
     }
 
-    fn load_inner(root: &Utf8Path, seen: &mut Vec<Utf8PathBuf>, depth: usize) -> Result<Self> {
+    /// Load a template, resolving each include through `resolver`.
+    pub fn load_with(root: &Utf8Path, resolver: &mut dyn IncludeResolver) -> Result<Self> {
+        let mut seen = Vec::new();
+        Self::load_inner(root, &mut seen, 0, resolver)
+    }
+
+    fn load_inner(
+        root: &Utf8Path,
+        seen: &mut Vec<Utf8PathBuf>,
+        depth: usize,
+        resolver: &mut dyn IncludeResolver,
+    ) -> Result<Self> {
         let manifest_path = root.join(MANIFEST_FILE);
         let manifest_src = std::fs::read_to_string(&manifest_path).with_context(|| {
             format!("`{manifest_path}` not found: is `{root}` a weft template?")
@@ -122,7 +170,7 @@ impl Template {
                 if !names.insert(&decl.name) {
                     bail!("duplicate include name `{}` in `{root}`", decl.name);
                 }
-                let child_root = root.join(&decl.template);
+                let child_root = resolver.resolve(root, decl)?;
                 let child_canonical = child_root.canonicalize_utf8().with_context(|| {
                     format!("include `{}`: template `{child_root}` not found", decl.name)
                 })?;
@@ -132,8 +180,8 @@ impl Template {
                         decl.name
                     );
                 }
-                let template =
-                    Self::load_inner(&child_root, seen, depth + 1).with_context(|| {
+                let template = Self::load_inner(&child_root, seen, depth + 1, resolver)
+                    .with_context(|| {
                         format!("loading include `{}` from `{child_root}`", decl.name)
                     })?;
                 includes.push(LoadedInclude {

@@ -31,8 +31,12 @@ pub struct CommitOptions {
     pub decisions: Option<std::collections::BTreeMap<String, bool>>,
 }
 
-pub fn run(opts: &CommitOptions, interaction: &mut dyn Interaction) -> Result<()> {
-    let template = Template::load(&opts.template)?;
+pub fn run(
+    opts: &CommitOptions,
+    resolver: &mut dyn crate::template::IncludeResolver,
+    interaction: &mut dyn Interaction,
+) -> Result<()> {
+    let template = Template::load_with(&opts.template, resolver)?;
     let sess = Session::load(&opts.template)?;
     let eval = StarlarkEval;
 

@@ -489,7 +489,11 @@ fn main() -> anyhow::Result<()> {
                 no_wizard,
             )?;
             let mut interaction = auto_interaction(non_interactive);
-            weft_engine::new::run(&opts, interaction.as_mut())
+            weft_engine::new::run(
+                &opts,
+                &mut weft_engine::template::PathResolver,
+                interaction.as_mut(),
+            )
         }
         Command::Update {
             dest,
@@ -542,7 +546,11 @@ fn main() -> anyhow::Result<()> {
                 drop_instances: vec![],
             };
             let mut interaction = auto_interaction(non_interactive);
-            let report = weft_engine::update::run(&opts, interaction.as_mut())?;
+            let report = weft_engine::update::run(
+                &opts,
+                &mut weft_engine::template::PathResolver,
+                interaction.as_mut(),
+            )?;
             if opts.dry_run {
                 Ok(())
             } else {
@@ -579,6 +587,7 @@ fn main() -> anyhow::Result<()> {
                         answers,
                         skip_tasks,
                     },
+                    &mut weft_engine::template::PathResolver,
                     interaction.as_mut(),
                 )?;
                 weft_engine::update::finish(&report)
@@ -595,6 +604,7 @@ fn main() -> anyhow::Result<()> {
                     &include,
                     &key,
                     skip_tasks,
+                    &mut weft_engine::template::PathResolver,
                     interaction.as_mut(),
                 )?;
                 weft_engine::update::finish(&report)
@@ -757,7 +767,11 @@ fn main() -> anyhow::Result<()> {
                 no_wizard,
             )?;
             let mut interaction = auto_interaction(non_interactive);
-            let worktree = weft_engine::record::run(&opts, interaction.as_mut())?;
+            let worktree = weft_engine::record::run(
+                &opts,
+                &mut weft_engine::template::PathResolver,
+                interaction.as_mut(),
+            )?;
             weft_engine::record::announce(&worktree);
             Ok(())
         }
@@ -795,7 +809,11 @@ fn main() -> anyhow::Result<()> {
                 decisions: None,
             };
             let mut interaction = auto_interaction(yes);
-            weft_engine::commit::run(&opts, interaction.as_mut())
+            weft_engine::commit::run(
+                &opts,
+                &mut weft_engine::template::PathResolver,
+                interaction.as_mut(),
+            )
         }
         Command::Presets { command } => match command {
             PresetsCommand::List { template } => {
@@ -956,7 +974,7 @@ fn main() -> anyhow::Result<()> {
                 answers,
                 answers_file,
             };
-            let report = weft_engine::check::run(&opts)?;
+            let report = weft_engine::check::run(&opts, &mut weft_engine::template::PathResolver)?;
             if json {
                 println!(
                     "{}",

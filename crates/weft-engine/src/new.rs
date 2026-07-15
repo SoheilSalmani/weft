@@ -59,8 +59,12 @@ pub(crate) fn secret_specs(
         .collect()
 }
 
-pub fn run(opts: &NewOptions, interaction: &mut dyn Interaction) -> Result<()> {
-    let template = Template::load(&opts.template)?;
+pub fn run(
+    opts: &NewOptions,
+    resolver: &mut dyn crate::template::IncludeResolver,
+    interaction: &mut dyn Interaction,
+) -> Result<()> {
+    let template = Template::load_with(&opts.template, resolver)?;
     let eval = StarlarkEval;
 
     let provided = answers::layered_with_json(

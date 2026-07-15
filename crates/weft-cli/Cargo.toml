@@ -20,7 +20,7 @@ ureq = "3"
 tar = "0.4"
 flate2 = "1"
 sha2 = "0.10"
-semver = "1"
+semver.workspace = true
 tower-lsp = "0.20"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }

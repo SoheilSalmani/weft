@@ -26,9 +26,13 @@ pub struct InstanceAddOptions {
     pub skip_tasks: bool,
 }
 
-pub fn add(opts: &InstanceAddOptions, interaction: &mut dyn Interaction) -> Result<UpdateReport> {
+pub fn add(
+    opts: &InstanceAddOptions,
+    resolver: &mut dyn crate::template::IncludeResolver,
+    interaction: &mut dyn Interaction,
+) -> Result<UpdateReport> {
     let mut state = State::load(&opts.dest)?;
-    let template = Template::load(&Utf8PathBuf::from(&state.state.template))?;
+    let template = Template::load_with(&Utf8PathBuf::from(&state.state.template), resolver)?;
     let inc = template.include(&opts.include).with_context(|| {
         format!(
             "template `{}` has no include named `{}`",
@@ -92,6 +96,7 @@ pub fn add(opts: &InstanceAddOptions, interaction: &mut dyn Interaction) -> Resu
             skip_tasks: opts.skip_tasks,
             drop_instances: vec![],
         },
+        resolver,
         interaction,
     )?;
     eprintln!(
@@ -106,6 +111,7 @@ pub fn remove(
     include: &str,
     key: &str,
     skip_tasks: bool,
+    resolver: &mut dyn crate::template::IncludeResolver,
     interaction: &mut dyn Interaction,
 ) -> Result<UpdateReport> {
     let state = State::load(dest)?;
@@ -124,6 +130,7 @@ pub fn remove(
             skip_tasks,
             drop_instances: vec![(include.to_owned(), key.to_owned())],
         },
+        resolver,
         interaction,
     )?;
     eprintln!("removed instance `{key}` of include `{include}`");

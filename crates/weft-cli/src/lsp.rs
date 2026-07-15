@@ -115,12 +115,15 @@ impl Backend {
         // changed file; otherwise run the full structural check.
         let issues: Vec<String> = match Template::load(&root) {
             Err(e) => vec![format!("{e:#}")],
-            Ok(_) => match weft_engine::check::run(&weft_engine::check::CheckOptions {
-                template: root.clone(),
-                presets: vec![],
-                answers: vec![],
-                answers_file: None,
-            }) {
+            Ok(_) => match weft_engine::check::run(
+                &weft_engine::check::CheckOptions {
+                    template: root.clone(),
+                    presets: vec![],
+                    answers: vec![],
+                    answers_file: None,
+                },
+                &mut weft_engine::template::PathResolver,
+            ) {
                 Ok(report) => report.issues,
                 Err(e) => vec![format!("{e:#}")],
             },

@@ -235,7 +235,12 @@ impl WeftMcp {
             instances: vec![],
             skip_tasks: true, // guardrail: agents never run template shell tasks
         };
-        weft_engine::new::run(&opts, &mut NonInteractive).map_err(|e| invalid(format!("{e:#}")))?;
+        weft_engine::new::run(
+            &opts,
+            &mut weft_engine::template::PathResolver,
+            &mut NonInteractive,
+        )
+        .map_err(|e| invalid(format!("{e:#}")))?;
         let files = weft_engine::fsio::read_tree(&opts.dest)
             .map(|t| t.len())
             .unwrap_or(0);
@@ -256,12 +261,15 @@ impl WeftMcp {
         Parameters(p): Parameters<TemplateParam>,
     ) -> Result<CallToolResult, ErrorData> {
         let dir = self.template_dir(&p.template)?;
-        let report = weft_engine::check::run(&weft_engine::check::CheckOptions {
-            template: dir,
-            presets: vec![],
-            answers: vec![],
-            answers_file: None,
-        })
+        let report = weft_engine::check::run(
+            &weft_engine::check::CheckOptions {
+                template: dir,
+                presets: vec![],
+                answers: vec![],
+                answers_file: None,
+            },
+            &mut weft_engine::template::PathResolver,
+        )
         .map_err(|e| invalid(format!("{e:#}")))?;
         Ok(CallToolResult::structured(serde_json::json!({
             "ok": report.issues.is_empty(),
@@ -292,8 +300,12 @@ impl WeftMcp {
             answers_json: answers_json(&p.answers),
             force: p.force,
         };
-        let worktree = weft_engine::record::run(&opts, &mut NonInteractive)
-            .map_err(|e| invalid(format!("{e:#}")))?;
+        let worktree = weft_engine::record::run(
+            &opts,
+            &mut weft_engine::template::PathResolver,
+            &mut NonInteractive,
+        )
+        .map_err(|e| invalid(format!("{e:#}")))?;
         let files: Vec<String> = weft_engine::fsio::read_tree(&worktree)
             .map(|t| t.paths().map(ToString::to_string).collect())
             .unwrap_or_default();
@@ -390,8 +402,12 @@ impl WeftMcp {
             tags: p.tags.clone(),
             decisions: Some(p.decisions.clone()),
         };
-        weft_engine::commit::run(&opts, &mut NonInteractive)
-            .map_err(|e| invalid(format!("{e:#}")))?;
+        weft_engine::commit::run(
+            &opts,
+            &mut weft_engine::template::PathResolver,
+            &mut NonInteractive,
+        )
+        .map_err(|e| invalid(format!("{e:#}")))?;
         Ok(CallToolResult::structured(
             serde_json::json!({ "patch": p.name, "committed": true }),
         ))

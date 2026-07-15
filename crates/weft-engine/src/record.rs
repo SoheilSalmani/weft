@@ -31,8 +31,12 @@ pub struct RecordOptions {
     pub force: bool,
 }
 
-pub fn run(opts: &RecordOptions, interaction: &mut dyn Interaction) -> Result<Utf8PathBuf> {
-    let template = Template::load(&opts.template)?;
+pub fn run(
+    opts: &RecordOptions,
+    resolver: &mut dyn crate::template::IncludeResolver,
+    interaction: &mut dyn Interaction,
+) -> Result<Utf8PathBuf> {
+    let template = Template::load_with(&opts.template, resolver)?;
     if Session::exists(&opts.template) {
         if opts.force {
             Session::discard(&opts.template)?;

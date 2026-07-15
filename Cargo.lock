@@ -3678,6 +3678,7 @@ dependencies = [
  "dialoguer",
  "globset",
  "insta",
+ "semver",
  "serde",
  "serde_json",
  "similar",

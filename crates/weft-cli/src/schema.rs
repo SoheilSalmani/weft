@@ -279,8 +279,14 @@ pub struct PresetDecl {
 pub struct IncludeDecl {
     /// Include slug; unique per template.
     pub name: String,
-    /// Path to the child template directory, relative to this template root.
+    /// The child template: a directory path relative to this template root
+    /// (`../go-service`), or a registry ref (`hub:owner/name`).
     pub template: String,
+    /// Semver requirement for a `hub:` template (e.g. `^1.0`). Required for
+    /// hub refs, forbidden for path refs; resolved to an exact version in
+    /// `weft.lock`.
+    #[serde(default)]
+    pub version: Option<String>,
     /// Mount prefix in the rendered tree; `{key}` substitutes the instance
     /// key (required when `repeat = true`).
     pub path: String,

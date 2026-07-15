@@ -13,6 +13,7 @@ blake3.workspace = true
 camino.workspace = true
 dialoguer.workspace = true
 globset.workspace = true
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 similar.workspace = true

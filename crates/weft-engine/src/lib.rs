@@ -20,6 +20,7 @@ pub mod hooks;
 pub mod init;
 pub mod instance;
 pub mod interact;
+pub mod lock;
 pub mod manifest;
 pub mod new;
 pub mod record;
