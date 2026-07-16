@@ -150,6 +150,9 @@ pub struct CommitParams {
     /// accepted, secret values are always abstracted.
     #[serde(default)]
     decisions: BTreeMap<String, bool>,
+    /// Occurrences to keep literal, as ANSWER@PATH:LINE[:NTH].
+    #[serde(default)]
+    keep_literal: Vec<String>,
 }
 
 // ---- tools -------------------------------------------------------------
@@ -401,6 +404,7 @@ impl WeftMcp {
             describe: p.description.clone(),
             tags: p.tags.clone(),
             decisions: Some(p.decisions.clone()),
+            keep_literal: p.keep_literal.clone(),
         };
         weft_engine::commit::run(
             &opts,

@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use similar::{DiffOp, TextDiff};
-use weft_core::{AnswerId, Content, Hunk, Op, Tree};
+use weft_core::{AnswerId, Hunk, Op, Tree};
 
 use crate::abstraction::Abstractor;
 use crate::interact::Interaction;
@@ -48,8 +48,56 @@ pub fn build_ops(
     interaction: &mut dyn Interaction,
 ) -> Result<Vec<Op>> {
     let texts = collect_texts(base, work);
-    let confirmed = abstractor.confirm(&texts, interaction)?;
-    Ok(build_ops_with(base, work, abstractor, &confirmed))
+    let occurrences = added_occurrences(base, work, abstractor);
+    let (confirmed, excepted) =
+        abstractor.confirm_with_occurrences(&texts, &occurrences, interaction)?;
+    Ok(build_ops_decided(
+        base, work, abstractor, &confirmed, &excepted,
+    ))
+}
+
+/// Every abstraction occurrence in *authored* content: created files (all
+/// lines) and the added lines of modified files — the units a user may keep
+/// literal. Keys are stable across decisions.
+pub fn added_occurrences(
+    base: &Tree,
+    work: &Tree,
+    abstractor: &Abstractor,
+) -> Vec<crate::abstraction::Occurrence> {
+    let mut out = Vec::new();
+    for (path, entry) in work.iter() {
+        match base.get(path) {
+            None => out.extend(abstractor.occurrences_in(path, &entry.content, None)),
+            Some(base_entry) if base_entry.content != entry.content => {
+                let added = added_line_numbers(&base_entry.content, &entry.content);
+                out.extend(abstractor.occurrences_in(path, &entry.content, Some(&added)));
+            }
+            Some(_) => {}
+        }
+    }
+    out
+}
+
+/// 1-based line numbers (in the new content) that a diff marks as added.
+pub fn added_line_numbers(old: &str, new: &str) -> std::collections::BTreeSet<usize> {
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+    let diff = TextDiff::from_slices(&old_lines, &new_lines);
+    let mut added = std::collections::BTreeSet::new();
+    for op in diff.ops() {
+        if let DiffOp::Insert {
+            new_index, new_len, ..
+        }
+        | DiffOp::Replace {
+            new_index, new_len, ..
+        } = *op
+        {
+            for i in new_index..new_index + new_len {
+                added.insert(i + 1);
+            }
+        }
+    }
+    added
 }
 
 /// [`build_ops`] with the abstraction decisions supplied by the caller
@@ -59,6 +107,18 @@ pub fn build_ops_with(
     work: &Tree,
     abstractor: &Abstractor,
     confirmed: &BTreeMap<AnswerId, bool>,
+) -> Vec<Op> {
+    build_ops_decided(base, work, abstractor, confirmed, &Default::default())
+}
+
+/// [`build_ops_with`] plus per-occurrence exceptions for authored content
+/// (added lines + created files).
+pub fn build_ops_decided(
+    base: &Tree,
+    work: &Tree,
+    abstractor: &Abstractor,
+    confirmed: &BTreeMap<AnswerId, bool>,
+    excepted: &crate::abstraction::Excepted,
 ) -> Vec<Op> {
     let mut ops = Vec::new();
 
@@ -105,8 +165,15 @@ pub fn build_ops_with(
     for (path, entry) in work.iter() {
         if let Some(base_entry) = base.get(path) {
             if base_entry.content != entry.content {
-                let hunks = hunks_between(&base_entry.content, &entry.content, |line| {
-                    abstractor.line(line, confirmed)
+                let hunks = hunks_between(&base_entry.content, &entry.content, |line, new_line| {
+                    match new_line {
+                        // Added lines are authored: exceptions apply.
+                        Some(line_no) => {
+                            abstractor.line_at(path, line_no, line, confirmed, excepted)
+                        }
+                        // Context/removed lines mirror the base render.
+                        None => abstractor.line(line, confirmed),
+                    }
                 });
                 ops.push(Op::ModifyFile {
                     path: abstractor.path(path.as_str(), confirmed),
@@ -126,20 +193,12 @@ pub fn build_ops_with(
         if base.get(path).is_none() && !renamed_to.contains(path) {
             ops.push(Op::CreateFile {
                 path: abstractor.path(path.as_str(), confirmed),
-                content: abstract_content(&entry.content, abstractor, confirmed),
+                content: abstractor.content_at(path, &entry.content, confirmed, excepted),
                 mode: entry.mode,
             });
         }
     }
     ops
-}
-
-fn abstract_content(
-    text: &str,
-    abstractor: &Abstractor,
-    confirmed: &BTreeMap<AnswerId, bool>,
-) -> Content {
-    abstractor.content(text, confirmed)
 }
 
 /// Context-anchored hunks from concrete old/new text. Change runs closer than
@@ -148,7 +207,10 @@ fn abstract_content(
 /// without stepping on each other's context.
 pub fn hunks_between<F>(old: &str, new: &str, mut abstract_line: F) -> Vec<Hunk>
 where
-    F: FnMut(&str) -> weft_core::Line,
+    // The second argument is `Some(1-based line number in the new file)` for
+    // *inserted* lines (authored content — per-occurrence exceptions apply)
+    // and `None` for context/removed lines (which mirror the base render).
+    F: FnMut(&str, Option<usize>) -> weft_core::Line,
 {
     let old_lines: Vec<&str> = old.lines().collect();
     let new_lines: Vec<&str> = new.lines().collect();
@@ -163,13 +225,16 @@ where
                 DiffOp::Equal { old_index, len, .. } => {
                     let lines = &old_lines[old_index..old_index + len];
                     if i == 0 {
-                        hunk.context_before = lines.iter().map(|l| abstract_line(l)).collect();
+                        hunk.context_before =
+                            lines.iter().map(|l| abstract_line(l, None)).collect();
                     } else if i == last {
-                        hunk.context_after = lines.iter().map(|l| abstract_line(l)).collect();
+                        hunk.context_after = lines.iter().map(|l| abstract_line(l, None)).collect();
                     } else {
                         // Equal run inside the group: goes to both sides.
-                        hunk.removed.extend(lines.iter().map(|l| abstract_line(l)));
-                        hunk.added.extend(lines.iter().map(|l| abstract_line(l)));
+                        hunk.removed
+                            .extend(lines.iter().map(|l| abstract_line(l, None)));
+                        hunk.added
+                            .extend(lines.iter().map(|l| abstract_line(l, None)));
                     }
                 }
                 DiffOp::Delete {
@@ -178,7 +243,7 @@ where
                     hunk.removed.extend(
                         old_lines[old_index..old_index + old_len]
                             .iter()
-                            .map(|l| abstract_line(l)),
+                            .map(|l| abstract_line(l, None)),
                     );
                 }
                 DiffOp::Insert {
@@ -187,7 +252,8 @@ where
                     hunk.added.extend(
                         new_lines[new_index..new_index + new_len]
                             .iter()
-                            .map(|l| abstract_line(l)),
+                            .enumerate()
+                            .map(|(k, l)| abstract_line(l, Some(new_index + k + 1))),
                     );
                 }
                 DiffOp::Replace {
@@ -199,12 +265,13 @@ where
                     hunk.removed.extend(
                         old_lines[old_index..old_index + old_len]
                             .iter()
-                            .map(|l| abstract_line(l)),
+                            .map(|l| abstract_line(l, None)),
                     );
                     hunk.added.extend(
                         new_lines[new_index..new_index + new_len]
                             .iter()
-                            .map(|l| abstract_line(l)),
+                            .enumerate()
+                            .map(|(k, l)| abstract_line(l, Some(new_index + k + 1))),
                     );
                 }
             }
@@ -252,7 +319,7 @@ mod tests {
     fn single_change_gets_surrounding_context() {
         let old = "a\nb\nc\nd\ne\n";
         let new = "a\nb\nC\nd\ne\n";
-        let hunks = hunks_between(old, new, Line::literal);
+        let hunks = hunks_between(old, new, |l, _| Line::literal(l));
         assert_eq!(hunks.len(), 1);
         let h = &hunks[0];
         assert_eq!(
@@ -271,7 +338,7 @@ mod tests {
     fn nearby_changes_merge_into_one_hunk() {
         let old = "a\nb\nc\nd\ne\n";
         let new = "a\nB\nc\nD\ne\n";
-        let hunks = hunks_between(old, new, Line::literal);
+        let hunks = hunks_between(old, new, |l, _| Line::literal(l));
         assert_eq!(hunks.len(), 1, "changes 2 lines apart share one hunk");
         let h = &hunks[0];
         // middle equal line `c` appears on both sides
@@ -283,7 +350,7 @@ mod tests {
     fn append_at_end_of_file() {
         let old = "a\nb\n";
         let new = "a\nb\nc\n";
-        let hunks = hunks_between(old, new, Line::literal);
+        let hunks = hunks_between(old, new, |l, _| Line::literal(l));
         assert_eq!(hunks.len(), 1);
         assert_eq!(hunks[0].added, vec![Line::literal("c")]);
         assert!(hunks[0].context_after.is_empty());

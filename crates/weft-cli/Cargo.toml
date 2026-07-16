@@ -21,6 +21,7 @@ tar = "0.4"
 flate2 = "1"
 sha2 = "0.10"
 semver.workspace = true
+similar.workspace = true
 tower-lsp = "0.20"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }

@@ -7,6 +7,25 @@ pub trait Interaction {
     fn ask(&mut self, question: &Question, default: Option<&Value>) -> Result<Value>;
     fn ask_secret(&mut self, question: &Question) -> Result<SecretValue>;
     fn confirm(&mut self, message: &str, default: bool) -> Result<bool>;
+
+    /// Decide one abstraction candidate: abstract all occurrences, keep all
+    /// literal, or keep a chosen subset literal (`occurrences` are display
+    /// lines like `README.md:12 · my_project`). The default — used by
+    /// non-interactive runs and `--yes` — abstracts everything, preserving
+    /// the historical behavior.
+    fn decide_candidate(
+        &mut self,
+        message: &str,
+        occurrences: &[String],
+    ) -> Result<crate::abstraction::CandidateDecision> {
+        let _ = occurrences;
+        let yes = self.confirm(message, true)?;
+        Ok(if yes {
+            crate::abstraction::CandidateDecision::All
+        } else {
+            crate::abstraction::CandidateDecision::None
+        })
+    }
 }
 
 /// Fails on any prompt with an actionable message. Used when stdin is not a
@@ -120,6 +139,43 @@ impl Interaction for TerminalInteraction {
             .with_prompt(message)
             .default(default)
             .interact()?)
+    }
+
+    fn decide_candidate(
+        &mut self,
+        message: &str,
+        occurrences: &[String],
+    ) -> Result<crate::abstraction::CandidateDecision> {
+        use crate::abstraction::CandidateDecision;
+        if occurrences.is_empty() {
+            // Nothing to select from (e.g. path-only matches): yes/no.
+            let yes = self.confirm(message, true)?;
+            return Ok(if yes {
+                CandidateDecision::All
+            } else {
+                CandidateDecision::None
+            });
+        }
+        let choice = dialoguer::Select::new()
+            .with_prompt(message)
+            .items(&[
+                "yes — abstract every occurrence",
+                "no — keep them all literal",
+                "select — choose occurrences to keep literal",
+            ])
+            .default(0)
+            .interact()?;
+        match choice {
+            0 => Ok(CandidateDecision::All),
+            1 => Ok(CandidateDecision::None),
+            _ => {
+                let keep = dialoguer::MultiSelect::new()
+                    .with_prompt("mark the occurrences to KEEP LITERAL (space toggles)")
+                    .items(occurrences)
+                    .interact()?;
+                Ok(CandidateDecision::Except(keep))
+            }
+        }
     }
 }
 

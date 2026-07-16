@@ -250,3 +250,100 @@ fn commit_without_name_still_defaults_without_a_tty() {
         .success()
         .stderr(predicates::str::contains("patch-002"));
 }
+
+// ---- weft diff + per-occurrence abstraction control --------------------
+
+#[test]
+fn diff_previews_candidates_and_keep_literal_survives_renames() {
+    let dir = tempfile::tempdir().unwrap();
+    let tpl = dir.path().join("tpl");
+    weft()
+        .arg("init")
+        .arg(&tpl)
+        .arg("--name")
+        .arg("demo")
+        .assert()
+        .success();
+    let manifest = std::fs::read_to_string(tpl.join("weft.toml")).unwrap();
+    std::fs::write(
+        tpl.join("weft.toml"),
+        format!("{manifest}\n[[question]]\nid = \"project_name\"\nkind = \"string\"\n"),
+    )
+    .unwrap();
+    weft()
+        .arg("record")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--answer")
+        .arg("project_name=my_project")
+        .assert()
+        .success();
+    std::fs::write(
+        tpl.join(".weft-record/worktree/README.md"),
+        "# my_project\n\nRun my_project now.\nThe word \"my_project\" is prose here.\n",
+    )
+    .unwrap();
+
+    // The piped diff shows ⟨…⟩ spans and the legend.
+    weft()
+        .arg("diff")
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("⟨my_project⟩"))
+        .stdout(predicates::str::contains("3 occurrence(s)"));
+    // Abstracted view shows the stored form.
+    weft()
+        .args(["diff", "--abstracted"])
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("⟨{project_name}⟩"));
+
+    // Keep the prose occurrence (line 4) literal; commit the rest.
+    weft()
+        .arg("commit")
+        .arg("--template")
+        .arg(&tpl)
+        .args([
+            "--name",
+            "base",
+            "--keep-literal",
+            "project_name@README.md:4",
+        ])
+        .assert()
+        .success();
+
+    // Scaffolding under a different name renames 2 spots, keeps the prose.
+    let out = dir.path().join("out");
+    weft()
+        .arg("new")
+        .arg(&tpl)
+        .arg(&out)
+        .arg("--answer")
+        .arg("project_name=acme")
+        .arg("--skip-tasks")
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    let readme = std::fs::read_to_string(out.join("README.md")).unwrap();
+    assert!(readme.contains("# acme"), "{readme}");
+    assert!(readme.contains("Run acme now."), "{readme}");
+    assert!(readme.contains("\"my_project\" is prose"), "{readme}");
+}
+
+#[test]
+fn diff_without_a_session_errors_clearly() {
+    let dir = tempfile::tempdir().unwrap();
+    let tpl = dir.path().join("tpl");
+    weft().arg("init").arg(&tpl).assert().success();
+    weft()
+        .arg("diff")
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("record"));
+}

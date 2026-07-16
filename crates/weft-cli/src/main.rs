@@ -1,3 +1,4 @@
+mod diffcmd;
 mod forms;
 mod hub;
 mod lsp;
@@ -186,9 +187,26 @@ enum Command {
         /// Accept all abstraction proposals without prompting.
         #[arg(long)]
         yes: bool,
+        /// Keep one occurrence literal: ANSWER@PATH:LINE[:NTH] (repeatable;
+        /// see `weft diff` for the keys). Implies accepting the rest.
+        #[arg(long = "keep-literal")]
+        keep_literal: Vec<String>,
         /// Never open the interactive form; use the default patch name.
         #[arg(long)]
         no_tui: bool,
+    },
+    /// Show the recording session's changes before committing: the concrete
+    /// diff with abstraction candidates highlighted.
+    Diff {
+        /// Template directory (defaults to `.`).
+        #[arg(long, default_value = ".")]
+        template: Utf8PathBuf,
+        /// Show the stored form ({answer} placeholders) instead of values.
+        #[arg(long)]
+        abstracted: bool,
+        /// Emit the preview as JSON (files, hunks, candidates, occurrences).
+        #[arg(long)]
+        json: bool,
     },
     /// List or show template presets.
     Presets {
@@ -826,6 +844,7 @@ fn main() -> anyhow::Result<()> {
             describe,
             tags,
             yes,
+            keep_literal,
             no_tui,
         } => {
             let (name, title, describe, when, tags) = match name {
@@ -850,12 +869,30 @@ fn main() -> anyhow::Result<()> {
                 describe,
                 tags,
                 decisions: None,
+                keep_literal,
             };
             let mut interaction = auto_interaction(yes);
             let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
             let result = weft_engine::commit::run(&opts, &mut resolver, interaction.as_mut());
             resolver.flush()?;
             result
+        }
+        Command::Diff {
+            template,
+            abstracted,
+            json,
+        } => {
+            let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
+            let tpl = Template::load_with(&template, &mut resolver)?;
+            resolver.flush()?;
+            let mut interaction = auto_interaction(false);
+            let preview = weft_engine::commit::preview(&tpl, interaction.as_mut())?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&preview)?);
+                Ok(())
+            } else {
+                diffcmd::print(&preview, abstracted)
+            }
         }
         Command::Presets { command } => match command {
             PresetsCommand::List { template } => {
