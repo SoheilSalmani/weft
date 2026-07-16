@@ -47,6 +47,23 @@ deviations from the plan.
   tests incl. hand-crafted-header path traversal). Real smoke: published
   the dbt templates, scaffolded from `hub:`, page rendered with badges.
 
+## Post-MVP — weft diff + per-occurrence abstraction
+
+- **`weft diff`**: pre-commit view of the session — concrete text with
+  candidate spans highlighted (ANSI / `⟨…⟩` piped), legend footer,
+  `--abstracted` for the stored `{answer}` form, `--json` for keys.
+- **Per-occurrence decisions**: occurrences in authored content keyed
+  `(path, line, nth)` in deterministic scan order (enumeration and
+  substitution share one walk, so keys can't drift; nth is consumed by
+  every match, so exceptions don't renumber). `weft commit
+  --keep-literal ANSWER@PATH:LINE[:NTH]`, an interactive yes/no/select
+  prompt, Studio commit-dialog checkboxes, and the server's
+  `keep_literal` commit input all land the identical patch. Context
+  lines keep the per-answer rule (they mirror the base render); secret
+  occurrences can never be kept literal.
+- `commit::{session_trees, preview}` extracted — the one source of the
+  base/worktree/candidates/occurrences view for CLI and server.
+
 ## Post-MVP — Interactive completion forms (TUI)
 
 - **One form engine, one theme** (`weft-cli/src/tui/`): accent focus bar,
