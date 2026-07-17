@@ -155,8 +155,10 @@ enum Command {
         foreach: Option<String>,
         /// Run this command in the rendered worktree; its output becomes the
         /// patch and the command is stored so `weft patch resync` can re-run
-        /// it (e.g. --exec "npx shadcn@latest add button").
-        #[arg(long)]
+        /// it (e.g. --exec "npx shadcn@latest add button"). `${answer}` /
+        /// `${expr}` interpolate declared answers; pass `--exec` with no
+        /// value to write the command in $VISUAL/$EDITOR.
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
         exec: Option<String>,
         /// Discard an existing session instead of failing.
         #[arg(long)]
@@ -740,6 +742,20 @@ fn main() -> anyhow::Result<()> {
                 inputs,
                 no_tui,
             } => {
+                // Everything but the command provided → write it in
+                // $VISUAL/$EDITOR instead of the full TUI form.
+                let action = match (&patch, &id, &phase, &effect, &label, action) {
+                    (Some(_), Some(_), Some(_), Some(_), Some(_), None) => {
+                        Some(weft_engine::interact::edit_command(
+                            "Enter the hook's shell command.\n\
+                             Lines starting with '#' are ignored. Multi-line commands run \
+                             via sh -c.\n\
+                             ${answer_or_expr} interpolates declared answers; unknown ${...} \
+                             passes through to the shell.",
+                        )?)
+                    }
+                    (_, _, _, _, _, action) => action,
+                };
                 let opts = match (patch, id, phase, effect, label, action) {
                     (
                         Some(patch),
@@ -942,6 +958,16 @@ fn main() -> anyhow::Result<()> {
             non_interactive,
             no_wizard,
         } => {
+            // Bare `--exec` opens $VISUAL/$EDITOR to write the command.
+            let exec = match exec {
+                Some(cmd) if cmd.is_empty() => Some(weft_engine::interact::edit_command(
+                    "Enter the generator command; its output becomes the patch.\n\
+                     Lines starting with '#' are ignored. Multi-line commands run via sh -c.\n\
+                     ${answer_or_expr} interpolates declared answers, e.g. ${project_name} or\n\
+                     ${' '.join(components)}; unknown ${...} passes through to the shell.",
+                )?),
+                other => other,
+            };
             let mut opts = weft_engine::record::RecordOptions {
                 template,
                 base,

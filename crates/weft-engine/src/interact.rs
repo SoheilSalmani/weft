@@ -1,5 +1,31 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use weft_core::{AnswerKind, Question, SecretValue, Value};
+
+/// Open `$VISUAL`/`$EDITOR` (fallback `vi`) on a seeded `.sh` buffer and
+/// return the entered command: the seed `instructions` become `#` comment
+/// lines, comments are stripped from the result, and multi-line commands
+/// are fine (`sh -c`). Errors when the editor closes without saving or
+/// nothing was entered.
+pub fn edit_command(instructions: &str) -> Result<String> {
+    let seed: String = instructions.lines().map(|l| format!("# {l}\n")).collect();
+    let edited = dialoguer::Editor::new()
+        .extension(".sh")
+        .require_save(true)
+        .edit(&seed)
+        .context("opening $VISUAL/$EDITOR")?
+        .context("aborted: editor closed without saving")?;
+    let command = edited
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_owned();
+    if command.is_empty() {
+        bail!("aborted: no command entered");
+    }
+    Ok(command)
+}
 
 /// How the engine talks to a human. Abstracted so tests and non-interactive
 /// runs can plug in deterministic behavior.

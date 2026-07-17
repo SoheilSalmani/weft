@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
+use predicates::prelude::PredicateBooleanExt;
 use weft_e2e::weft;
 
 fn hello_template() -> PathBuf {
@@ -384,4 +385,236 @@ fn resync_all_follows_the_dependency_chain() {
         .success();
     assert_eq!(read(&dest_path, "g1.txt"), "base v2\n");
     assert_eq!(read(&dest_path, "g2.txt"), "base v2\n");
+}
+
+// ---- ${…} interpolation --------------------------------------------------
+
+#[test]
+fn exec_interpolates_declared_answers() {
+    let dir = tempfile::tempdir().unwrap();
+    let tpl = dir.path().join("hello");
+    copy_dir(&hello_template(), &tpl);
+
+    weft()
+        .arg("record")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--answer")
+        .arg("project_name=My Demo")
+        .arg("--exec")
+        .arg("printf 'hi ${project_name}\\n' > f.txt")
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("generator interpolates:"));
+    weft()
+        .arg("commit")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--name")
+        .arg("gen")
+        .arg("--yes")
+        .assert()
+        .success();
+
+    // The stored command is a segment array with the answer reference.
+    let patch = read(&tpl, "patches/gen.json");
+    assert!(patch.contains("\"command\": ["), "patch: {patch}");
+    assert!(
+        patch.contains("\"answer\": \"project_name\""),
+        "patch: {patch}"
+    );
+
+    // The recorded output abstracts the answer like any patch.
+    let dest = tempfile::tempdir().unwrap();
+    let dest_path = dest.path().join("out");
+    weft()
+        .arg("new")
+        .arg(&tpl)
+        .arg(&dest_path)
+        .arg("--answer")
+        .arg("project_name=Other App")
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    assert_eq!(read(&dest_path, "f.txt"), "hi Other App\n");
+
+    // The patch is answer-parametric, so re-running the command with a
+    // different answer reproduces the same (abstracted) patch: up to date.
+    weft()
+        .arg("patch")
+        .arg("resync")
+        .arg("gen")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--answer")
+        .arg("project_name=Resynced")
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("up to date"));
+}
+
+#[test]
+fn exec_shell_vars_stay_literal() {
+    let dir = tempfile::tempdir().unwrap();
+    let tpl = dir.path().join("hello");
+    copy_dir(&hello_template(), &tpl);
+
+    weft()
+        .arg("record")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--answer")
+        .arg("project_name=x")
+        .arg("--exec")
+        .arg("echo \"${SOME_VAR:-fallback}\" > v.txt")
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("generator interpolates").not());
+    weft()
+        .arg("commit")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--name")
+        .arg("gen")
+        .arg("--yes")
+        .assert()
+        .success();
+
+    // Nothing matched → the command stays a bare string with the ${…} intact.
+    let patch = read(&tpl, "patches/gen.json");
+    assert!(
+        patch.contains("\"command\": \"echo"),
+        "bare-string command: {patch}"
+    );
+    assert!(patch.contains("${SOME_VAR:-fallback}"), "patch: {patch}");
+}
+
+#[test]
+fn hook_add_action_interpolates_and_check_validates() {
+    let dir = tempfile::tempdir().unwrap();
+    let tpl = dir.path().join("hello");
+    copy_dir(&hello_template(), &tpl);
+
+    weft()
+        .arg("hook")
+        .arg("add")
+        .arg("base")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--id")
+        .arg("greet")
+        .arg("--phase")
+        .arg("post")
+        .arg("--effect")
+        .arg("setup")
+        .arg("--label")
+        .arg("Greet")
+        .arg("--action")
+        .arg("test -n \"${project_name}\"")
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("action interpolates:"));
+    let patch = read(&tpl, "patches/base.json");
+    assert!(
+        patch.contains("\"answer\": \"project_name\""),
+        "patch: {patch}"
+    );
+    weft()
+        .arg("check")
+        .arg(&tpl)
+        .arg("--answer")
+        .arg("project_name=x")
+        .assert()
+        .success();
+
+    // A command referencing an undeclared answer is a check issue.
+    let mut json: serde_json::Value = serde_json::from_str(&patch).unwrap();
+    json["hooks"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id": "bad",
+            "phase": "post",
+            "effect": "setup",
+            "label": "Bad",
+            "action": [{"answer": "nope"}],
+        }));
+    std::fs::write(
+        tpl.join("patches/base.json"),
+        serde_json::to_string_pretty(&json).unwrap(),
+    )
+    .unwrap();
+    weft()
+        .arg("check")
+        .arg(&tpl)
+        .arg("--answer")
+        .arg("project_name=x")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("unknown answer `nope`"));
+}
+
+// ---- $EDITOR fallback ----------------------------------------------------
+
+#[test]
+fn exec_editor_fallback_records_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let tpl = dir.path().join("hello");
+    copy_dir(&hello_template(), &tpl);
+    let script = dir.path().join("fake-editor.sh");
+    std::fs::write(
+        &script,
+        "printf '%s\\n' 'printf \"from-editor\\n\" > e.txt' > \"$1\"\n",
+    )
+    .unwrap();
+
+    weft()
+        .arg("record")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--answer")
+        .arg("project_name=x")
+        .arg("--exec")
+        .env("VISUAL", format!("sh {}", script.display()))
+        .env("EDITOR", format!("sh {}", script.display()))
+        .assert()
+        .success();
+    assert_eq!(
+        read(&tpl, ".weft-record/worktree/e.txt"),
+        "from-editor\n",
+        "the editor-provided command ran in the worktree"
+    );
+    weft()
+        .arg("commit")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--name")
+        .arg("gen")
+        .arg("--yes")
+        .assert()
+        .success();
+    assert!(read(&tpl, "patches/gen.json").contains("from-editor"));
+}
+
+#[test]
+fn exec_editor_empty_aborts() {
+    let dir = tempfile::tempdir().unwrap();
+    let tpl = dir.path().join("hello");
+    copy_dir(&hello_template(), &tpl);
+    let script = dir.path().join("fake-editor.sh");
+    std::fs::write(&script, ": > \"$1\"\n").unwrap();
+
+    weft()
+        .arg("record")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--answer")
+        .arg("project_name=x")
+        .arg("--exec")
+        .env("VISUAL", format!("sh {}", script.display()))
+        .env("EDITOR", format!("sh {}", script.display()))
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("aborted"));
+    assert!(!tpl.join(".weft-record").exists());
 }

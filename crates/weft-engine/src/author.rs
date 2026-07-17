@@ -82,13 +82,37 @@ fn edit_patch_file(
 
 /// `weft hook add`: append a hook to a patch's metadata.
 pub fn hook_add(root: &Utf8Path, opts: &HookAddOptions) -> Result<()> {
+    // `${…}` in the action interpolates when it names a declared answer or
+    // a Starlark expression over them (plus `key` on a foreach patch);
+    // anything else stays literal for the shell.
+    let template = Template::load(root)?;
+    let mut extra = weft_core::AnswerSet::new();
+    let is_foreach = template.patches.iter().any(|p| {
+        template.id_to_name.get(&p.id).map(String::as_str) == Some(opts.patch.as_str())
+            && p.foreach.is_some()
+    });
+    if is_foreach {
+        extra.insert(
+            weft_core::AnswerId("key".into()),
+            weft_core::Value::String("example".into()),
+        );
+    }
+    let action = crate::hooks::parse_command(
+        &opts.action,
+        &template.manifest.questions,
+        &extra,
+        &weft_lang::StarlarkEval,
+    );
+    if !action.is_literal() {
+        eprintln!("action interpolates: {}", action.source());
+    }
     let hook = Hook {
         id: HookId(opts.id.clone()),
         phase: parse_phase(&opts.phase)?,
         effect: parse_effect(&opts.effect)?,
         label: opts.label.clone(),
         description: opts.description.clone(),
-        action: weft_core::Command::literal(&opts.action),
+        action,
         when: opts.when.clone().map(StarlarkExpr),
         after: opts.after.iter().cloned().map(HookId).collect(),
         inputs: opts

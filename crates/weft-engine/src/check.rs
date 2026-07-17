@@ -290,6 +290,55 @@ pub fn run(
                 );
             }
         }
+        // Generator metadata: the stored command must be replayable —
+        // expressions parse, answer refs are declared, keep-literal specs
+        // are well-formed, stored answers name declared questions.
+        if let Some(generator) = &patch.meta.generator {
+            for seg in &generator.command.0 {
+                match seg {
+                    weft_core::Segment::Expr(e) => {
+                        if let Err(err) = weft_lang::parse_expr(e.as_str()) {
+                            issue(
+                                &mut report,
+                                format!(
+                                    "patch `{name}`: generator command expression does not \
+                                     parse: {err}"
+                                ),
+                            );
+                        }
+                    }
+                    weft_core::Segment::Answer(id) => {
+                        if !declared.contains(id) {
+                            issue(
+                                &mut report,
+                                format!(
+                                    "patch `{name}`: generator command references unknown \
+                                     answer `{id}`"
+                                ),
+                            );
+                        }
+                    }
+                    weft_core::Segment::Literal(_) => {}
+                }
+            }
+            if let Err(e) = crate::commit::parse_keep_literal(&generator.keep_literal) {
+                issue(
+                    &mut report,
+                    format!("patch `{name}`: generator keep-literal: {e:#}"),
+                );
+            }
+            for (id, _) in generator.answers.iter() {
+                if !declared.contains(id) {
+                    issue(
+                        &mut report,
+                        format!(
+                            "patch `{name}`: generator stores an answer for unknown \
+                             question `{id}`"
+                        ),
+                    );
+                }
+            }
+        }
     }
 
     // Render + commutation checks need concrete answers.

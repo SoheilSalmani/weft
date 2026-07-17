@@ -137,7 +137,18 @@ pub fn run(
             if foreach.is_some() {
                 bail!("--exec cannot be combined with --foreach (unsupported for resync)");
             }
-            let command = weft_core::Command::literal(cmd);
+            // `${…}` interpolates when it names a declared answer or a
+            // Starlark expression over them; anything else stays literal
+            // for the shell. Echo what was recognized so typos are visible.
+            let command = crate::hooks::parse_command(
+                cmd,
+                &template.manifest.questions,
+                &weft_core::AnswerSet::new(),
+                &eval,
+            );
+            if !command.is_literal() {
+                eprintln!("generator interpolates: {}", command.source());
+            }
             if let Err(e) =
                 crate::hooks::run_command(&command, "generator", &worktree, &resolved, &eval)
             {

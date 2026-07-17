@@ -235,23 +235,121 @@ fn glob_matcher(pattern: &str) -> Result<GlobMatcher> {
         .compile_matcher())
 }
 
+/// Parse a CLI-authored command string (`weft record --exec`, `weft hook
+/// add --action`) into segments, interpolating `${…}` **only when
+/// relevant**: the inner text must name a declared question (→ answer
+/// segment) or be a Starlark expression that evaluates over the declared
+/// answers (→ expr segment; trial-run against kind-appropriate stand-ins,
+/// like default previews). Anything else — `${HOME}`, `${1:-x}` — stays
+/// literal, so plain shell parameter expansion keeps working.
+pub fn parse_command(
+    input: &str,
+    questions: &[weft_core::Question],
+    extra: &AnswerSet,
+    eval: &dyn ExprEval,
+) -> weft_core::Command {
+    let mut scope = crate::answers::dummy_answers(questions);
+    scope.overlay(extra);
+    let mut segments: Vec<weft_core::Segment> = Vec::new();
+    let mut literal = String::new();
+    let mut rest = input;
+    loop {
+        let Some(start) = rest.find("${") else {
+            literal.push_str(rest);
+            break;
+        };
+        let inner_str = &rest[start + 2..];
+        // Balanced-brace scan: Starlark bodies may contain `{…}` themselves.
+        let mut depth = 1usize;
+        let mut end = None;
+        for (i, c) in inner_str.char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(end) = end else {
+            // Unterminated `${` — the rest is literal.
+            literal.push_str(rest);
+            break;
+        };
+        match interpolation_for(&inner_str[..end], questions, &scope, eval) {
+            Some(segment) => {
+                literal.push_str(&rest[..start]);
+                if !literal.is_empty() {
+                    segments.push(weft_core::Segment::Literal(std::mem::take(&mut literal)));
+                }
+                segments.push(segment);
+            }
+            // Not relevant: keep the `${…}` byte-for-byte for the shell.
+            None => literal.push_str(&rest[..start + 2 + end + 1]),
+        }
+        rest = &inner_str[end + 1..];
+    }
+    if !literal.is_empty() || segments.is_empty() {
+        segments.push(weft_core::Segment::Literal(literal));
+    }
+    weft_core::Command(segments)
+}
+
+/// The segment for one `${…}` body, or `None` when it isn't a weft
+/// interpolation.
+fn interpolation_for(
+    inner: &str,
+    questions: &[weft_core::Question],
+    scope: &AnswerSet,
+    eval: &dyn ExprEval,
+) -> Option<weft_core::Segment> {
+    let trimmed = inner.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(q) = questions.iter().find(|q| q.id.0 == trimmed) {
+        // A multichoice renders as a list — commands need a projection
+        // (`' '.join(id)`), so the bare id stays literal.
+        if matches!(q.kind, weft_core::AnswerKind::MultiChoice { .. }) {
+            return None;
+        }
+        return Some(weft_core::Segment::Answer(AnswerId(trimmed.to_owned())));
+    }
+    if weft_lang::parse_expr(trimmed).is_err() {
+        return None;
+    }
+    let expr = weft_core::StarlarkExpr::from(trimmed);
+    match eval.eval(&expr, scope) {
+        // A list can't render into a command — project it through an
+        // expression (`' '.join(components)`) instead; a bare list stays
+        // literal rather than committing a guaranteed render error.
+        Ok(weft_core::Value::List(_)) | Err(_) => None,
+        Ok(_) => Some(weft_core::Segment::Expr(expr)),
+    }
+}
+
 /// Static validation of every hook across all patches (for `weft check`):
 /// unique ids, `after`/`inputs:hook:` references resolve, no `after` cycle,
 /// `inputs` only on post hooks. Returns human-readable issue strings.
 pub fn validate_all(template: &Template) -> Vec<String> {
     let mut issues = Vec::new();
-    let all: Vec<&Hook> = template
+    let with_patch: Vec<(&Patch, &Hook)> = template
         .patches
         .iter()
-        .flat_map(|p| p.meta.hooks.iter())
+        .flat_map(|p| p.meta.hooks.iter().map(move |h| (p, h)))
         .collect();
+    let all: Vec<&Hook> = with_patch.iter().map(|(_, h)| *h).collect();
     let ids: BTreeSet<&HookId> = all.iter().map(|h| &h.id).collect();
     if ids.len() != all.len() {
         issues.push("duplicate hook ids across patches".to_owned());
     }
     let declared_answers: BTreeSet<&AnswerId> =
         template.manifest.questions.iter().map(|q| &q.id).collect();
-    for hook in &all {
+    for (patch, hook) in &with_patch {
         for a in &hook.after {
             if !ids.contains(a) {
                 issues.push(format!("hook `{}`: unknown `after` hook `{a}`", hook.id));
@@ -288,13 +386,27 @@ pub fn validate_all(template: &Template) -> Vec<String> {
             }
         }
         for seg in &hook.action.0 {
-            if let weft_core::Segment::Expr(e) = seg {
-                if let Err(err) = weft_lang::parse_expr(e.as_str()) {
-                    issues.push(format!(
-                        "hook `{}`: command expression does not parse: {err}",
-                        hook.id
-                    ));
+            match seg {
+                weft_core::Segment::Expr(e) => {
+                    if let Err(err) = weft_lang::parse_expr(e.as_str()) {
+                        issues.push(format!(
+                            "hook `{}`: command expression does not parse: {err}",
+                            hook.id
+                        ));
+                    }
                 }
+                weft_core::Segment::Answer(id) => {
+                    // Foreach patches additionally see `key` / `instance_<id>`.
+                    let foreach_scoped =
+                        patch.foreach.is_some() && (id.0 == "key" || id.0.starts_with("instance_"));
+                    if !declared_answers.contains(id) && !foreach_scoped {
+                        issues.push(format!(
+                            "hook `{}`: command references unknown answer `{id}`",
+                            hook.id
+                        ));
+                    }
+                }
+                weft_core::Segment::Literal(_) => {}
             }
         }
     }
@@ -378,5 +490,90 @@ mod tests {
     fn cycle_is_an_error() {
         let hs = [hook("a", &["b"]), hook("b", &["a"])];
         assert!(order_phase(hs.iter().collect()).is_err());
+    }
+
+    fn question(id: &str, kind: weft_core::AnswerKind) -> weft_core::Question {
+        weft_core::Question {
+            id: id.into(),
+            kind,
+            prompt: None,
+            description: None,
+            example: None,
+            default: None,
+            when: None,
+            computed: false,
+            section: None,
+        }
+    }
+
+    fn parse(input: &str) -> Command {
+        use weft_core::AnswerKind;
+        let questions = vec![
+            question("project_name", AnswerKind::String),
+            question(
+                "components",
+                AnswerKind::MultiChoice {
+                    choices: vec!["button".into(), "card".into()],
+                },
+            ),
+        ];
+        parse_command(
+            input,
+            &questions,
+            &AnswerSet::new(),
+            &weft_lang::StarlarkEval,
+        )
+    }
+
+    #[test]
+    fn parse_command_declared_answer_interpolates() {
+        use weft_core::Segment;
+        let c = parse("echo ${project_name} done");
+        assert_eq!(
+            c.0,
+            vec![
+                Segment::Literal("echo ".into()),
+                Segment::Answer("project_name".into()),
+                Segment::Literal(" done".into()),
+            ]
+        );
+        assert_eq!(c.source(), "echo ${project_name} done");
+    }
+
+    #[test]
+    fn parse_command_expression_over_answers_interpolates() {
+        use weft_core::Segment;
+        let c = parse("run ${project_name.lower()}");
+        assert!(
+            matches!(&c.0[1], Segment::Expr(e) if e.as_str() == "project_name.lower()"),
+            "{c:?}"
+        );
+        // Nested braces inside the expression body survive the scan.
+        let c = parse("add ${' '.join([c for c in components if c != 'card'])}");
+        assert!(matches!(&c.0[1], Segment::Expr(_)), "{c:?}");
+    }
+
+    #[test]
+    fn parse_command_irrelevant_stays_literal() {
+        // Shell parameter expansion, undeclared names, empty, unterminated.
+        for cmd in [
+            "echo ${HOME}/${PATH}",
+            "echo ${not_a_question}",
+            "echo ${}",
+            "echo ${unterminated",
+        ] {
+            let c = parse(cmd);
+            assert!(c.is_literal(), "{cmd} → {c:?}");
+            assert_eq!(c.source(), cmd);
+        }
+    }
+
+    #[test]
+    fn parse_command_lists_need_projection() {
+        // A bare multichoice id would render as a list — stays literal…
+        assert!(parse("add ${components}").is_literal());
+        // …but a string projection interpolates.
+        let c = parse("add ${' '.join(components)}");
+        assert!(!c.is_literal());
     }
 }
