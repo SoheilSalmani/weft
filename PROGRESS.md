@@ -3,6 +3,36 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Generator patches (`record --exec` + `patch resync`)
+
+- **A patch can be a command's output.** `weft record --exec CMD` renders
+  the base, runs CMD in the worktree (`sh -c`, shared `hooks::run_command`
+  path), and commit stores it as **unhashed** `generator` metadata on the
+  patch: the command, the record-time answers (secrets kept as source
+  references, session-style), and the keep-literal specs. Generator
+  sessions force the scripted confirm-all abstraction path — interactive
+  per-occurrence choices couldn't be replayed at resync. Hand edits on top
+  of the command output are allowed but warned (lost on resync; detected
+  via a post-exec worktree hash held in the session).
+- **`weft patch resync [NAME…|--all]`** re-runs stored commands and
+  rewrites ops from fresh outputs, in dependency order, **reloading the
+  template between rewrites** — deps are stored by name and ids recompute
+  on load, so rewriting an ancestor needs zero dependent-file edits and
+  chained generated patches see fresh ancestor output. Up-to-date = replay
+  hash of the existing patch equals the fresh worktree (files stay
+  byte-identical); the commit replay guard rejects ambiguous contexts; a
+  post-pass full render names hand-recorded dependents whose anchors moved
+  (exit nonzero, re-record instruction — no auto-fix, no rollback: git is
+  the safety net, `--dry-run` the preview).
+- New engine module `generate.rs`; `Generator` in weft-core
+  (`PatchMeta.generator`, `#[serde(default)]` so old files parse and no
+  ids move); guard_mounts/secret-resolution refactored for sharing.
+- Docs: new `reference/commutation.mdx` (the full commutation contract:
+  why gated subsets force it, the pairwise check's exact shape, its
+  smoke-test limits, Pijul relation) — confirming the Pijul-style
+  commutation requirement is still in force and unchanged by this
+  feature (resync re-enters the same replay + check gates).
+
 ## Post-MVP — Presets v2 (locks + multichoice constraints)
 
 - **Semantics change:** presets are no longer an overridable base layer —
