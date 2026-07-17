@@ -7,20 +7,70 @@ use crate::interact::Interaction;
 use crate::secrets;
 use crate::template::Template;
 
-/// Build the pre-interactive answer layers in precedence order (later wins):
-/// presets in CLI order → answers file → `--answer` flags. Conflicts *within*
-/// one layer (e.g. the same `--answer` twice with different values) are
-/// errors, matching "conflicts at equal precedence are errors".
+/// The layered pre-interactive answers plus the preset lock information —
+/// what the wizard needs to skip locked rows and constrain multichoices.
+pub struct Layered {
+    pub answers: AnswerSet,
+    /// Question ids locked by a selected preset (not editable, not
+    /// overridable).
+    pub locked: std::collections::BTreeSet<weft_core::AnswerId>,
+    /// Multichoice constraints: id → (fixed, blocked).
+    pub constraints: std::collections::BTreeMap<weft_core::AnswerId, (Vec<String>, Vec<String>)>,
+}
+
+/// Build the pre-interactive answers. Presets **lock** what they answer: a
+/// later answers-file/`--answer` value for a locked id is an error, and
+/// multichoice constraints merge as `(user ∪ fixed) − blocked`. Conflicts
+/// *within* one layer (the same `--answer` twice with different values)
+/// are also errors.
 pub fn layered_answers(
     template: &Template,
     presets: &[String],
     answers_file: Option<&Utf8Path>,
     answer_args: &[String],
 ) -> Result<AnswerSet> {
-    let mut layers: Vec<AnswerSet> = Vec::new();
+    Ok(layered_full(template, presets, answers_file, answer_args)?.answers)
+}
+
+/// [`layered_answers`] with the lock/constraint info exposed.
+pub fn layered_full(
+    template: &Template,
+    presets: &[String],
+    answers_file: Option<&Utf8Path>,
+    answer_args: &[String],
+) -> Result<Layered> {
+    let mut specs = Vec::new();
     for preset in presets {
-        layers.push(template.preset(preset)?);
+        specs.push(template.preset_spec(preset)?);
     }
+    let spec = crate::preset::PresetSpec::merge(specs)?;
+
+    // User layers first (file → flags), then the preset spec enforces
+    // locks and merges constraints over them.
+    let user = layered_user(template, answers_file, answer_args)?;
+    let layered = spec.apply(&user)?;
+    for (id, _) in layered.iter() {
+        if crate::compose::find_question(template, &id.0).is_none() {
+            bail!(
+                "answer `{id}` does not match any question in template `{}` or its includes",
+                template.manifest.template.name
+            );
+        }
+    }
+    Ok(Layered {
+        answers: layered,
+        locked: spec.locked(),
+        constraints: spec.constraints(),
+    })
+}
+
+/// The user-provided layers only: answers file → `--answer` flags.
+fn layered_user(
+    template: &Template,
+    answers_file: Option<&Utf8Path>,
+    answer_args: &[String],
+) -> Result<AnswerSet> {
+    let mut layers: Vec<AnswerSet> = Vec::new();
     if let Some(path) = answers_file {
         let src = std::fs::read_to_string(path)
             .with_context(|| format!("reading answers file {path}"))?;
@@ -49,16 +99,7 @@ pub fn layered_answers(
         }
         layers.push(set);
     }
-    let layered = weft_core::value::layer(&layers);
-    for (id, _) in layered.iter() {
-        if crate::compose::find_question(template, &id.0).is_none() {
-            bail!(
-                "answer `{id}` does not match any question in template `{}` or its includes",
-                template.manifest.template.name
-            );
-        }
-    }
-    Ok(layered)
+    Ok(weft_core::value::layer(&layers))
 }
 
 /// Parse `KEY=VALUE`, coercing VALUE according to the question's kind.
@@ -192,8 +233,9 @@ pub fn gather(
     Ok(validated)
 }
 
-/// The full pre-interactive layering: presets → answers file → `--answer`
-/// flags → answers JSON (inline, `@file`, `-` for stdin). Later wins.
+/// The full pre-interactive layering: answers file → `--answer` flags →
+/// answers JSON (inline, `@file`, `-` for stdin; later wins) — then the
+/// selected presets' locks and constraints are enforced over the result.
 pub fn layered_with_json(
     template: &Template,
     presets: &[String],
@@ -201,9 +243,16 @@ pub fn layered_with_json(
     answer_args: &[String],
     answers_json: Option<&str>,
 ) -> Result<AnswerSet> {
-    let mut provided = layered_answers(template, presets, answers_file, answer_args)?;
-    if let Some(spec) = answers_json {
-        let json = match spec {
+    // JSON is the highest user layer; the spec still applies over it.
+    let mut specs = Vec::new();
+    for preset in presets {
+        specs.push(template.preset_spec(preset)?);
+    }
+    let spec = crate::preset::PresetSpec::merge(specs)?;
+
+    let mut user = layered_user(template, answers_file, answer_args)?;
+    if let Some(json_spec) = answers_json {
+        let json = match json_spec {
             "-" => std::io::read_to_string(std::io::stdin())?,
             s if s.starts_with('@') => std::fs::read_to_string(&s[1..])
                 .with_context(|| format!("reading answers JSON file {}", &s[1..]))?,
@@ -221,9 +270,9 @@ pub fn layered_with_json(
                 json_to_value(&question.kind, key, raw)?,
             );
         }
-        provided.overlay(&set);
+        user.overlay(&set);
     }
-    Ok(provided)
+    spec.apply(&user)
 }
 
 /// Kind-appropriate stand-in values for trial-evaluating expressions

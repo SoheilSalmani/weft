@@ -98,7 +98,21 @@ pub struct QuestionDescription {
 #[derive(Serialize)]
 pub struct PresetDescription {
     pub name: String,
-    pub answers: BTreeMap<String, serde_json::Value>,
+    /// Locked answers: supplied automatically and not overridable — an
+    /// explicit `--answer` for a locked question errors.
+    pub locks: BTreeMap<String, serde_json::Value>,
+    /// Multichoice constraints: `fixed` choices are always selected,
+    /// `blocked` choices can never be picked; the rest stay free.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub constraints: BTreeMap<String, PresetConstraintDescription>,
+}
+
+#[derive(Serialize)]
+pub struct PresetConstraintDescription {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fixed: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub blocked: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -212,11 +226,21 @@ pub fn describe(template: &Template, eval: &dyn ExprEval) -> Result<DescribeDoc>
         .iter()
         .filter_map(|decl| {
             template
-                .preset(&decl.name)
+                .preset_spec(&decl.name)
                 .ok()
-                .map(|set| PresetDescription {
+                .map(|spec| PresetDescription {
                     name: decl.name.clone(),
-                    answers: answer_set_to_json(&set),
+                    locks: answer_set_to_json(&spec.lock_answers()),
+                    constraints: spec
+                        .constraints()
+                        .into_iter()
+                        .map(|(id, (fixed, blocked))| {
+                            (
+                                id.to_string(),
+                                PresetConstraintDescription { fixed, blocked },
+                            )
+                        })
+                        .collect(),
                 })
         })
         .collect();
@@ -418,7 +442,7 @@ fn build_usage(
 ) -> Usage {
     let dir = &template.root;
     let required: Vec<&QuestionDescription> = questions.iter().filter(|q| q.required).collect();
-    let flag_answers: String = required
+    let answer_flags: Vec<(String, String)> = required
         .iter()
         .map(|q| {
             let value = q.example.clone().unwrap_or_else(|| match q.kind {
@@ -431,9 +455,10 @@ fn build_usage(
                     .unwrap_or_default(),
                 _ => format!("<{}>", q.id),
             });
-            format!(" --answer \"{}={}\"", q.id, value)
+            (q.id.clone(), format!(" --answer \"{}={}\"", q.id, value))
         })
         .collect();
+    let flag_answers: String = answer_flags.iter().map(|(_, f)| f.as_str()).collect();
     let json_answers: String = {
         let map: BTreeMap<&str, serde_json::Value> = required
             .iter()
@@ -463,8 +488,24 @@ fn build_usage(
             .presets
             .iter()
             .map(|p| {
+                // Locked questions must not be answered again — an explicit
+                // `--answer` for a locked id is an error.
+                let locked = template
+                    .preset_spec(&p.name)
+                    .map(|spec| {
+                        spec.locked()
+                            .iter()
+                            .map(|id| id.to_string())
+                            .collect::<std::collections::BTreeSet<_>>()
+                    })
+                    .unwrap_or_default();
+                let flags: String = answer_flags
+                    .iter()
+                    .filter(|(id, _)| !locked.contains(id))
+                    .map(|(_, f)| f.as_str())
+                    .collect();
                 format!(
-                    "weft new {dir} <dest> --preset {}{flag_answers} --non-interactive",
+                    "weft new {dir} <dest> --preset {}{flags} --non-interactive",
                     p.name
                 )
             })
@@ -542,13 +583,27 @@ pub fn agents_md(doc: &DescribeDoc) -> String {
     if !doc.presets.is_empty() {
         w("## Presets");
         w("");
+        w("Preset answers are locks: the question is skipped interactively and");
+        w("an explicit `--answer` for it errors. Constraints pin multichoice");
+        w("options (fixed = always selected, blocked = never selectable).");
+        w("");
         for p in &doc.presets {
-            let pairs: Vec<String> = p
-                .answers
+            let mut parts: Vec<String> = p
+                .locks
                 .iter()
-                .map(|(k, v)| format!("`{k}={v}`"))
+                .map(|(k, v)| format!("`{k}={v}` (locked)"))
                 .collect();
-            w(&format!("- **{}**: {}", p.name, pairs.join(", ")));
+            for (id, c) in &p.constraints {
+                let mut detail = Vec::new();
+                if !c.fixed.is_empty() {
+                    detail.push(format!("fixed: {}", c.fixed.join(", ")));
+                }
+                if !c.blocked.is_empty() {
+                    detail.push(format!("blocked: {}", c.blocked.join(", ")));
+                }
+                parts.push(format!("`{id}` ({})", detail.join("; ")));
+            }
+            w(&format!("- **{}**: {}", p.name, parts.join(", ")));
         }
         w("");
     }

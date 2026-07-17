@@ -23,6 +23,7 @@ pub mod interact;
 pub mod lock;
 pub mod manifest;
 pub mod new;
+pub mod preset;
 pub mod record;
 pub mod secrets;
 pub mod session;

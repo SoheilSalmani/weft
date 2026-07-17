@@ -215,8 +215,8 @@ impl Template {
             .collect()
     }
 
-    /// Load one preset's partial answer set.
-    pub fn preset(&self, name: &str) -> Result<AnswerSet> {
+    /// Load one preset's full spec (locks + multichoice constraints).
+    pub fn preset_spec(&self, name: &str) -> Result<crate::preset::PresetSpec> {
         let decl = self
             .manifest
             .presets
@@ -232,8 +232,13 @@ impl Template {
         let path = self.root.join(&decl.file);
         let src = std::fs::read_to_string(&path)
             .with_context(|| format!("reading preset file {path}"))?;
-        let answers: AnswerSet =
-            toml::from_str(&src).with_context(|| format!("parsing preset file {path}"))?;
+        crate::preset::PresetSpec::parse(name, &src)
+    }
+
+    /// Load one preset's *locked* answers — the locks-only projection.
+    /// Use [`Self::preset_spec`] where constraints matter.
+    pub fn preset(&self, name: &str) -> Result<AnswerSet> {
+        let answers = self.preset_spec(name)?.lock_answers();
         Ok(answers)
     }
 

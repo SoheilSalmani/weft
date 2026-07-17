@@ -85,25 +85,14 @@ pub fn run(
                 format!("duplicate preset name `{}`", decl.name),
             );
         }
-        match template.preset(&decl.name) {
+        // Full spec validation: entries name real questions of the right
+        // kind, constraint choices are declared, no fixed∩blocked, no
+        // secrets in presets.
+        match template.preset_spec(&decl.name) {
             Err(e) => issue(&mut report, format!("preset `{}`: {e:#}", decl.name)),
-            Ok(set) => {
-                for (id, _) in set.iter() {
-                    if !declared.contains(id) {
-                        issue(
-                            &mut report,
-                            format!("preset `{}` answers unknown question `{id}`", decl.name),
-                        );
-                    }
-                    if questions
-                        .iter()
-                        .any(|q| q.id == *id && matches!(q.kind, AnswerKind::Secret { .. }))
-                    {
-                        issue(
-                            &mut report,
-                            format!("preset `{}` sets secret question `{id}`", decl.name),
-                        );
-                    }
+            Ok(spec) => {
+                if let Err(e) = spec.validate(&template) {
+                    issue(&mut report, format!("preset `{}`: {e:#}", decl.name));
                 }
             }
         }
