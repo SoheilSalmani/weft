@@ -25,6 +25,7 @@ camino = { version = "1", features = ["serde1"] }
 clap = { version = "4", features = ["derive"] }
 dialoguer = "0.11"
 globset = "0.4"
+ignore = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 semver = "1"

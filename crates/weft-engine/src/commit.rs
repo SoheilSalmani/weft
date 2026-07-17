@@ -307,7 +307,11 @@ pub fn session_trees<'t>(
     }
 
     let worktree = session::worktree_dir(&template.root);
-    let work_tree = fsio::read_tree(&worktree)?;
+    // `.weftignore` filters junk (generator side-products, OS files) out of
+    // the read-back — except paths the base rendered, so deletions of
+    // rendered files are still recorded.
+    let keep: std::collections::BTreeSet<_> = base_tree.paths().cloned().collect();
+    let work_tree = fsio::read_tree_ignoring(&worktree, &template.ignore, &keep)?;
     Ok(SessionTrees {
         sess,
         answers,

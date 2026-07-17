@@ -33,11 +33,37 @@ pub fn write_file(dest: &Utf8Path, rel: &Utf8Path, entry: &FileEntry) -> Result<
 /// MVP is text-only: non-UTF-8 files are an error with a clear message.
 pub fn read_tree(root: &Utf8Path) -> Result<Tree> {
     let mut tree = Tree::new();
-    read_dir_into(root, root, &mut tree)?;
+    read_dir_into(root, root, &mut tree, None)?;
     Ok(tree)
 }
 
-fn read_dir_into(root: &Utf8Path, dir: &Utf8Path, tree: &mut Tree) -> Result<()> {
+/// [`read_tree`] with the template's [`.weftignore`](crate::weftignore)
+/// rules applied — except for paths in `keep` (normally the base render's
+/// paths), so deleting a rendered file is still recorded even when a
+/// pattern matches it. Ignored directories are pruned whole without
+/// reading their contents (a `node_modules/` full of binaries never
+/// touches the UTF-8 check).
+pub fn read_tree_ignoring(
+    root: &Utf8Path,
+    rules: &crate::weftignore::IgnoreRules,
+    keep: &std::collections::BTreeSet<Utf8PathBuf>,
+) -> Result<Tree> {
+    let mut tree = Tree::new();
+    read_dir_into(root, root, &mut tree, Some((rules, keep)))?;
+    Ok(tree)
+}
+
+type Filter<'a> = (
+    &'a crate::weftignore::IgnoreRules,
+    &'a std::collections::BTreeSet<Utf8PathBuf>,
+);
+
+fn read_dir_into(
+    root: &Utf8Path,
+    dir: &Utf8Path,
+    tree: &mut Tree,
+    filter: Option<Filter<'_>>,
+) -> Result<()> {
     for entry in dir
         .read_dir_utf8()
         .with_context(|| format!("reading {dir}"))?
@@ -46,32 +72,60 @@ fn read_dir_into(root: &Utf8Path, dir: &Utf8Path, tree: &mut Tree) -> Result<()>
         let path = entry.path();
         let name = path.file_name().unwrap_or_default();
         let file_type = entry.file_type()?;
+        let rel = path
+            .strip_prefix(root)
+            .expect("walked path is under root")
+            .to_owned();
         if file_type.is_dir() {
             if name == STATE_DIR || name == ".git" {
                 continue;
             }
-            read_dir_into(root, path, tree)?;
-        } else if file_type.is_file() {
-            let bytes = std::fs::read(path)?;
-            let mut content = String::from_utf8(bytes).map_err(|_| {
-                anyhow::anyhow!("`{path}` is not UTF-8 text; weft MVP handles text files only")
-            })?;
-            // Weft's text model normalizes files to exactly one trailing
-            // newline (rendering always produces that). Apply the same rule
-            // on read, or editor-written files without a final newline make
-            // replay-vs-worktree comparisons fail spuriously.
-            if !content.is_empty() && !content.ends_with('\n') {
-                content.push('\n');
+            if let Some((rules, keep)) = filter {
+                if rules.ignores(&rel, true) && !keep.iter().any(|k| k.starts_with(&rel)) {
+                    continue;
+                }
             }
-            let mode = get_mode(path)?;
-            let rel: Utf8PathBuf = path
-                .strip_prefix(root)
-                .expect("walked path is under root")
-                .to_owned();
-            tree.insert(rel, FileEntry { content, mode });
+            read_dir_into(root, path, tree, filter)?;
+        } else if file_type.is_file() {
+            if let Some((rules, keep)) = filter {
+                if rules.ignores(&rel, false) && !keep.contains(&rel) {
+                    continue;
+                }
+            }
+            tree.insert(rel, read_entry(path)?);
         }
     }
     Ok(())
+}
+
+/// Read one file with weft's text normalization (UTF-8 only; exactly one
+/// trailing newline, matching what rendering produces).
+fn read_entry(path: &Utf8Path) -> Result<FileEntry> {
+    let bytes = std::fs::read(path)?;
+    let mut content = String::from_utf8(bytes).map_err(|_| {
+        anyhow::anyhow!("`{path}` is not UTF-8 text; weft MVP handles text files only")
+    })?;
+    // Weft's text model normalizes files to exactly one trailing
+    // newline (rendering always produces that). Apply the same rule
+    // on read, or editor-written files without a final newline make
+    // replay-vs-worktree comparisons fail spuriously.
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    let mode = get_mode(path)?;
+    Ok(FileEntry { content, mode })
+}
+
+/// Read one file under `root` (normalized like [`read_tree`]); `None` when
+/// absent. Used by `weft update` to read only template-tracked paths from a
+/// scaffolded project — the rest of the project (user files, `node_modules/`)
+/// is irrelevant to the merge and may be binary.
+pub fn read_file(root: &Utf8Path, rel: &Utf8Path) -> Result<Option<FileEntry>> {
+    let path = root.join(rel);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    read_entry(&path).map(Some)
 }
 
 /// Ensure `dest` is usable as a scaffold target: nonexistent or an empty dir.

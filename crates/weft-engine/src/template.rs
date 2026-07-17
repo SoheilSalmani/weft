@@ -57,6 +57,9 @@ pub struct Template {
     /// Loaded children, in declaration order (parallel to
     /// `manifest.includes`).
     pub includes: Vec<LoadedInclude>,
+    /// `.weftignore` rules (plus built-in defaults) — applied when reading
+    /// a recording worktree back, never to rendered output.
+    pub ignore: crate::weftignore::IgnoreRules,
 }
 
 /// An `[[include]]` declaration together with its loaded child template.
@@ -203,6 +206,7 @@ impl Template {
             name_to_id,
             id_to_name,
             includes,
+            ignore: crate::weftignore::IgnoreRules::load(root)?,
         })
     }
 

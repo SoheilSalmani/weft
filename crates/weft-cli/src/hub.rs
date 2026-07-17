@@ -227,6 +227,14 @@ pub fn pack(template_dir: &Utf8Path) -> Result<Vec<u8>> {
             )
             .context("adding weft.lock")?;
     }
+    // Ignore rules travel with the template so recordings against a hub
+    // copy filter the same junk.
+    let ignore_file = weft_engine::weftignore::IGNORE_FILE;
+    if template_dir.join(ignore_file).is_file() {
+        builder
+            .append_path_with_name(template_dir.join(ignore_file), ignore_file)
+            .context("adding .weftignore")?;
+    }
     for sub in ["patches", "presets"] {
         let dir = template_dir.join(sub);
         if dir.is_dir() {

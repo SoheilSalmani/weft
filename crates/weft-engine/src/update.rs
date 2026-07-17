@@ -184,7 +184,18 @@ pub fn run(
     let new_render = compose::render_composed(&template.patches, &new_answers, &new_parts, &eval)
         .context("rendering new template state")?;
 
-    let user_tree = fsio::read_tree(&opts.dest)?;
+    // Read only the paths the template ever touched (old or new render):
+    // everything else in the project — user files, `node_modules/`,
+    // virtualenvs — is irrelevant to the merge and may be binary.
+    let mut user_tree = weft_core::Tree::new();
+    let mut tracked: BTreeSet<&Utf8PathBuf> = BTreeSet::new();
+    tracked.extend(old_render.paths());
+    tracked.extend(new_render.paths());
+    for path in tracked {
+        if let Some(entry) = fsio::read_file(&opts.dest, path)? {
+            user_tree.insert(path.clone(), entry);
+        }
+    }
 
     let mut report = UpdateReport::default();
     let mut actions: Vec<(Utf8PathBuf, Action)> = Vec::new();

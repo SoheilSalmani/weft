@@ -31,6 +31,7 @@ pub mod session;
 pub mod state;
 pub mod template;
 pub mod update;
+pub mod weftignore;
 
 /// The default Starlark-backed expression evaluator, re-exported so binary
 /// crates don't need a direct `weft-lang` dependency.

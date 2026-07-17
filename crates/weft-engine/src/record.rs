@@ -156,7 +156,10 @@ pub fn run(
                 let _ = std::fs::remove_dir_all(session::record_dir(&opts.template));
                 return Err(e.context("running the generator command"));
             }
-            let after = fsio::read_tree(&worktree)?;
+            // Same `.weftignore` filtering as commit will apply, so the
+            // post-exec hash and the commit-time work tree agree.
+            let keep: BTreeSet<_> = tree.paths().cloned().collect();
+            let after = fsio::read_tree_ignoring(&worktree, &template.ignore, &keep)?;
             Some(session::PendingGenerator {
                 command,
                 tree_hash_after_exec: after.hash(),

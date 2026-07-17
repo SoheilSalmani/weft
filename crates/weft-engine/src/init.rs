@@ -53,6 +53,18 @@ description = "TODO: what this template scaffolds."
 "#
     );
     std::fs::write(&manifest_path, manifest).with_context(|| format!("writing {manifest_path}"))?;
+    let ignore_path = dir.join(crate::weftignore::IGNORE_FILE);
+    if !ignore_path.exists() {
+        std::fs::write(
+            &ignore_path,
+            "# gitignore-style patterns excluded when weft reads a recording\n\
+             # worktree back (weft commit / diff / patch resync). Keeps tool\n\
+             # side-products out of patches. `.git/`, `.weft/`, and `.DS_Store`\n\
+             # are always ignored.\n\
+             node_modules/\n",
+        )
+        .with_context(|| format!("writing {ignore_path}"))?;
+    }
     eprintln!("initialized template `{name}` in {dir}");
     Ok(())
 }

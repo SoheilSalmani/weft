@@ -189,7 +189,8 @@ pub fn resync(
             &answers,
             &eval,
         )?;
-        let work_tree = fsio::read_tree(&worktree)?;
+        let keep: std::collections::BTreeSet<_> = base_tree.paths().cloned().collect();
+        let work_tree = fsio::read_tree_ignoring(&worktree, &template.ignore, &keep)?;
         commit::guard_mounts(&template, None, &base_tree, &work_tree)?;
 
         // Up to date? The existing patch replayed over the base must equal

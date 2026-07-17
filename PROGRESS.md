@@ -3,6 +3,31 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — `.weftignore`
+
+- **Problem:** a generator like `--exec 'pnpm dlx shadcn init'` drops
+  `node_modules/` in the worktree; read-back would not just bloat the
+  patch — it hard-errors on the first non-UTF-8 file. Same latent bug in
+  `weft update`, which read the ENTIRE project dir (a real Node project's
+  node_modules would break update).
+- **`.weftignore` at the template root**, real gitignore semantics via the
+  `ignore` crate (negation included). Applied only when reading a worktree
+  BACK (commit/diff/resync + the record-exec hash + the server session
+  commit) — never to rendered output. Ignored dirs are pruned unread.
+  Built-ins: `.git/`/`.weft/` (walker, as before) + `.DS_Store` (new).
+  **Base-rendered paths are exempt** (`read_tree_ignoring(root, rules,
+  keep)`) so deleting a rendered file still records even if a pattern
+  matches it.
+- **`weft update` now reads only template-tracked paths** (old ∪ new
+  render) from the project via the new `fsio::read_file` — user junk is
+  never opened. Behavior-preserving: `plan_file(None, Some, None)` was
+  already a no-op.
+- Travels with the template: `weft hub publish` packs it; `weft init`
+  seeds one (node_modules/ + comment). `Template.ignore` carries the
+  rules. e2e: tests/e2e/tests/weftignore.rs (binary junk through
+  exec+commit+resync, .DS_Store default, base-path exemption, update
+  with binary node_modules).
+
 ## Post-MVP — Command interpolation + $EDITOR fallback
 
 - **`${…}` in authored commands, only when relevant.** `record --exec` and
