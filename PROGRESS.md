@@ -3,6 +3,36 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Command interpolation + $EDITOR fallback
+
+- **`${…}` in authored commands, only when relevant.** `record --exec` and
+  `hook add --action` parse `${…}` via `hooks::parse_command`
+  (balanced-brace scan): a declared question id → answer segment; a
+  Starlark expression that trial-evaluates over `dummy_answers` → expr
+  segment; everything else (`${HOME}`, `${1:-x}`, typos, list-valued
+  bodies like a bare multichoice id) stays literal so shell parameter
+  expansion keeps working. The recognized form is echoed
+  ("generator interpolates: …") — typos are visible by absence, by
+  design (no way to distinguish a typo from an intended shell var).
+- **Interpolated generator patches are answer-parametric**: resync with a
+  different `--answer` reproduces the same abstracted patch → "up to
+  date". Value variation flows through commands + abstraction; structural
+  variation still needs one gated patch per variant (see the new
+  best-practices guide).
+- **`weft check`** now validates generator metadata fully (command exprs
+  parse, answer refs declared, keep-literal well-formed, stored answers
+  name real questions) and flags unknown answer refs in hook commands
+  (foreach patches keep `key`/`instance_*`).
+- **$EDITOR fallback**: bare `--exec` (and `hook add` with all flags but
+  `--action`) opens `$VISUAL`/`$EDITOR` via `dialoguer::Editor` on a
+  seeded `.sh` buffer; `#` lines stripped; not TTY-gated (mtime-based
+  save detection), so e2e drives it with `VISUAL="sh fake-editor.sh"`.
+- Docs: new `guides/best-practices.mdx` — patch identity (id = blake3 of
+  behavior-as-answer-function; metadata free), the two conditionality
+  levels (gate = structural/compositional, expressions = value-level),
+  and the generated-patch rule (interpolate for values, split gated
+  patches for structure).
+
 ## Post-MVP — Generator patches (`record --exec` + `patch resync`)
 
 - **A patch can be a command's output.** `weft record --exec CMD` renders
