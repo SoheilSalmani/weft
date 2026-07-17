@@ -3,6 +3,36 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Presets v2 (locks + multichoice constraints)
+
+- **Semantics change:** presets are no longer an overridable base layer —
+  they **lock what they answer**. A plain entry (scalar/array) locks the
+  question: skipped in the wizard/prompts, and an explicit answer with a
+  *different* value errors (identical is accepted). A TOML *table* entry
+  constrains a multichoice: `fixed` always selected, `blocked` never
+  selectable, final value `(user ∪ fixed) − blocked`. Selected presets
+  merge (locks must agree; constraints union; fixed∩blocked errors).
+- **Engine:** `preset.rs` (`PresetSpec`/`PresetEntry`, parse/merge/
+  validate/apply/to_toml/save/remove — manifest edits via `toml_edit` with
+  rollback). All user layers (file, `--answer`, `--answers-json`) flow
+  through `spec.apply`; `answers::Layered` exposes the lock set +
+  constraints to UIs. `Template::preset()` remains as a locks-only
+  projection. `describe` reports `locks` + `constraints` per preset and
+  omits locked ids from the per-preset usage commands.
+- **CLI:** wizard skips locked rows (values still feed gates) with a
+  header note; constrained popups hide blocked choices and pin fixed
+  ones. `weft presets save` opens a tri-state authoring wizard (space
+  cycles free→fixed→blocked, nothing required, `x` clears) or runs
+  scripted via `--answer/--fix/--block`; `presets rm` removes both file
+  and declaration; after an interactive `weft new` on a local template,
+  a one-shot confirm offers to capture the answers as a preset.
+- **Server/Studio:** previews resolve through the merged spec (lock
+  conflicts are 400s); graph responses carry `locked` + `constraints`;
+  the Compose form shows a lock badge and constraint-aware multichoice
+  checkboxes; selecting a preset prunes now-locked client answers; the
+  preset dialog authors constraints per choice (free/fixed/blocked) and
+  the save API accepts `constraints` alongside plain `answers`.
+
 ## Post-MVP — Hub-composed templates (version reqs + lockfile)
 
 - **IncludeResolver trait** threads through `Template::load_inner`; the
