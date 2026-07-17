@@ -213,7 +213,9 @@ pub fn sample_part<'t>(
     })
 }
 
-fn strip_secrets(answers: &weft_core::AnswerSet) -> weft_core::AnswerSet {
+/// Drop secret values, keeping only plain answers (shared with resync's
+/// metadata persistence).
+pub(crate) fn strip_secrets(answers: &weft_core::AnswerSet) -> weft_core::AnswerSet {
     answers
         .iter()
         .filter(|(_, v)| !matches!(v, weft_core::Value::Secret(_)))

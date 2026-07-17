@@ -15,6 +15,7 @@ pub mod compose;
 pub mod describe;
 pub mod diff;
 pub mod fsio;
+pub mod generate;
 pub mod graph;
 pub mod hooks;
 pub mod init;

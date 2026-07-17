@@ -83,7 +83,7 @@ pub fn run(
         work_tree,
     } = session_trees(&template, interaction)?;
     let eval = StarlarkEval;
-    guard_mounts(&template, &sess, &base_tree, &work_tree)?;
+    guard_mounts(&template, sess.foreach.as_ref(), &base_tree, &work_tree)?;
 
     // Foreach patches render with `key` and `instance_<id>` in scope, so the
     // abstractor must see the sample instance's values under those names.
@@ -395,9 +395,10 @@ pub fn preview(template: &Template, interaction: &mut dyn Interaction) -> Result
 /// land under an include's mount: those files belong to the child template
 /// (for foreach sessions, the sample instance's mount; otherwise every
 /// include's static mount prefix — the declared path up to `{key}`).
-fn guard_mounts(
+/// Shared with `weft patch resync` (which never has a foreach session).
+pub(crate) fn guard_mounts(
     template: &Template,
-    sess: &Session,
+    foreach: Option<&crate::session::ForeachSession>,
     base_tree: &weft_core::Tree,
     work_tree: &weft_core::Tree,
 ) -> Result<()> {
@@ -405,7 +406,7 @@ fn guard_mounts(
         return Ok(());
     }
     let mut prefixes: Vec<(String, camino::Utf8PathBuf)> = Vec::new();
-    match &sess.foreach {
+    match foreach {
         Some(f) => {
             let inc = template.include(&f.include).context("include vanished")?;
             prefixes.push((
@@ -459,7 +460,20 @@ fn resolve_session_answers(
     interaction: &mut dyn Interaction,
 ) -> Result<AnswerSet> {
     let mut answers = sess.answers.clone();
-    for (id, spec_str) in &sess.secrets {
+    resolve_secret_refs(template, &sess.secrets, &mut answers, interaction)?;
+    Ok(answers)
+}
+
+/// Re-resolve stored secret *references* (`env:…`, `cmd:…`, `prompt`) into
+/// concrete values. Shared by commit (session secrets) and `weft patch
+/// resync` (generator secrets).
+pub(crate) fn resolve_secret_refs(
+    template: &Template,
+    refs: &std::collections::BTreeMap<weft_core::AnswerId, String>,
+    answers: &mut AnswerSet,
+    interaction: &mut dyn Interaction,
+) -> Result<()> {
+    for (id, spec_str) in refs {
         let question = template
             .manifest
             .questions
@@ -472,5 +486,5 @@ fn resolve_session_answers(
         let value = secrets::resolve(question, &spec, interaction)?;
         answers.insert(id.clone(), Value::Secret(value));
     }
-    Ok(answers)
+    Ok(())
 }

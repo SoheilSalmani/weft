@@ -31,7 +31,7 @@ enum Command {
         /// Destination directory (must be empty or absent). Defaults to `.`.
         #[arg(default_value = ".")]
         dest: Utf8PathBuf,
-        /// Apply a named preset (repeatable; later presets win).
+        /// Apply a named preset (repeatable; presets lock what they answer).
         #[arg(long = "preset")]
         presets: Vec<String>,
         /// Answer a question inline as KEY=VALUE (repeatable).
@@ -423,6 +423,31 @@ enum PatchCmd {
         #[arg(long, default_value = ".")]
         template: Utf8PathBuf,
     },
+    /// Re-run the stored generator command of patches recorded with
+    /// `weft record --exec` and rewrite their ops from the fresh output.
+    Resync {
+        /// Patch names to resync (or pass --all).
+        names: Vec<String>,
+        #[arg(long, default_value = ".")]
+        template: Utf8PathBuf,
+        /// Resync every generated patch, in dependency order.
+        #[arg(long)]
+        all: bool,
+        /// Override a stored record-time answer as KEY=VALUE (repeatable;
+        /// single named patch only; persisted into the metadata).
+        #[arg(long = "answer")]
+        answers: Vec<String>,
+        /// Replace the stored keep-literal specs, as ANSWER@PATH:LINE[:NTH]
+        /// (repeatable; single named patch only; persisted).
+        #[arg(long = "keep-literal")]
+        keep_literal: Vec<String>,
+        /// Report what would change without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -795,6 +820,67 @@ fn main() -> anyhow::Result<()> {
                 weft_engine::author::patch_set(&template, &opts)
             }
             PatchCmd::Ls { template } => weft_engine::author::patch_ls(&template),
+            PatchCmd::Resync {
+                names,
+                template,
+                all,
+                answers,
+                keep_literal,
+                dry_run,
+                json,
+            } => {
+                let opts = weft_engine::generate::ResyncOptions {
+                    template,
+                    names,
+                    all,
+                    answers,
+                    keep_literal,
+                    dry_run,
+                };
+                let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
+                let mut interaction = auto_interaction(false);
+                let report =
+                    weft_engine::generate::resync(&opts, &mut resolver, interaction.as_mut())?;
+                resolver.flush()?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    for entry in &report.entries {
+                        use weft_engine::generate::Outcome;
+                        match &entry.outcome {
+                            Outcome::UpToDate => eprintln!("{}: up to date", entry.name),
+                            Outcome::Rewritten { ops } => {
+                                eprintln!("{}: rewritten ({ops} op(s))", entry.name)
+                            }
+                            Outcome::WouldRewrite { ops } => {
+                                eprintln!("{}: would rewrite ({ops} op(s))", entry.name)
+                            }
+                            Outcome::Skipped { reason } => {
+                                eprintln!("{}: skipped — {reason}", entry.name)
+                            }
+                        }
+                    }
+                    for note in &report.notes {
+                        eprintln!("note: {note}");
+                    }
+                    for issue in &report.issues {
+                        eprintln!("issue: {issue}");
+                    }
+                    if report.entries.iter().any(|e| {
+                        matches!(e.outcome, weft_engine::generate::Outcome::Rewritten { .. })
+                    }) {
+                        eprintln!(
+                            "review with `git diff patches/`; run `weft check` to re-verify \
+                             the graph"
+                        );
+                    }
+                }
+                if report.issues.is_empty() {
+                    Ok(())
+                } else {
+                    std::process::exit(1);
+                }
+            }
         },
         Command::Hub { cmd } => match cmd {
             HubCmd::Publish {
