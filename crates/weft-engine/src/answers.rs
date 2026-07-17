@@ -243,6 +243,17 @@ pub fn layered_with_json(
     answer_args: &[String],
     answers_json: Option<&str>,
 ) -> Result<AnswerSet> {
+    Ok(layered_with_json_full(template, presets, answers_file, answer_args, answers_json)?.answers)
+}
+
+/// [`layered_with_json`] with the lock/constraint info exposed.
+pub fn layered_with_json_full(
+    template: &Template,
+    presets: &[String],
+    answers_file: Option<&Utf8Path>,
+    answer_args: &[String],
+    answers_json: Option<&str>,
+) -> Result<Layered> {
     // JSON is the highest user layer; the spec still applies over it.
     let mut specs = Vec::new();
     for preset in presets {
@@ -272,7 +283,11 @@ pub fn layered_with_json(
         }
         user.overlay(&set);
     }
-    spec.apply(&user)
+    Ok(Layered {
+        answers: spec.apply(&user)?,
+        locked: spec.locked(),
+        constraints: spec.constraints(),
+    })
 }
 
 /// Kind-appropriate stand-in values for trial-evaluating expressions

@@ -33,6 +33,7 @@ starlark = "0.14"
 tempfile = "3"
 thiserror = "2"
 toml = "0.8"
+toml_edit = "0.22"
 
 # dev
 assert_cmd = "2"

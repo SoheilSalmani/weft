@@ -301,6 +301,157 @@ impl PresetSpec {
         }
         Ok(out)
     }
+
+    /// Serialize back to a preset file body: lock entries first (TOML
+    /// scalars must precede tables), then one `[id]` table per constraint.
+    pub fn to_toml(&self) -> Result<String> {
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        for (id, entry) in &self.entries {
+            if let PresetEntry::Lock(v) = entry {
+                let tv = toml::Value::try_from(v.clone())
+                    .with_context(|| format!("serializing preset entry `{id}`"))?;
+                writeln!(out, "{} = {tv}", toml_key(&id.0))?;
+            }
+        }
+        for (id, entry) in &self.entries {
+            if let PresetEntry::Constraint { fixed, blocked } = entry {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                writeln!(out, "[{}]", toml_key(&id.0))?;
+                for (label, list) in [("fixed", fixed), ("blocked", blocked)] {
+                    if !list.is_empty() {
+                        let arr = toml::Value::Array(
+                            list.iter().cloned().map(toml::Value::String).collect(),
+                        );
+                        writeln!(out, "{label} = {arr}")?;
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// Quote a key unless it's a bare TOML key.
+fn toml_key(k: &str) -> String {
+    let bare = !k.is_empty()
+        && k.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'));
+    if bare {
+        k.to_owned()
+    } else {
+        format!("{k:?}")
+    }
+}
+
+/// Write `presets/<name>.toml` (creating or rewriting) and, when new, append
+/// the `[[preset]]` declaration to `weft.toml`. Validates against the
+/// template first and re-validates the saved file by reloading; any failure
+/// restores the previous state.
+pub fn save(root: &camino::Utf8Path, name: &str, spec: &PresetSpec) -> Result<()> {
+    let name_ok = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'));
+    if !name_ok {
+        bail!("preset name must be alphanumeric with - or _");
+    }
+    if spec.entries.is_empty() {
+        bail!("preset `{name}` is empty — answer or constrain at least one question");
+    }
+    let template = Template::load(root)?;
+    spec.validate(&template)?;
+
+    let existing = template.manifest.presets.iter().find(|p| p.name == name);
+    let file_rel = existing
+        .map(|d| d.file.clone())
+        .unwrap_or_else(|| format!("presets/{name}.toml").into());
+    let file_path = root.join(&file_rel);
+    let original_file = std::fs::read_to_string(&file_path).ok();
+
+    if let Some(parent) = file_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&file_path, spec.to_toml()?)?;
+
+    let restore_file = |original: &Option<String>| match original {
+        Some(content) => {
+            let _ = std::fs::write(&file_path, content);
+        }
+        None => {
+            let _ = std::fs::remove_file(&file_path);
+        }
+    };
+
+    if existing.is_none() {
+        let manifest_path = root.join(crate::template::MANIFEST_FILE);
+        let manifest_src = std::fs::read_to_string(&manifest_path)?;
+        let mut doc: toml_edit::DocumentMut = manifest_src
+            .parse()
+            .with_context(|| format!("parsing {manifest_path}"))?;
+        if doc.get("preset").is_none() {
+            doc["preset"] = toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new());
+        }
+        let Some(decls) = doc["preset"].as_array_of_tables_mut() else {
+            restore_file(&original_file);
+            bail!("`preset` in {manifest_path} is not an array of tables");
+        };
+        let mut t = toml_edit::Table::new();
+        t["name"] = toml_edit::value(name);
+        t["file"] = toml_edit::value(file_rel.as_str());
+        decls.push(t);
+        if let Err(e) = std::fs::write(&manifest_path, doc.to_string()) {
+            restore_file(&original_file);
+            return Err(e.into());
+        }
+    }
+
+    // The saved template must load and the preset must round-trip.
+    if let Err(e) = Template::load(root).and_then(|t| t.preset_spec(name)) {
+        restore_file(&original_file);
+        bail!("saved preset failed validation: {e:#}");
+    }
+    Ok(())
+}
+
+/// Remove a preset: its `[[preset]]` declaration and its file.
+pub fn remove(root: &camino::Utf8Path, name: &str) -> Result<()> {
+    let template = Template::load(root)?;
+    let decl = template
+        .manifest
+        .presets
+        .iter()
+        .find(|p| p.name == name)
+        .with_context(|| format!("no preset `{name}`"))?;
+    let file_path = root.join(&decl.file);
+
+    let manifest_path = root.join(crate::template::MANIFEST_FILE);
+    let manifest_src = std::fs::read_to_string(&manifest_path)?;
+    let mut doc: toml_edit::DocumentMut = manifest_src
+        .parse()
+        .with_context(|| format!("parsing {manifest_path}"))?;
+    let decls = doc
+        .get_mut("preset")
+        .and_then(|i| i.as_array_of_tables_mut())
+        .with_context(|| "no presets declared")?;
+    let idx = (0..decls.len())
+        .find(|&i| {
+            decls
+                .get(i)
+                .and_then(|t| t.get("name"))
+                .and_then(|v| v.as_str())
+                == Some(name)
+        })
+        .with_context(|| format!("no preset `{name}`"))?;
+    decls.remove(idx);
+    if decls.is_empty() {
+        doc.remove("preset");
+    }
+    std::fs::write(&manifest_path, doc.to_string())?;
+    let _ = std::fs::remove_file(&file_path);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -395,5 +546,16 @@ mod tests {
             out.get(&AnswerId::from("features")),
             Some(&Value::List(vec![Value::String("lint".into())]))
         );
+    }
+
+    #[test]
+    fn to_toml_round_trips() {
+        let s = spec(
+            "corp",
+            "name = \"Acme\"\nport = 8080\nuse_docker = true\n\n[features]\nfixed = [\"lint\"]\nblocked = [\"exp\"]\n",
+        );
+        let out = s.to_toml().unwrap();
+        let back = PresetSpec::parse("corp", &out).unwrap();
+        assert_eq!(back.entries, s.entries);
     }
 }

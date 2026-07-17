@@ -467,6 +467,32 @@ enum PresetsCommand {
         #[arg(default_value = ".")]
         template: Utf8PathBuf,
     },
+    /// Create or update a preset: a tri-state wizard in a terminal (answer =
+    /// lock; multichoice options cycle free/fixed/blocked), or scripted via
+    /// --answer/--fix/--block with --non-interactive.
+    Save {
+        name: String,
+        #[arg(default_value = ".")]
+        template: Utf8PathBuf,
+        /// Lock an answer as KEY=VALUE (repeatable).
+        #[arg(long = "answer")]
+        answers: Vec<String>,
+        /// Always-select a multichoice option, as KEY=CHOICE (repeatable).
+        #[arg(long = "fix")]
+        fix: Vec<String>,
+        /// Never allow a multichoice option, as KEY=CHOICE (repeatable).
+        #[arg(long = "block")]
+        block: Vec<String>,
+        /// Skip the wizard; use only the flags.
+        #[arg(long)]
+        non_interactive: bool,
+    },
+    /// Remove a preset: its declaration in weft.toml and its file.
+    Rm {
+        name: String,
+        #[arg(default_value = ".")]
+        template: Utf8PathBuf,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -520,7 +546,7 @@ fn main() -> anyhow::Result<()> {
                 skip_tasks,
                 stored_ref,
             };
-            maybe_wizard(
+            let wizard_ran = maybe_wizard(
                 &opts.template,
                 &opts.presets,
                 opts.answers_file.as_deref(),
@@ -533,7 +559,21 @@ fn main() -> anyhow::Result<()> {
             let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), frozen);
             let result = weft_engine::new::run(&opts, &mut resolver, interaction.as_mut());
             resolver.flush()?;
-            result
+            result?;
+            // Offer to capture the answers as a preset — local templates
+            // only (a hub/cache copy isn't the author's working tree).
+            if wizard_ran && opts.stored_ref.is_none() {
+                if let Err(e) = offer_preset_capture(
+                    &opts.template,
+                    opts.answers_file.as_deref(),
+                    &opts.answers,
+                    opts.answers_json.as_deref(),
+                    interaction.as_mut(),
+                ) {
+                    eprintln!("preset capture skipped: {e:#}");
+                }
+            }
+            Ok(())
         }
         Command::Update {
             dest,
@@ -908,8 +948,94 @@ fn main() -> anyhow::Result<()> {
                 let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
                 let template = Template::load_with(&template, &mut resolver)?;
                 resolver.flush()?;
-                let answers = template.preset(&name)?;
-                print!("{}", toml::to_string_pretty(&answers)?);
+                let spec = template.preset_spec(&name)?;
+                for (id, value) in spec.lock_answers().iter() {
+                    let tv = toml::Value::try_from(value.clone())?;
+                    println!("{id} = {tv} (locked)");
+                }
+                for (id, (fixed, blocked)) in spec.constraints() {
+                    let mut parts = Vec::new();
+                    if !fixed.is_empty() {
+                        parts.push(format!("fixed: {}", fixed.join(", ")));
+                    }
+                    if !blocked.is_empty() {
+                        parts.push(format!("blocked: {}", blocked.join(", ")));
+                    }
+                    println!("{id}: {}", parts.join(" · "));
+                }
+                Ok(())
+            }
+            PresetsCommand::Save {
+                name,
+                template: dir,
+                answers,
+                fix,
+                block,
+                non_interactive,
+            } => {
+                use weft_engine::preset::{PresetEntry, PresetSpec};
+                let template = Template::load(&dir)?;
+
+                // Flag prefills: --answer locks, --fix/--block constraints.
+                let mut locks = std::collections::BTreeMap::new();
+                for arg in &answers {
+                    let (id, value) =
+                        weft_engine::answers::parse_answer_arg(&template.manifest.questions, arg)?;
+                    locks.insert(id, value);
+                }
+                let mut constraints: std::collections::BTreeMap<
+                    weft_core::AnswerId,
+                    (Vec<String>, Vec<String>),
+                > = std::collections::BTreeMap::new();
+                for (args, blocked_side) in [(&fix, false), (&block, true)] {
+                    for arg in args.iter() {
+                        let (key, choice) = arg.split_once('=').ok_or_else(|| {
+                            anyhow::anyhow!("--fix/--block {arg:?} is not KEY=CHOICE")
+                        })?;
+                        let entry = constraints
+                            .entry(weft_core::AnswerId(key.to_owned()))
+                            .or_default();
+                        let side = if blocked_side {
+                            &mut entry.1
+                        } else {
+                            &mut entry.0
+                        };
+                        side.push(choice.to_owned());
+                    }
+                }
+
+                let (locks, constraints) = if tui::interactive(non_interactive) {
+                    wizard::run_author(
+                        &template.manifest.template.name,
+                        &template.manifest.questions,
+                        locks,
+                        constraints,
+                        &weft_engine::eval(),
+                    )?
+                } else {
+                    (locks, constraints)
+                };
+
+                let mut spec = PresetSpec::default();
+                for (id, value) in locks {
+                    spec.sources.insert(id.clone(), name.clone());
+                    spec.entries.insert(id, PresetEntry::Lock(value));
+                }
+                for (id, (fixed, blocked)) in constraints {
+                    spec.sources.insert(id.clone(), name.clone());
+                    spec.entries
+                        .insert(id, PresetEntry::Constraint { fixed, blocked });
+                }
+                weft_engine::preset::save(&dir, &name, &spec)?;
+                println!("saved preset `{name}`");
+                Ok(())
+            }
+            PresetsCommand::Rm {
+                name,
+                template: dir,
+            } => {
+                weft_engine::preset::remove(&dir, &name)?;
+                println!("removed preset `{name}`");
                 Ok(())
             }
         },
@@ -1091,7 +1217,7 @@ fn main() -> anyhow::Result<()> {
 
 /// Run the full-screen wizard when interactive (TTY, not --non-interactive,
 /// not --no-wizard) and stash its answers as the highest-precedence JSON
-/// layer. Falls through silently otherwise.
+/// layer. Falls through silently otherwise. Returns whether the wizard ran.
 #[allow(clippy::too_many_arguments)]
 fn maybe_wizard(
     template_dir: &Utf8PathBuf,
@@ -1101,24 +1227,30 @@ fn maybe_wizard(
     answers_json: &mut Option<String>,
     non_interactive: bool,
     no_wizard: bool,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     use std::io::IsTerminal;
     if non_interactive || no_wizard || !std::io::stdin().is_terminal() {
-        return Ok(());
+        return Ok(false);
     }
     let template = Template::load(template_dir)?;
-    let provided = weft_engine::answers::layered_with_json(
+    let layered = weft_engine::answers::layered_with_json_full(
         &template,
         presets,
         answers_file,
         answer_args,
         answers_json.as_deref(),
     )?;
+    let provided = layered.answers;
+    let locks = wizard::PresetLocks {
+        locked: layered.locked,
+        constraints: layered.constraints,
+    };
     let eval = weft_engine::eval();
     let entered = wizard::run(
         &template.manifest.template.name,
         &template.manifest.questions,
         &provided,
+        &locks,
         &eval,
     )?;
     if !entered.is_empty() {
@@ -1134,6 +1266,58 @@ fn maybe_wizard(
             .collect();
         *answers_json = Some(serde_json::to_string(&map)?);
     }
+    Ok(true)
+}
+
+/// After an interactive `weft new` succeeds against a *local* template,
+/// offer once to capture the user's answers (flags/file/wizard — not preset
+/// locks or defaults) as a new preset in that template.
+fn offer_preset_capture(
+    template_dir: &Utf8PathBuf,
+    answers_file: Option<&camino::Utf8Path>,
+    answer_args: &[String],
+    answers_json: Option<&str>,
+    interaction: &mut dyn weft_engine::interact::Interaction,
+) -> anyhow::Result<()> {
+    use weft_engine::preset::{PresetEntry, PresetSpec};
+    let template = Template::load(template_dir)?;
+    // No presets selected here: only the user's own layers are captured.
+    let captured = weft_engine::answers::layered_with_json(
+        &template,
+        &[],
+        answers_file,
+        answer_args,
+        answers_json,
+    )?;
+    if captured.iter().next().is_none() {
+        return Ok(());
+    }
+    if !interaction.confirm("Save these answers as a preset of the template?", false)? {
+        return Ok(());
+    }
+    let name_question = weft_core::Question {
+        id: weft_core::AnswerId("preset_name".into()),
+        kind: weft_core::AnswerKind::String,
+        prompt: Some("preset name".into()),
+        description: None,
+        example: None,
+        default: None,
+        when: None,
+        computed: false,
+        section: None,
+    };
+    let name = match interaction.ask(&name_question, None)? {
+        weft_core::Value::String(s) => s,
+        _ => anyhow::bail!("preset name must be a string"),
+    };
+    let mut spec = PresetSpec::default();
+    for (id, value) in captured.iter() {
+        spec.sources.insert(id.clone(), name.clone());
+        spec.entries
+            .insert(id.clone(), PresetEntry::Lock(value.clone()));
+    }
+    weft_engine::preset::save(template_dir, &name, &spec)?;
+    println!("saved preset `{name}` in {template_dir}");
     Ok(())
 }
 
