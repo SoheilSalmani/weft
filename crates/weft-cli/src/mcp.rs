@@ -295,6 +295,7 @@ impl WeftMcp {
         let template_dir = self.template_dir(&p.template)?;
         let opts = weft_engine::record::RecordOptions {
             foreach: None,
+            exec: None,
             template: template_dir,
             base: "latest".into(),
             presets: p.presets.clone(),

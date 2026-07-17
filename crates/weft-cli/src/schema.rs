@@ -136,6 +136,31 @@ pub struct PatchFile {
     /// of the content hash, so adding/editing a hook never changes patch ids.
     #[serde(default)]
     pub hooks: Vec<Hook>,
+    /// Present when this patch was recorded from a command's output
+    /// (`weft record --exec`). Metadata: never part of the content hash.
+    #[serde(default)]
+    pub generator: Option<Generator>,
+}
+
+/// The command a generated patch was recorded from, plus what
+/// `weft patch resync` needs to re-run it deterministically.
+#[derive(JsonSchema, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Generator {
+    /// Shell command run in the recording worktree: a plain string when
+    /// literal, or an array of segments to interpolate answers/exprs.
+    pub command: Command,
+    /// Record-time answers the base was rendered with (secrets excluded).
+    #[serde(default)]
+    pub answers: std::collections::BTreeMap<String, serde_json::Value>,
+    /// Secret answers as source references (`env:…`, `cmd:…`, `prompt`),
+    /// re-resolved at resync time — values never appear here.
+    #[serde(default)]
+    pub secrets: std::collections::BTreeMap<String, String>,
+    /// Occurrences kept literal at commit (`ANSWER@PATH:LINE[:NTH]`),
+    /// replayed on resync.
+    #[serde(default)]
+    pub keep_literal: Vec<String>,
 }
 
 /// A patch-scoped side-effect that runs before (`pre`) or after (`post`) the

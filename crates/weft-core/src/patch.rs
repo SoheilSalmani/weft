@@ -51,6 +51,11 @@ pub struct PatchMeta {
     /// editing a hook never changes the patch id (like `description`/`tags`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hooks: Vec<Hook>,
+    /// Present when this patch's content was produced by `weft record
+    /// --exec`: the command plus what `weft patch resync` needs to re-run
+    /// it. Not hashed — like every other metadata field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generator: Option<crate::generator::Generator>,
 }
 
 /// The hashed portion of a patch. Field order is the canonical key order.
@@ -213,6 +218,7 @@ mod tests {
 
     #[test]
     fn metadata_never_changes_the_id() {
+        use crate::generator::Generator;
         use crate::hook::{Command, Hook, HookEffect, HookPhase};
         let plain = sample_patch();
         let documented = sample_patch().with_meta(PatchMeta {
@@ -230,6 +236,12 @@ mod tests {
                 after: vec![],
                 inputs: vec![],
             }],
+            generator: Some(Generator {
+                command: Command::literal("npx shadcn@latest add button"),
+                answers: crate::AnswerSet::new(),
+                secrets: Default::default(),
+                keep_literal: vec![],
+            }),
         });
         assert_eq!(plain.id, documented.id);
         assert_eq!(plain.canonical_json(), documented.canonical_json());

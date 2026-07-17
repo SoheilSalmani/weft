@@ -153,6 +153,11 @@ enum Command {
         /// back out into a `foreach` patch.
         #[arg(long)]
         foreach: Option<String>,
+        /// Run this command in the rendered worktree; its output becomes the
+        /// patch and the command is stored so `weft patch resync` can re-run
+        /// it (e.g. --exec "npx shadcn@latest add button").
+        #[arg(long)]
+        exec: Option<String>,
         /// Discard an existing session instead of failing.
         #[arg(long)]
         force: bool,
@@ -846,6 +851,7 @@ fn main() -> anyhow::Result<()> {
             answers,
             answers_file,
             foreach,
+            exec,
             force,
             non_interactive,
             no_wizard,
@@ -858,6 +864,7 @@ fn main() -> anyhow::Result<()> {
                 answers_file,
                 answers_json: None,
                 foreach,
+                exec,
                 force,
             };
             maybe_wizard(

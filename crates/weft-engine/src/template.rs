@@ -38,6 +38,10 @@ pub struct PatchFile {
     /// Pre/post-render side-effects owned by this patch (never hashed).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hooks: Vec<Hook>,
+    /// The generator command this patch was recorded from, if any
+    /// (`weft record --exec`; never hashed — see `weft_core::Generator`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generator: Option<weft_core::Generator>,
 }
 
 /// A loaded template: manifest plus the patch DAG with resolved ids, plus
@@ -328,6 +332,7 @@ impl Template {
             foreach,
             ops,
             hooks: meta.hooks,
+            generator: meta.generator,
         };
         let dir = self.root.join(PATCHES_DIR);
         std::fs::create_dir_all(&dir)?;
@@ -378,6 +383,7 @@ fn resolve_patches(
                     description: file.description,
                     tags: file.tags,
                     hooks: file.hooks,
+                    generator: file.generator,
                 },
             );
             resolved.insert(name, patch.id);

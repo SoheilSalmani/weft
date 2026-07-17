@@ -27,6 +27,10 @@ pub struct RecordOptions {
     /// instance of the include into the base; commit abstracts the sample
     /// key back out and writes a `foreach` patch.
     pub foreach: Option<String>,
+    /// Run this command in the freshly rendered worktree; its output becomes
+    /// the patch, and commit stores it as generator metadata so `weft patch
+    /// resync` can re-run it later.
+    pub exec: Option<String>,
     /// Discard an existing session instead of erroring.
     pub force: bool,
 }
@@ -125,6 +129,31 @@ pub fn run(
     std::fs::create_dir_all(&worktree)?;
     fsio::write_tree(&worktree, &tree)?;
 
+    // `--exec`: the command's output *is* the patch content. Run it now so
+    // the author can inspect (`weft diff`) before committing; the command is
+    // held in the session and stored on the patch at commit.
+    let generator = match &opts.exec {
+        Some(cmd) => {
+            if foreach.is_some() {
+                bail!("--exec cannot be combined with --foreach (unsupported for resync)");
+            }
+            let command = weft_core::Command::literal(cmd);
+            if let Err(e) =
+                crate::hooks::run_command(&command, "generator", &worktree, &resolved, &eval)
+            {
+                // Nothing committed yet — don't leave a broken session behind.
+                let _ = std::fs::remove_dir_all(session::record_dir(&opts.template));
+                return Err(e.context("running the generator command"));
+            }
+            let after = fsio::read_tree(&worktree)?;
+            Some(session::PendingGenerator {
+                command,
+                tree_hash_after_exec: after.hash(),
+            })
+        }
+        None => None,
+    };
+
     let secret_specs: BTreeMap<_, _> = template
         .manifest
         .questions
@@ -144,6 +173,7 @@ pub fn run(
         answers: strip_secrets(&resolved),
         secrets: secret_specs,
         foreach,
+        generator,
     };
     sess.save(&opts.template)?;
 

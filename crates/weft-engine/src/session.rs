@@ -27,6 +27,20 @@ pub struct Session {
     /// concrete example.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub foreach: Option<ForeachSession>,
+    /// Present when this session was started with `weft record --exec`:
+    /// commit attaches the command as the new patch's generator metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generator: Option<PendingGenerator>,
+}
+
+/// The generator command a `weft record --exec` session ran, held until
+/// commit turns it into `weft_core::Generator` metadata.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PendingGenerator {
+    pub command: weft_core::Command,
+    /// Worktree hash right after the command ran — commit warns when the
+    /// author edited on top (those edits would be lost on resync).
+    pub tree_hash_after_exec: String,
 }
 
 /// The sample instance of a `weft record --foreach include=key` session.

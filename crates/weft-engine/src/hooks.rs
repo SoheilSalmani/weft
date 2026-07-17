@@ -187,24 +187,44 @@ pub fn run(
                 continue;
             }
         }
-        let command = weft_core::render::render_segments(&hook.action.0, answers, eval)
-            .with_context(|| format!("rendering command for hook `{}`", hook.id))?;
-        // Never echo an interpolated command — it may contain a resolved
-        // secret. Literal commands are safe to show in full.
-        if hook.action.is_literal() {
-            eprintln!("hook {} — {}: {command}", hook.id, hook.label);
-        } else {
-            eprintln!("hook {} — {}", hook.id, hook.label);
-        }
-        let status = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(&command)
-            .current_dir(cwd)
-            .status()
-            .with_context(|| format!("spawning hook `{}`", hook.id))?;
-        if !status.success() {
-            bail!("hook `{}` ({}) failed with {status}", hook.id, hook.label);
-        }
+        run_command(
+            &hook.action,
+            &format!("hook {} — {}", hook.id, hook.label),
+            cwd,
+            answers,
+            eval,
+        )?;
+    }
+    Ok(())
+}
+
+/// Render and run one interpolatable command with `sh -c` in `cwd`.
+/// Shared by hook execution and generator commands (`weft record --exec`,
+/// `weft patch resync`). `label` prefixes the log line and error.
+pub fn run_command(
+    action: &weft_core::Command,
+    label: &str,
+    cwd: &Utf8Path,
+    answers: &AnswerSet,
+    eval: &dyn ExprEval,
+) -> Result<()> {
+    let command = weft_core::render::render_segments(&action.0, answers, eval)
+        .with_context(|| format!("rendering command for {label}"))?;
+    // Never echo an interpolated command — it may contain a resolved
+    // secret. Literal commands are safe to show in full.
+    if action.is_literal() {
+        eprintln!("{label}: {command}");
+    } else {
+        eprintln!("{label}");
+    }
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&command)
+        .current_dir(cwd)
+        .status()
+        .with_context(|| format!("spawning {label}"))?;
+    if !status.success() {
+        bail!("{label} failed with {status}");
     }
     Ok(())
 }

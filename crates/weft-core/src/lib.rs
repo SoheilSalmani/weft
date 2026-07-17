@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod generator;
 pub mod hook;
 pub mod id;
 pub mod merge;
@@ -15,6 +16,7 @@ pub mod segment;
 pub mod tree;
 pub mod value;
 
+pub use generator::Generator;
 pub use hook::{Command, Hook, HookEffect, HookInput, HookPhase};
 pub use id::{AnswerId, HookId, PatchId};
 pub use patch::{Hunk, Op, Patch, PatchMeta, DEFAULT_FILE_MODE};

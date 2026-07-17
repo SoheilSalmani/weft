@@ -102,6 +102,16 @@ pub fn run(
         }
         None => Abstractor::from_answers(&answers),
     };
+    // Generator sessions warn when the author edited on top of the command's
+    // output — resync re-runs the command only, so those edits won't survive.
+    if let Some(pending) = &sess.generator {
+        if work_tree.hash() != pending.tree_hash_after_exec {
+            eprintln!(
+                "warning: the worktree was edited after the generator command ran; \
+                 those edits will be lost on `weft patch resync`"
+            );
+        }
+    }
     let keep_literal = parse_keep_literal(&opts.keep_literal)?;
     let ops = match &opts.decisions {
         Some(decisions) => {
@@ -119,7 +129,10 @@ pub fn run(
                 &keep_literal,
             )
         }
-        None if !keep_literal.is_empty() => {
+        // Generator sessions always take the scripted path (confirm-all
+        // minus --keep-literal): interactive per-occurrence choices can't be
+        // replayed by resync, so they are disabled here.
+        None if !keep_literal.is_empty() || sess.generator.is_some() => {
             // Scripted per-occurrence decisions: confirm everything (the
             // --yes semantics) minus the kept-literal occurrences.
             let texts = diff::collect_texts(&base_tree, &work_tree);
@@ -175,6 +188,14 @@ pub fn run(
         );
     }
 
+    // A generator session stores the command + record-time answers (secrets
+    // as source refs) so `weft patch resync` can reproduce this patch.
+    let generator = sess.generator.as_ref().map(|p| weft_core::Generator {
+        command: p.command.clone(),
+        answers: sess.answers.clone(),
+        secrets: sess.secrets.clone(),
+        keep_literal: opts.keep_literal.clone(),
+    });
     template.write_patch_full(
         &name,
         depends_on,
@@ -186,6 +207,7 @@ pub fn run(
             description: opts.describe.clone(),
             tags: opts.tags.clone(),
             hooks: vec![],
+            generator,
         },
     )?;
     Session::discard(&opts.template)?;
