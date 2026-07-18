@@ -3,6 +3,39 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Patch editing (set-command, detach, amend, squash)
+
+- **The insight:** in a content-addressed Merkle DAG, editing/amending/
+  squashing are all one operation — a subgraph rebase — since changing any
+  patch's content/deps rewrites descendant ids. The shared "engine" is
+  resync's existing detection (post-render names the broken dependent).
+- **`weft patch set-command NAME [CMD] [--resync]`** (author.rs): replace a
+  generator patch's stored command (parse_command interp + $EDITOR); refuses
+  non-generators; metadata-only (id unchanged).
+- **`weft patch detach NAME`**: drop generator metadata → plain editable
+  patch (resync no longer applies). The escape hatch for owning generated
+  content by hand.
+- **`weft patch amend NAME`** (new amend.rs): reopens the patch's
+  contribution in a worktree (base = ancestors via ancestor_closure minus
+  self; seed = base + apply_ops(target) to force it on regardless of gate);
+  `weft commit` branches on `Session.amend` (new field) → amend::finish
+  re-derives ops, preserves name/deps/gate/foreach/meta, save_patch_file in
+  place. Refuses generators (redirect resync/set-command/detach) and foreach.
+  Non-leaf: allowed — after write, a full render under the amend answers
+  surfaces a broken dependent (bail with re-record guidance; the amend is
+  kept — the rebase-conflict path, matching resync). Most edits don't move a
+  dependent's anchor so they just work.
+- **`weft patch squash NAMES… --into NAME`** (new squash.rs): ops
+  concatenated in topo order (already abstracted → NO answers/re-abstraction
+  needed — the elegant approach), external deps unioned, external dependents
+  repointed, hooks unioned. Guards: convex set (no outsider between members),
+  same gate, no generator/foreach. Snapshot→write→reload-validate→rollback
+  transaction.
+- e2e tests/e2e/tests/patch_edit.rs (9). Deferred (roadmap): pinned-project
+  id-migration (weft update can't follow rewritten ids yet — the true long
+  pole for using these on published templates), weft patch split, guided
+  interactive rebase loop.
+
 ## Post-MVP — Binary file support
 
 - **Problem:** `record --exec 'pnpm dlx shadcn init'` emits `favicon.ico`
