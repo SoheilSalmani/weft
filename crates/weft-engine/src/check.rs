@@ -530,7 +530,10 @@ pub fn answer_refs(patch: &Patch) -> BTreeSet<AnswerId> {
                     visit_lines(&hunk.context_after, &mut out);
                 }
             }
-            Op::DeleteFile { path } | Op::SetMode { path, .. } => visit_path(path, &mut out),
+            // Binary data is opaque; only the path can reference answers.
+            Op::DeleteFile { path }
+            | Op::SetMode { path, .. }
+            | Op::CreateBinaryFile { path, .. } => visit_path(path, &mut out),
             Op::RenamePath { from, to } => {
                 visit_path(from, &mut out);
                 visit_path(to, &mut out);

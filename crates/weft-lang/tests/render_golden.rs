@@ -90,7 +90,7 @@ fn show_tree(tree: &Tree) -> String {
     let mut out = String::new();
     for (path, entry) in tree.iter() {
         out.push_str(&format!("=== {} (mode {:o})\n", path, entry.mode));
-        out.push_str(&entry.content);
+        out.push_str(entry.content.text().unwrap_or("<binary>"));
     }
     out
 }

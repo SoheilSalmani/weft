@@ -447,15 +447,23 @@ fn plan_file(
             "template deleted a file you modified; kept your version".to_owned(),
         )),
         (Some(o), Some(t)) => {
-            let base_text = base.map(|e| e.content.as_str()).unwrap_or("");
-            let outcome = merge3(base_text, &o.content, &t.content);
+            // A binary side can't be line-merged (and conflict markers can't
+            // be written into bytes): keep the user's version, note it.
+            let (Some(ours_text), Some(theirs_text)) = (o.content.text(), t.content.text()) else {
+                return Some(Action::Note(
+                    "template changed a binary file you also modified; kept your version"
+                        .to_owned(),
+                ));
+            };
+            let base_text = base.and_then(|e| e.content.text()).unwrap_or("");
+            let outcome = merge3(base_text, ours_text, theirs_text);
             let mode = if base.map(|e| e.mode) == Some(o.mode) {
                 t.mode
             } else {
                 o.mode
             };
             let entry = FileEntry {
-                content: outcome.text,
+                content: outcome.text.into(),
                 mode,
             };
             if outcome.conflicts == 0 {

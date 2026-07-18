@@ -9,6 +9,7 @@ description = "Weft record/commit/apply/update orchestration and worktree manage
 weft-core.workspace = true
 weft-lang.workspace = true
 anyhow.workspace = true
+base64.workspace = true
 blake3.workspace = true
 camino.workspace = true
 dialoguer.workspace = true

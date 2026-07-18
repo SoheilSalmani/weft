@@ -21,12 +21,13 @@ pub fn collect_texts<'t>(base: &'t Tree, work: &'t Tree) -> Vec<&'t str> {
         match base.get(path) {
             None => {
                 texts.push(path.as_str());
-                texts.push(&entry.content);
+                // Binary content is opaque — only paths feed the abstractor.
+                texts.extend(entry.content.text());
             }
             Some(base_entry) if base_entry.content != entry.content => {
                 texts.push(path.as_str());
-                texts.push(&entry.content);
-                texts.push(&base_entry.content);
+                texts.extend(entry.content.text());
+                texts.extend(base_entry.content.text());
             }
             Some(_) => {}
         }
@@ -66,11 +67,18 @@ pub fn added_occurrences(
 ) -> Vec<crate::abstraction::Occurrence> {
     let mut out = Vec::new();
     for (path, entry) in work.iter() {
+        // Binary files carry no abstractable occurrences.
+        let Some(text) = entry.content.text() else {
+            continue;
+        };
         match base.get(path) {
-            None => out.extend(abstractor.occurrences_in(path, &entry.content, None)),
+            None => out.extend(abstractor.occurrences_in(path, text, None)),
             Some(base_entry) if base_entry.content != entry.content => {
-                let added = added_line_numbers(&base_entry.content, &entry.content);
-                out.extend(abstractor.occurrences_in(path, &entry.content, Some(&added)));
+                let Some(base_text) = base_entry.content.text() else {
+                    continue;
+                };
+                let added = added_line_numbers(base_text, text);
+                out.extend(abstractor.occurrences_in(path, text, Some(&added)));
             }
             Some(_) => {}
         }
@@ -165,20 +173,32 @@ pub fn build_ops_decided(
     for (path, entry) in work.iter() {
         if let Some(base_entry) = base.get(path) {
             if base_entry.content != entry.content {
-                let hunks = hunks_between(&base_entry.content, &entry.content, |line, new_line| {
-                    match new_line {
-                        // Added lines are authored: exceptions apply.
-                        Some(line_no) => {
-                            abstractor.line_at(path, line_no, line, confirmed, excepted)
-                        }
-                        // Context/removed lines mirror the base render.
-                        None => abstractor.line(line, confirmed),
+                match (base_entry.content.text(), entry.content.text()) {
+                    (Some(base_text), Some(text)) => {
+                        let hunks = hunks_between(base_text, text, |line, new_line| {
+                            match new_line {
+                                // Added lines are authored: exceptions apply.
+                                Some(line_no) => {
+                                    abstractor.line_at(path, line_no, line, confirmed, excepted)
+                                }
+                                // Context/removed lines mirror the base render.
+                                None => abstractor.line(line, confirmed),
+                            }
+                        });
+                        ops.push(Op::ModifyFile {
+                            path: abstractor.path(path.as_str(), confirmed),
+                            hunks,
+                        });
                     }
-                });
-                ops.push(Op::ModifyFile {
-                    path: abstractor.path(path.as_str(), confirmed),
-                    hunks,
-                });
+                    // Any binary side: no hunks — replace wholesale
+                    // (delete + create in this one patch, applied in order).
+                    _ => {
+                        ops.push(Op::DeleteFile {
+                            path: abstractor.path(path.as_str(), confirmed),
+                        });
+                        ops.push(create_op(path, entry, abstractor, confirmed, excepted));
+                    }
+                }
             }
             if base_entry.mode != entry.mode {
                 ops.push(Op::SetMode {
@@ -191,14 +211,36 @@ pub fn build_ops_decided(
     // Then creations.
     for (path, entry) in work.iter() {
         if base.get(path).is_none() && !renamed_to.contains(path) {
-            ops.push(Op::CreateFile {
-                path: abstractor.path(path.as_str(), confirmed),
-                content: abstractor.content_at(path, &entry.content, confirmed, excepted),
-                mode: entry.mode,
-            });
+            ops.push(create_op(path, entry, abstractor, confirmed, excepted));
         }
     }
     ops
+}
+
+/// The create op for one worktree file: text content is abstracted; binary
+/// content is stored as an opaque base64 blob (the path still abstracts).
+fn create_op(
+    path: &camino::Utf8Path,
+    entry: &weft_core::FileEntry,
+    abstractor: &Abstractor,
+    confirmed: &std::collections::BTreeMap<weft_core::AnswerId, bool>,
+    excepted: &crate::abstraction::Excepted,
+) -> Op {
+    match entry.content.text() {
+        Some(text) => Op::CreateFile {
+            path: abstractor.path(path.as_str(), confirmed),
+            content: abstractor.content_at(path, text, confirmed, excepted),
+            mode: entry.mode,
+        },
+        None => {
+            use base64::Engine as _;
+            Op::CreateBinaryFile {
+                path: abstractor.path(path.as_str(), confirmed),
+                data: base64::engine::general_purpose::STANDARD.encode(entry.content.as_bytes()),
+                mode: entry.mode,
+            }
+        }
+    }
 }
 
 /// Context-anchored hunks from concrete old/new text. Change runs closer than

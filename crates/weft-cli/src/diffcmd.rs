@@ -117,6 +117,12 @@ fn print_file(style: &Style, file: &PreviewFile, spans: &SpanMap, abstracted: bo
     };
     println!("{marker}");
 
+    // Binary content is opaque — one summary line instead of a body.
+    if file.binary {
+        println!("  {}", style.dim("(binary file)"));
+        println!();
+        return;
+    }
     match file.change {
         "created" => {
             for (i, line) in file.after.lines().enumerate() {

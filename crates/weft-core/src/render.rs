@@ -95,6 +95,13 @@ pub enum RenderError {
     },
     #[error("rendered path {0:?} is invalid (must be relative, `/`-separated, no `..`)")]
     InvalidPath(String),
+    #[error(
+        "patch {patch}: `{path}` is a binary file; text hunks cannot apply — \
+         replace it wholesale (delete + create_binary_file)"
+    )]
+    BinaryModify { patch: PatchId, path: Utf8PathBuf },
+    #[error("patch {patch}: create_binary_file `{path}` carries invalid base64 data")]
+    InvalidBinaryData { patch: PatchId, path: Utf8PathBuf },
 }
 
 /// Resolve the full answer set for `questions` from layered `provided`
@@ -410,7 +417,30 @@ fn apply_patch(
                 tree.insert(
                     path,
                     FileEntry {
-                        content: text,
+                        content: text.into(),
+                        mode: *mode,
+                    },
+                );
+            }
+            Op::CreateBinaryFile { path, data, mode } => {
+                let path = render_path(path, answers, eval)?;
+                if tree.get(&path).is_some() {
+                    return Err(RenderError::CreateExists {
+                        patch: patch.id,
+                        path,
+                    });
+                }
+                use base64::Engine as _;
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .map_err(|_| RenderError::InvalidBinaryData {
+                        patch: patch.id,
+                        path: path.clone(),
+                    })?;
+                tree.insert(
+                    path,
+                    FileEntry {
+                        content: crate::tree::FileData::from_bytes(bytes),
                         mode: *mode,
                     },
                 );
@@ -421,7 +451,13 @@ fn apply_patch(
                     patch: patch.id,
                     path: path.clone(),
                 })?;
-                let mut lines: Vec<String> = entry.content.lines().map(str::to_owned).collect();
+                let Some(text) = entry.content.text() else {
+                    return Err(RenderError::BinaryModify {
+                        patch: patch.id,
+                        path,
+                    });
+                };
+                let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
                 for (i, hunk) in hunks.iter().enumerate() {
                     apply_hunk(&mut lines, hunk, answers, eval).map_err(|e| match e {
                         HunkApplyError::NoMatch => RenderError::HunkNoMatch {
@@ -442,7 +478,7 @@ fn apply_patch(
                 tree.insert(
                     path,
                     FileEntry {
-                        content: join_lines(&lines),
+                        content: join_lines(&lines).into(),
                         mode,
                     },
                 );
@@ -823,5 +859,61 @@ mod tests {
         let provided = answers(&[("use_docker", Value::Bool(false))]);
         let resolved = resolve_answers(&questions, &provided, &StubEval).unwrap();
         assert!(!resolved.contains(&"registry".into()));
+    }
+
+    #[test]
+    fn binary_file_renders_and_resists_hunks() {
+        use crate::patch::DEFAULT_FILE_MODE;
+        use base64::Engine as _;
+        let bytes: Vec<u8> = vec![0xff, 0xfe, 0x00, 0x89, 0x50];
+        let patch = Patch::new(
+            vec![],
+            None,
+            vec![Op::CreateBinaryFile {
+                path: TemplatePath::literal("app/favicon.ico"),
+                data: base64::engine::general_purpose::STANDARD.encode(&bytes),
+                mode: DEFAULT_FILE_MODE,
+            }],
+        );
+        let tree = render(std::slice::from_ref(&patch), &AnswerSet::new(), &StubEval).unwrap();
+        let entry = tree.get("app/favicon.ico".into()).unwrap();
+        assert_eq!(entry.content.as_bytes(), bytes.as_slice());
+        assert!(entry.content.is_binary());
+
+        // Text hunks cannot apply to a binary file.
+        let modify = Patch::new(
+            vec![patch.id],
+            None,
+            vec![Op::ModifyFile {
+                path: TemplatePath::literal("app/favicon.ico"),
+                hunks: vec![Hunk::default()],
+            }],
+        );
+        let err = render(&[patch.clone(), modify], &AnswerSet::new(), &StubEval).unwrap_err();
+        assert!(matches!(err, RenderError::BinaryModify { .. }), "{err}");
+
+        // Replacement is delete + create in one patch, applied in order.
+        let replace = Patch::new(
+            vec![patch.id],
+            None,
+            vec![
+                Op::DeleteFile {
+                    path: TemplatePath::literal("app/favicon.ico"),
+                },
+                Op::CreateBinaryFile {
+                    path: TemplatePath::literal("app/favicon.ico"),
+                    data: base64::engine::general_purpose::STANDARD.encode([0u8, 1, 2]),
+                    mode: DEFAULT_FILE_MODE,
+                },
+            ],
+        );
+        let tree = render(&[patch, replace], &AnswerSet::new(), &StubEval).unwrap();
+        assert_eq!(
+            tree.get("app/favicon.ico".into())
+                .unwrap()
+                .content
+                .as_bytes(),
+            &[0u8, 1, 2]
+        );
     }
 }

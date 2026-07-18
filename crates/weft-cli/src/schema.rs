@@ -79,6 +79,17 @@ pub enum Op {
         #[serde(default)]
         mode: Option<u32>,
     },
+    /// Create an opaque binary file (errors if it already exists). The
+    /// content is never abstracted or hunk-modified — replacing a binary is
+    /// `delete_file` + a new `create_binary_file` in the same patch.
+    CreateBinaryFile {
+        path: TemplatePath,
+        /// Raw bytes, standard-alphabet base64.
+        data: String,
+        /// Unix mode as decimal (420 = 0o644, 493 = 0o755). Default 420.
+        #[serde(default)]
+        mode: Option<u32>,
+    },
     /// Modify an existing file with context-anchored hunks.
     ModifyFile {
         path: TemplatePath,

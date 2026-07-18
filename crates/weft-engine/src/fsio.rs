@@ -13,7 +13,8 @@ pub fn write_tree(dest: &Utf8Path, tree: &Tree) -> Result<()> {
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&target, &entry.content).with_context(|| format!("writing {target}"))?;
+        std::fs::write(&target, entry.content.as_bytes())
+            .with_context(|| format!("writing {target}"))?;
         set_mode(&target, entry.mode)?;
     }
     Ok(())
@@ -25,12 +26,13 @@ pub fn write_file(dest: &Utf8Path, rel: &Utf8Path, entry: &FileEntry) -> Result<
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&target, &entry.content).with_context(|| format!("writing {target}"))?;
+    std::fs::write(&target, entry.content.as_bytes())
+        .with_context(|| format!("writing {target}"))?;
     set_mode(&target, entry.mode)
 }
 
 /// Read a directory back into a `Tree`, skipping `.weft/` and `.git/`.
-/// MVP is text-only: non-UTF-8 files are an error with a clear message.
+/// Valid UTF-8 files become text; other files are opaque binary blobs.
 pub fn read_tree(root: &Utf8Path) -> Result<Tree> {
     let mut tree = Tree::new();
     read_dir_into(root, root, &mut tree, None)?;
@@ -98,20 +100,24 @@ fn read_dir_into(
     Ok(())
 }
 
-/// Read one file with weft's text normalization (UTF-8 only; exactly one
-/// trailing newline, matching what rendering produces).
+/// Read one file: valid UTF-8 becomes normalized text (exactly one trailing
+/// newline, matching what rendering produces); anything else is an opaque
+/// binary blob.
 fn read_entry(path: &Utf8Path) -> Result<FileEntry> {
     let bytes = std::fs::read(path)?;
-    let mut content = String::from_utf8(bytes).map_err(|_| {
-        anyhow::anyhow!("`{path}` is not UTF-8 text; weft MVP handles text files only")
-    })?;
-    // Weft's text model normalizes files to exactly one trailing
-    // newline (rendering always produces that). Apply the same rule
-    // on read, or editor-written files without a final newline make
-    // replay-vs-worktree comparisons fail spuriously.
-    if !content.is_empty() && !content.ends_with('\n') {
-        content.push('\n');
-    }
+    let content = match weft_core::FileData::from_bytes(bytes) {
+        weft_core::FileData::Text(mut text) => {
+            // Weft's text model normalizes files to exactly one trailing
+            // newline (rendering always produces that). Apply the same rule
+            // on read, or editor-written files without a final newline make
+            // replay-vs-worktree comparisons fail spuriously.
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
+            weft_core::FileData::Text(text)
+        }
+        binary => binary,
+    };
     let mode = get_mode(path)?;
     Ok(FileEntry { content, mode })
 }
@@ -185,14 +191,28 @@ mod tests {
         std::fs::write(root.join("empty.txt"), "").unwrap();
 
         let tree = read_tree(root).unwrap();
-        assert_eq!(
-            tree.get("no-newline.txt".into()).unwrap().content,
-            "hello world\n"
-        );
-        assert_eq!(
-            tree.get("with-newline.txt".into()).unwrap().content,
-            "hello\n"
-        );
-        assert_eq!(tree.get("empty.txt".into()).unwrap().content, "");
+        let text = |p: &str| {
+            tree.get(p.into())
+                .unwrap()
+                .content
+                .text()
+                .unwrap()
+                .to_owned()
+        };
+        assert_eq!(text("no-newline.txt"), "hello world\n");
+        assert_eq!(text("with-newline.txt"), "hello\n");
+        assert_eq!(text("empty.txt"), "");
+    }
+
+    #[test]
+    fn read_tree_preserves_binary_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let bytes = [0xffu8, 0xfe, 0x00, 0x42];
+        std::fs::write(root.join("icon.bin"), bytes).unwrap();
+        let tree = read_tree(root).unwrap();
+        let entry = tree.get("icon.bin".into()).unwrap();
+        assert!(entry.content.is_binary());
+        assert_eq!(entry.content.as_bytes(), bytes);
     }
 }

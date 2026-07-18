@@ -6,6 +6,7 @@ license.workspace = true
 description = "Weft data model, patch algebra, and pure rendering"
 
 [dependencies]
+base64.workspace = true
 blake3.workspace = true
 camino.workspace = true
 serde.workspace = true

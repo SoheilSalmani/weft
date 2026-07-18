@@ -129,6 +129,14 @@ fn arb_op() -> impl Strategy<Value = Op> {
         (arb_path(), arb_path()).prop_map(|(from, to)| Op::RenamePath { from, to }),
         (arb_path(), prop_oneof![Just(0o644u32), Just(0o755u32)])
             .prop_map(|(path, mode)| Op::SetMode { path, mode }),
+        (arb_path(), prop::collection::vec(prop::num::u8::ANY, 0..64)).prop_map(|(path, bytes)| {
+            use base64::Engine as _;
+            Op::CreateBinaryFile {
+                path,
+                data: base64::engine::general_purpose::STANDARD.encode(bytes),
+                mode: DEFAULT_FILE_MODE,
+            }
+        }),
     ]
 }
 

@@ -332,6 +332,9 @@ pub struct PreviewFile {
     pub after: String,
     /// 1-based lines of `after` a diff marks as added (occurrence targets).
     pub added_lines: std::collections::BTreeSet<usize>,
+    /// Either side is binary: before/after are empty, content is opaque.
+    #[serde(default)]
+    pub binary: bool,
 }
 
 /// What `weft diff` (and UIs) show before a commit.
@@ -350,6 +353,9 @@ pub fn preview(template: &Template, interaction: &mut dyn Interaction) -> Result
     let candidates = abstractor.candidates(&texts);
     let occurrences = diff::added_occurrences(&trees.base_tree, &trees.work_tree, &abstractor);
 
+    // Binary sides show as opaque (empty text, `binary: true`) — previews
+    // and diffs never try to line-render bytes.
+    let text_of = |e: &weft_core::FileEntry| e.content.text().unwrap_or_default().to_owned();
     let mut files = Vec::new();
     for (path, entry) in trees.work_tree.iter() {
         match trees.base_tree.get(path) {
@@ -357,16 +363,27 @@ pub fn preview(template: &Template, interaction: &mut dyn Interaction) -> Result
                 path: path.clone(),
                 change: "created",
                 before: String::new(),
-                added_lines: (1..=entry.content.lines().count()).collect(),
-                after: entry.content.clone(),
+                added_lines: match entry.content.text() {
+                    Some(text) => (1..=text.lines().count()).collect(),
+                    None => Default::default(),
+                },
+                after: text_of(entry),
+                binary: entry.content.is_binary(),
             }),
-            Some(base_entry) if base_entry.content != entry.content => files.push(PreviewFile {
-                path: path.clone(),
-                change: "modified",
-                added_lines: diff::added_line_numbers(&base_entry.content, &entry.content),
-                before: base_entry.content.clone(),
-                after: entry.content.clone(),
-            }),
+            Some(base_entry) if base_entry.content != entry.content => {
+                let binary = base_entry.content.is_binary() || entry.content.is_binary();
+                files.push(PreviewFile {
+                    path: path.clone(),
+                    change: "modified",
+                    added_lines: match (base_entry.content.text(), entry.content.text()) {
+                        (Some(old), Some(new)) => diff::added_line_numbers(old, new),
+                        _ => Default::default(),
+                    },
+                    before: text_of(base_entry),
+                    after: text_of(entry),
+                    binary,
+                });
+            }
             Some(_) => {}
         }
     }
@@ -375,16 +392,14 @@ pub fn preview(template: &Template, interaction: &mut dyn Interaction) -> Result
         .paths()
         .filter(|p| trees.work_tree.get(p).is_none())
     {
+        let base_entry = trees.base_tree.get(path);
         files.push(PreviewFile {
             path: path.clone(),
             change: "deleted",
-            before: trees
-                .base_tree
-                .get(path)
-                .map(|e| e.content.clone())
-                .unwrap_or_default(),
+            before: base_entry.map(text_of).unwrap_or_default(),
             after: String::new(),
             added_lines: Default::default(),
+            binary: base_entry.is_some_and(|e| e.content.is_binary()),
         });
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));

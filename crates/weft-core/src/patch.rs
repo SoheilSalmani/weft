@@ -134,6 +134,17 @@ pub enum Op {
         #[serde(default = "default_mode")]
         mode: u32,
     },
+    /// An opaque binary file (e.g. a favicon from a generator). The bytes
+    /// are standard-alphabet base64; the content is never abstracted and
+    /// never hunk-modified — changing a binary is `delete_file` + a new
+    /// `create_binary_file` in the same patch. The path is a normal
+    /// `TemplatePath` (path abstraction still applies).
+    CreateBinaryFile {
+        path: TemplatePath,
+        data: String,
+        #[serde(default = "default_mode")]
+        mode: u32,
+    },
     ModifyFile {
         path: TemplatePath,
         hunks: Vec<Hunk>,

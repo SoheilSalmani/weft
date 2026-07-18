@@ -4,18 +4,88 @@ use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::patch::DEFAULT_FILE_MODE;
 
-/// A rendered file: UTF-8 text plus a permission mode. MVP is text-only;
-/// binary support is post-MVP (record refuses non-UTF-8 files).
+/// File content: UTF-8 text (line-based, abstractable, hunk-mergeable) or
+/// an opaque binary blob (replaced wholesale, never abstracted).
+///
+/// The variant is a **function of the bytes** — [`FileData::from_bytes`]
+/// classifies valid UTF-8 as `Text` — so a rendered tree and its re-read
+/// worktree always agree, and derived equality is consistent.
+#[derive(Clone, PartialEq, Eq)]
+pub enum FileData {
+    Text(String),
+    Binary(Vec<u8>),
+}
+
+impl FileData {
+    /// Canonical classification: valid UTF-8 ⇒ `Text`, else `Binary`.
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        match String::from_utf8(bytes) {
+            Ok(text) => FileData::Text(text),
+            Err(e) => FileData::Binary(e.into_bytes()),
+        }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        match self {
+            FileData::Text(s) => s.as_bytes(),
+            FileData::Binary(b) => b,
+        }
+    }
+
+    /// The text form, when this is a text file.
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            FileData::Text(s) => Some(s),
+            FileData::Binary(_) => None,
+        }
+    }
+
+    pub fn is_binary(&self) -> bool {
+        matches!(self, FileData::Binary(_))
+    }
+
+    /// Byte length.
+    pub fn len(&self) -> usize {
+        self.as_bytes().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.as_bytes().is_empty()
+    }
+}
+
+impl From<String> for FileData {
+    fn from(s: String) -> Self {
+        FileData::Text(s)
+    }
+}
+
+impl From<&str> for FileData {
+    fn from(s: &str) -> Self {
+        FileData::Text(s.to_owned())
+    }
+}
+
+impl std::fmt::Debug for FileData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FileData::Text(s) => write!(f, "Text({s:?})"),
+            FileData::Binary(b) => write!(f, "Binary({} byte(s))", b.len()),
+        }
+    }
+}
+
+/// A rendered file: text or binary content plus a permission mode.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileEntry {
-    pub content: String,
+    pub content: FileData,
     pub mode: u32,
 }
 
 impl FileEntry {
     pub fn text(content: impl Into<String>) -> Self {
         FileEntry {
-            content: content.into(),
+            content: FileData::Text(content.into()),
             mode: DEFAULT_FILE_MODE,
         }
     }
@@ -58,8 +128,9 @@ impl Tree {
         self.0.is_empty()
     }
 
-    /// Content address of the whole tree: blake3 over (path, mode, content)
-    /// in sorted path order. Used to pin base states.
+    /// Content address of the whole tree: blake3 over (path, mode, content
+    /// bytes) in sorted path order. Used to pin base states. Text entries
+    /// feed the exact bytes they always have — pre-binary hashes are stable.
     pub fn hash(&self) -> String {
         let mut hasher = blake3::Hasher::new();
         for (path, entry) in &self.0 {

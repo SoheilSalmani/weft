@@ -252,6 +252,10 @@ pub(crate) fn op_summary(op: &Op) -> OpSummary {
             kind: "create_file",
             path: display_path(path),
         },
+        Op::CreateBinaryFile { path, .. } => OpSummary {
+            kind: "create_binary_file",
+            path: display_path(path),
+        },
         Op::ModifyFile { path, .. } => OpSummary {
             kind: "modify_file",
             path: display_path(path),
@@ -306,6 +310,9 @@ pub struct FileDiff {
     /// UIs render these with real diff widgets instead of the text diff.
     pub before: String,
     pub after: String,
+    /// Either side is binary: before/after are empty, diff is a stub.
+    #[serde(default)]
+    pub binary: bool,
 }
 
 /// What `patch_name` contributes under `answers`: render its ancestor
@@ -361,27 +368,45 @@ pub fn node_diff(
     paths.extend(before.paths());
     paths.extend(after.paths());
     for path in paths {
-        let old = before.get(path).map(|e| e.content.as_str()).unwrap_or("");
-        let new = after.get(path).map(|e| e.content.as_str()).unwrap_or("");
-        if old == new {
+        let before_entry = before.get(path);
+        let after_entry = after.get(path);
+        if before_entry.map(|e| &e.content) == after_entry.map(|e| &e.content) {
             continue;
         }
-        let change = match (before.get(path), after.get(path)) {
+        let change = match (before_entry, after_entry) {
             (None, Some(_)) => "created",
             (Some(_), None) => "deleted",
             _ => "modified",
         };
-        let diff = TextDiff::from_lines(old, new)
-            .unified_diff()
-            .context_radius(3)
-            .header(&format!("a/{path}"), &format!("b/{path}"))
-            .to_string();
+        // Binary sides are opaque: no unified diff, empty before/after.
+        let binary = before_entry.is_some_and(|e| e.content.is_binary())
+            || after_entry.is_some_and(|e| e.content.is_binary());
+        let old = before_entry.and_then(|e| e.content.text()).unwrap_or("");
+        let new = after_entry.and_then(|e| e.content.text()).unwrap_or("");
+        let diff = if binary {
+            "Binary files differ\n".to_owned()
+        } else {
+            TextDiff::from_lines(old, new)
+                .unified_diff()
+                .context_radius(3)
+                .header(&format!("a/{path}"), &format!("b/{path}"))
+                .to_string()
+        };
         files.push(FileDiff {
             path: path.clone(),
             change,
             diff,
-            before: old.to_owned(),
-            after: new.to_owned(),
+            before: if binary {
+                String::new()
+            } else {
+                old.to_owned()
+            },
+            after: if binary {
+                String::new()
+            } else {
+                new.to_owned()
+            },
+            binary,
         });
     }
 

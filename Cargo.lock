@@ -3677,6 +3677,7 @@ dependencies = [
 name = "weft-core"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "blake3",
  "camino",
  "insta",
@@ -3709,6 +3710,7 @@ name = "weft-engine"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "blake3",
  "camino",
  "dialoguer",
