@@ -3,10 +3,95 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
-use weft_core::{AnswerId, AnswerSet, PatchId, Value};
+use weft_core::{AnswerId, AnswerSet, Op, Patch, PatchId, StarlarkExpr, Value};
 
 pub const STATE_DIR: &str = ".weft";
 pub const STATE_FILE: &str = "state.toml";
+/// The project's self-contained base snapshot (`.weft/base.json`): the patch
+/// bodies the tree was last rendered from, so `weft update` reconstructs the
+/// 3-way-merge base without depending on the template's *current* patch ids.
+/// This is what lets update survive template history rewrites (amend, squash,
+/// resync). Bodies, not the rendered tree — bodies keep secrets as `{answer}`
+/// references, so no resolved secret value is ever written to `.weft/`.
+pub const BASE_FILE: &str = "base.json";
+
+/// One patch stored in the base snapshot: the hashed body only (metadata is
+/// irrelevant to rendering). Reconstructs the exact same `PatchId`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredPatch {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<PatchId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<StarlarkExpr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreach: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ops: Vec<Op>,
+}
+
+impl StoredPatch {
+    pub fn from_patch(p: &Patch) -> Self {
+        Self {
+            depends_on: p.depends_on.clone(),
+            when: p.when.clone(),
+            foreach: p.foreach.clone(),
+            ops: p.ops.clone(),
+        }
+    }
+
+    /// Rebuild the `Patch` (recomputes its id from the stored body).
+    pub fn into_patch(self) -> Patch {
+        Patch::new_foreach(self.depends_on, self.when, self.foreach, self.ops)
+    }
+}
+
+/// The project's pinned base bodies. Parent patches are the load-bearing
+/// part; instance bodies are reserved for composed projects (not yet
+/// reconstructed from here — instances still resolve against the template).
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct BaseSnapshot {
+    #[serde(default)]
+    pub parent: Vec<StoredPatch>,
+}
+
+impl BaseSnapshot {
+    pub fn from_patches(patches: &[Patch]) -> Self {
+        Self {
+            parent: patches.iter().map(StoredPatch::from_patch).collect(),
+        }
+    }
+
+    /// The reconstructed base patches (ids recomputed).
+    pub fn parent_patches(&self) -> Vec<Patch> {
+        self.parent
+            .iter()
+            .cloned()
+            .map(StoredPatch::into_patch)
+            .collect()
+    }
+
+    pub fn save(&self, dest: &Utf8Path) -> Result<()> {
+        let dir = dest.join(STATE_DIR);
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(BASE_FILE);
+        let mut json = serde_json::to_string_pretty(self).context("serializing base snapshot")?;
+        json.push('\n');
+        std::fs::write(&path, json).with_context(|| format!("writing {path}"))?;
+        Ok(())
+    }
+
+    /// Load the base snapshot if present (absent for pre-feature projects).
+    pub fn load(dest: &Utf8Path) -> Result<Option<Self>> {
+        let path = dest.join(STATE_DIR).join(BASE_FILE);
+        match std::fs::read_to_string(&path) {
+            Ok(src) => Ok(Some(
+                serde_json::from_str(&src).with_context(|| format!("parsing {path}"))?,
+            )),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e).with_context(|| format!("reading {path}")),
+        }
+    }
+}
 
 /// `.weft/state.toml` in a scaffolded destination. Answers are stored as
 /// concrete values *except* secrets, which are stored as references only

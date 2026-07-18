@@ -49,13 +49,22 @@ pub fn run(
     let template = Template::load_with(&template_path, resolver)?;
     let eval = StarlarkEval;
 
-    for id in &state.state.base {
-        if !template.id_to_name.contains_key(id) {
-            bail!(
-                "pinned patch {} no longer exists in `{template_path}`; \
-                 the template history was rewritten and this project can't be updated from it",
-                id.short()
-            );
+    // The self-contained base: if the project stored its base patch bodies,
+    // reconstruct the merge base from those (robust to template history
+    // rewrites). Older projects have no snapshot and fall back to matching
+    // pinned ids against the current template (which bails on a rewrite).
+    let snapshot = crate::state::BaseSnapshot::load(&opts.dest)?.filter(|s| !s.parent.is_empty());
+    if snapshot.is_none() {
+        for id in &state.state.base {
+            if !template.id_to_name.contains_key(id) {
+                bail!(
+                    "pinned patch {} no longer exists in `{template_path}`; the template \
+                     history was rewritten and this project has no base snapshot to update \
+                     from (re-scaffold, or update once against the un-rewritten template to \
+                     record one)",
+                    id.short()
+                );
+            }
         }
     }
     for inst in &state.instances {
@@ -99,12 +108,28 @@ pub fn run(
     // Reconstruct the old composed tree: pinned parent base + per-instance
     // pinned child bases, all with the stored answers. Then produce the new
     // composed tree from the current template state.
-    let base_patches: Vec<_> = template
-        .patches
-        .iter()
-        .filter(|p| state.state.base.contains(&p.id))
-        .cloned()
-        .collect();
+    let base_patches: Vec<_> = match &snapshot {
+        // Self-contained: the base is exactly what the project stored,
+        // independent of the template's current patch ids.
+        Some(snap) => {
+            let patches = snap.parent_patches();
+            if let Ok(t) = weft_core::render::render(&patches, &old_answers, &eval) {
+                if t.hash() != state.state.tree_hash {
+                    eprintln!(
+                        "warning: `.weft/base.json` no longer matches the recorded tree hash; \
+                         it may have been edited"
+                    );
+                }
+            }
+            patches
+        }
+        None => template
+            .patches
+            .iter()
+            .filter(|p| state.state.base.contains(&p.id))
+            .cloned()
+            .collect(),
+    };
 
     let mut old_parts: Vec<compose::ComposedPart> = Vec::new();
     let mut new_parts: Vec<compose::ComposedPart> = Vec::new();
@@ -385,6 +410,8 @@ pub fn run(
     )
     .with_instances(instance_states)
     .save(&opts.dest)?;
+    // Re-pin the self-contained base to the new template state.
+    crate::state::BaseSnapshot::from_patches(&template.patches).save(&opts.dest)?;
 
     let skipped_child_posts: usize = child_plans.iter().map(|p| p.post.len()).sum();
     if !opts.skip_tasks && report.conflicts.is_empty() {

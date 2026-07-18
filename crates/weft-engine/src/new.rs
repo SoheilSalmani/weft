@@ -154,6 +154,10 @@ pub fn run(
     )
     .with_instances(instance_states);
     state.save(&opts.dest)?;
+    // The self-contained base: store the patch bodies this tree was rendered
+    // from, so `weft update` can reconstruct the merge base even after the
+    // template rewrites patch ids (amend/squash/resync).
+    crate::state::BaseSnapshot::from_patches(&template.patches).save(&opts.dest)?;
 
     if !opts.skip_tasks {
         // Child post-hooks first (inside their mounts), then the parent's —
