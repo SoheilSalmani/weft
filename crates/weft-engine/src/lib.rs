@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod abstraction;
+pub mod amend;
 pub mod answers;
 pub mod author;
 pub mod check;

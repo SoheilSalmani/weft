@@ -244,3 +244,71 @@ pub fn patch_ls(root: &Utf8Path) -> Result<()> {
     }
     Ok(())
 }
+
+/// Locate a patch by name and confirm it carries generator metadata (was
+/// recorded with `weft record --exec`). Returns a clear error otherwise.
+fn require_generator<'t>(template: &'t Template, name: &str) -> Result<&'t weft_core::Patch> {
+    let id = template
+        .name_to_id
+        .get(name)
+        .with_context(|| format!("no patch `{name}` in this template"))?;
+    let patch = template
+        .patches
+        .iter()
+        .find(|p| p.id == *id)
+        .expect("name_to_id points at a loaded patch");
+    if patch.meta.generator.is_none() {
+        bail!(
+            "patch `{name}` is not a generator patch (it was not recorded with \
+             `weft record --exec`); there is no command to edit"
+        );
+    }
+    Ok(patch)
+}
+
+/// `weft patch set-command`: replace the stored generator command. `${…}`
+/// interpolates declared answers (same rule as `record --exec`). Metadata
+/// only — the patch id never changes.
+pub fn set_generator_command(root: &Utf8Path, name: &str, command: &str) -> Result<()> {
+    let template = Template::load(root)?;
+    require_generator(&template, name)?;
+    let parsed = crate::hooks::parse_command(
+        command,
+        &template.manifest.questions,
+        &weft_core::AnswerSet::new(),
+        &weft_lang::StarlarkEval,
+    );
+    if !parsed.is_literal() {
+        eprintln!("command interpolates: {}", parsed.source());
+    }
+    edit_patch_file(root, name, move |file| {
+        let generator = file
+            .generator
+            .as_mut()
+            .context("patch lost its generator metadata")?;
+        generator.command = parsed;
+        Ok(())
+    })?;
+    eprintln!(
+        "updated the generator command of patch `{name}` — \
+         run `weft patch resync {name}` to regenerate"
+    );
+    Ok(())
+}
+
+/// `weft patch detach`: drop a patch's generator metadata, turning it into a
+/// plain recorded patch. It becomes freely editable (`weft patch amend`), but
+/// `weft patch resync` no longer applies to it. Metadata only — id unchanged.
+pub fn detach_generator(root: &Utf8Path, name: &str) -> Result<()> {
+    let template = Template::load(root)?;
+    require_generator(&template, name)?;
+    edit_patch_file(root, name, |file| {
+        file.generator = None;
+        Ok(())
+    })?;
+    eprintln!(
+        "detached patch `{name}` from its generator; it is now a plain patch \
+         (resync no longer applies — edit it with `weft patch amend {name}`)"
+    );
+    Ok(())
+}

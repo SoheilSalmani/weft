@@ -151,6 +151,20 @@ pub fn run(
         bail!("worktree has no changes against the base state; nothing to commit");
     }
 
+    // An amend session rewrites an existing patch in place rather than
+    // appending a new one.
+    if let Some(target) = sess.amend.clone() {
+        return crate::amend::finish(
+            &template,
+            &opts.template,
+            &target,
+            &base_patches,
+            &answers,
+            &work_tree,
+            ops,
+        );
+    }
+
     let name = match &opts.name {
         Some(name) => name.clone(),
         None => format!("patch-{:03}", template.patches.len() + 1),

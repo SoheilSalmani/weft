@@ -31,6 +31,12 @@ pub struct Session {
     /// commit attaches the command as the new patch's generator metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generator: Option<PendingGenerator>,
+    /// Present when started with `weft patch amend <name>`: the base is the
+    /// patch's ancestors, the worktree is seeded with the patch applied, and
+    /// `weft commit` re-derives that patch's ops in place (keeping its name,
+    /// deps, gate, and metadata) instead of writing a new patch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amend: Option<String>,
 }
 
 /// The generator command a `weft record --exec` session ran, held until

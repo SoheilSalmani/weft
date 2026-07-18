@@ -188,6 +188,7 @@ pub fn run(
         secrets: secret_specs,
         foreach,
         generator,
+        amend: None,
     };
     sess.save(&opts.template)?;
 

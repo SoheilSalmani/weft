@@ -450,6 +450,54 @@ enum PatchCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Replace the stored generator command of a `--exec` patch. `${…}`
+    /// interpolates declared answers. Omit CMD to edit in $EDITOR.
+    SetCommand {
+        /// Patch name (file stem).
+        name: String,
+        /// New command (omit to open $VISUAL/$EDITOR).
+        command: Option<String>,
+        #[arg(long, default_value = ".")]
+        template: Utf8PathBuf,
+        /// Regenerate the patch from the new command immediately.
+        #[arg(long)]
+        resync: bool,
+    },
+    /// Drop a patch's generator metadata: it becomes a plain, freely
+    /// editable patch (`weft patch amend`), but `resync` no longer applies.
+    Detach {
+        /// Patch name (file stem).
+        name: String,
+        #[arg(long, default_value = ".")]
+        template: Utf8PathBuf,
+    },
+    /// Edit a patch's recorded content: reopens its contribution in a
+    /// scratch worktree; `weft commit` re-derives its ops in place (id
+    /// changes, like any content edit). Leaf patches only for now.
+    Amend {
+        /// Patch name (file stem).
+        name: String,
+        #[arg(long, default_value = ".")]
+        template: Utf8PathBuf,
+        /// Apply a named preset when rendering the base (repeatable).
+        #[arg(long = "preset")]
+        presets: Vec<String>,
+        /// Answer a question inline as KEY=VALUE (repeatable).
+        #[arg(long = "answer")]
+        answers: Vec<String>,
+        /// TOML file with answers.
+        #[arg(long = "answers-file")]
+        answers_file: Option<Utf8PathBuf>,
+        /// Discard an existing session instead of failing.
+        #[arg(long)]
+        force: bool,
+        /// Never prompt; fail if answers are missing.
+        #[arg(long)]
+        non_interactive: bool,
+        /// Use sequential prompts instead of the full-screen wizard.
+        #[arg(long)]
+        no_wizard: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -896,6 +944,86 @@ fn main() -> anyhow::Result<()> {
                 } else {
                     std::process::exit(1);
                 }
+            }
+            PatchCmd::SetCommand {
+                name,
+                command,
+                template,
+                resync,
+            } => {
+                let command = match command {
+                    Some(cmd) => cmd,
+                    None => weft_engine::interact::edit_command(
+                        "Enter the generator command; its output becomes the patch.\n\
+                         Lines starting with '#' are ignored. ${answer_or_expr} interpolates\n\
+                         declared answers, e.g. ${project_name} or ${' '.join(components)}.",
+                    )?,
+                };
+                weft_engine::author::set_generator_command(&template, &name, &command)?;
+                if resync {
+                    let opts = weft_engine::generate::ResyncOptions {
+                        template,
+                        names: vec![name],
+                        all: false,
+                        answers: vec![],
+                        keep_literal: vec![],
+                        dry_run: false,
+                    };
+                    let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
+                    let mut interaction = auto_interaction(false);
+                    let report =
+                        weft_engine::generate::resync(&opts, &mut resolver, interaction.as_mut())?;
+                    resolver.flush()?;
+                    for entry in &report.entries {
+                        eprintln!("{}: {:?}", entry.name, entry.outcome);
+                    }
+                    if !report.issues.is_empty() {
+                        for issue in &report.issues {
+                            eprintln!("issue: {issue}");
+                        }
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            }
+            PatchCmd::Detach { name, template } => {
+                weft_engine::author::detach_generator(&template, &name)
+            }
+            PatchCmd::Amend {
+                name,
+                template,
+                presets,
+                answers,
+                answers_file,
+                force,
+                non_interactive,
+                no_wizard,
+            } => {
+                let mut opts = weft_engine::amend::AmendOptions {
+                    template,
+                    name,
+                    presets,
+                    answers,
+                    answers_file,
+                    answers_json: None,
+                    force,
+                };
+                maybe_wizard(
+                    &opts.template,
+                    &opts.presets,
+                    opts.answers_file.as_deref(),
+                    &opts.answers,
+                    &mut opts.answers_json,
+                    non_interactive,
+                    no_wizard,
+                )?;
+                let mut interaction = auto_interaction(non_interactive);
+                let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
+                let worktree =
+                    weft_engine::amend::start(&opts, &mut resolver, interaction.as_mut())?;
+                resolver.flush()?;
+                weft_engine::amend::announce(&worktree, &opts.name);
+                Ok(())
             }
         },
         Command::Hub { cmd } => match cmd {
