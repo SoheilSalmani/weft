@@ -3,6 +3,37 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Binary file support
+
+- **Problem:** `record --exec 'pnpm dlx shadcn init'` emits `favicon.ico`
+  — legitimate content, not junk, so `.weftignore` is wrong. Text-only
+  MVP (deferred in PLAN.md) came due.
+- **Model:** `weft_core::FileData { Text(String), Binary(Vec<u8>) }`,
+  variant chosen by `from_bytes` (valid UTF-8 ⇒ Text) so rendered and
+  re-read trees always agree. `FileEntry.content` is now `FileData`.
+  New **`Op::CreateBinaryFile { path, data(base64), mode }`** — internally
+  tagged, so existing ops' canonical JSON is byte-identical (canonical.rs
+  snapshots + proptests pass UNCHANGED — the additive-serde guardrail).
+  Tree::hash frames content by bytes exactly as before, so text tree
+  hashes (project pins) don't move.
+- **Modify a binary = `delete_file` + `create_binary_file`** in one patch
+  (ops apply in order); text hunks on a binary are a loud RenderError.
+  diff.rs emits this pair (any-binary-side branch) and excludes binary
+  from abstraction/occurrences; `create_op` helper picks CreateFile vs
+  CreateBinaryFile by `content.text()`.
+- **update:** binary both-diverged can't line-merge → keep ours + note
+  ("template changed a binary file you also modified; kept your version").
+- Previews/diffs (`PreviewFile`, graph `FileDiff`, server `ProposalFile`/
+  `FileContent`/`RenderedFile`) gain `binary: bool` (empty before/after,
+  "Binary files differ"); `weft diff` prints "(binary file)"; server
+  write endpoint refuses to clobber a binary; web FilePreview/DiffView/
+  RecordEditor show opaque fallbacks.
+- e2e tests/e2e/tests/binary.rs (6): byte-exact round trip + check,
+  resync, delete+create modify, update take-theirs / keep-ours+note,
+  diff opaque. NOTE learned: resync rewrites patch ids, so resync +
+  update on a pre-scaffolded project doesn't compose (pinned id gone) —
+  update tests ADD a patch instead. base64 = new weft-core/engine dep.
+
 ## Post-MVP — `.weftignore`
 
 - **Problem:** a generator like `--exec 'pnpm dlx shadcn init'` drops
