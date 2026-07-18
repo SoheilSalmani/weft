@@ -5,11 +5,12 @@
 //! keeping its name, dependencies, gate, and metadata — which changes its
 //! content id (as any content edit does).
 //!
-//! **Leaf patches only for now.** Amending a patch that others depend on is
-//! a subgraph rebase (descendants must replay over the new content), which
-//! is a separate feature; amend refuses it with a clear message. Generator
-//! patches are also refused — their content is owned by their command
-//! (`weft patch resync` / `set-command`, or `detach` to take ownership).
+//! Amending a patch that others depend on is a rebase: their
+//! context-anchored hunks replay over the new content. If the edit doesn't
+//! move what a dependent anchors on, it just works; if it does, `weft
+//! commit` reports which dependent broke so you can re-record it. Generator
+//! patches are refused — their content is owned by their command (`weft
+//! patch resync` / `set-command`, or `detach` to take ownership first).
 
 use std::collections::BTreeMap;
 
@@ -90,12 +91,14 @@ pub fn start(
             opts.name
         );
     }
+    // Amending a patch with dependents is a rebase: the dependents' hunks
+    // replay over the new content and may conflict. That's handled at commit
+    // (a full render surfaces any that break); warn up front.
     let dependents = direct_dependents(&template, id);
     if !dependents.is_empty() {
-        bail!(
-            "patch `{}` has dependents ({}); amending it would rebase them over the new \
-             content, which is not supported yet. Layer a new patch on top \
-             (`weft record --base {0}`) or edit `patches/{0}.json` by hand.",
+        eprintln!(
+            "note: `{}` has dependents ({}); if your edit moves the content they anchor \
+             on, `weft commit` will report which one to re-record.",
             opts.name,
             dependents.join(", ")
         );
@@ -179,18 +182,11 @@ pub(crate) fn finish(
     ops: Vec<weft_core::Op>,
 ) -> Result<()> {
     let eval = StarlarkEval;
-    let id = *template
+    let has_dependents = template
         .name_to_id
         .get(target)
-        .with_context(|| format!("patch `{target}` vanished mid-amend"))?;
-    let dependents = direct_dependents(template, id);
-    if !dependents.is_empty() {
-        bail!(
-            "patch `{target}` gained dependents ({}) since the amend started; \
-             refusing to rewrite it",
-            dependents.join(", ")
-        );
-    }
+        .map(|id| !direct_dependents(template, *id).is_empty())
+        .unwrap_or(false);
 
     // Preserve everything but the ops.
     let mut file = template.patch_file(target)?;
@@ -233,10 +229,30 @@ pub(crate) fn finish(
     file.ops = ops;
     template.save_patch_file(target, &file)?;
     Session::discard(template_root)?;
-    eprintln!(
-        "amended patch `{target}` ({op_count} op(s)); its content id changed \
-         (nothing depends on it, so no rebase was needed)"
-    );
+    eprintln!("amended patch `{target}` ({op_count} op(s)); its content id changed");
+
+    // Rebase check: if anything depends on the amended patch, its
+    // context-anchored hunks may have moved with the new content. A full
+    // render under the amend answers surfaces a dependent that broke.
+    if has_dependents {
+        let reloaded = Template::load(template_root)?;
+        let non_foreach: Vec<_> = reloaded
+            .patches
+            .iter()
+            .filter(|p| p.foreach.is_none())
+            .cloned()
+            .collect();
+        if let Err(e) = weft_core::render::render(&non_foreach, answers, &eval) {
+            bail!(
+                "a dependent patch no longer applies after the amend: {e}\n\
+                 its context anchored on content that moved — re-record it \
+                 (`weft patch amend <name>` or `weft record --base <name> …`), then \
+                 `weft check`. The amend to `{target}` is written; fix the dependent to \
+                 finish the rebase."
+            );
+        }
+        eprintln!("dependents still apply — no rebase conflicts");
+    }
     Ok(())
 }
 

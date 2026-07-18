@@ -29,6 +29,7 @@ pub mod preset;
 pub mod record;
 pub mod secrets;
 pub mod session;
+pub mod squash;
 pub mod state;
 pub mod template;
 pub mod update;

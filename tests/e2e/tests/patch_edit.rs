@@ -152,23 +152,26 @@ fn amend_refuses_generator_patches() {
 }
 
 #[test]
-fn amend_refuses_non_leaf_patches() {
+fn amend_non_leaf_warns_about_dependents() {
     let dir = tempfile::tempdir().unwrap();
     let tpl = dir.path().join("hello");
     copy_dir(&hello_template(), &tpl);
-    // `base` has dependents (docker, deploy).
+    // `base` has dependents (docker, deploy): amend is allowed, with a note.
     weft()
         .arg("patch")
         .arg("amend")
         .arg("base")
         .arg("--answer")
         .arg("project_name=Demo")
+        .arg("--answer")
+        .arg("use_docker=true")
         .arg("--template")
         .arg(&tpl)
         .arg("--non-interactive")
         .assert()
-        .failure()
+        .success()
         .stderr(predicates::str::contains("has dependents"));
+    assert!(tpl.join(".weft-record/worktree").exists());
 }
 
 #[test]
@@ -265,4 +268,264 @@ fn amend_rewrites_a_leaf_patch_in_place() {
         .arg("project_name=x")
         .assert()
         .success();
+}
+
+// ---- amend with descendants (rebase) -------------------------------------
+
+/// Record base p1 (creates config.txt) and p2 (inserts a line, anchored on
+/// p1's content). Returns the template dir.
+fn stacked_template() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let tpl = dir.path().join("hello");
+    copy_dir(&hello_template(), &tpl);
+    // p1: create a 10-line config.txt
+    let base = "a1\na2\na3\na4\na5\na6\na7\na8\na9\na10\n";
+    weft()
+        .arg("record")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--answer")
+        .arg("project_name=Demo")
+        .assert()
+        .success();
+    std::fs::write(tpl.join(".weft-record/worktree/config.txt"), base).unwrap();
+    weft()
+        .arg("commit")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--name")
+        .arg("p1")
+        .arg("--yes")
+        .assert()
+        .success();
+    // p2: insert near the bottom (hunk anchors on a7..a10, far from the top)
+    weft()
+        .arg("record")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--base")
+        .arg("p1")
+        .arg("--answer")
+        .arg("project_name=Demo")
+        .assert()
+        .success();
+    std::fs::write(
+        tpl.join(".weft-record/worktree/config.txt"),
+        "a1\na2\na3\na4\na5\na6\na7\na8\nINSERTED\na9\na10\n",
+    )
+    .unwrap();
+    weft()
+        .arg("commit")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--name")
+        .arg("p2")
+        .arg("--yes")
+        .assert()
+        .success();
+    (dir, tpl)
+}
+
+#[test]
+fn amend_descendant_still_applies() {
+    let (_g, tpl) = stacked_template();
+    // Amend p1, editing a line p2 does NOT anchor on (line1).
+    weft()
+        .arg("patch")
+        .arg("amend")
+        .arg("p1")
+        .arg("--answer")
+        .arg("project_name=Demo")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    let w = tpl.join(".weft-record/worktree");
+    // Edit a1 — 7 lines from p2's anchor, outside its context radius.
+    std::fs::write(
+        w.join("config.txt"),
+        "A1\na2\na3\na4\na5\na6\na7\na8\na9\na10\n",
+    )
+    .unwrap();
+    weft()
+        .arg("commit")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--yes")
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("amended patch `p1`"))
+        .stderr(predicates::str::contains("dependents still apply"));
+    // Full render composes: p2's insert still lands on the amended p1.
+    let out = tempfile::tempdir().unwrap();
+    let dest = out.path().join("proj");
+    weft()
+        .arg("new")
+        .arg(&tpl)
+        .arg(&dest)
+        .arg("--answer")
+        .arg("project_name=x")
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    assert_eq!(
+        read(&dest, "config.txt"),
+        "A1\na2\na3\na4\na5\na6\na7\na8\nINSERTED\na9\na10\n"
+    );
+}
+
+#[test]
+fn amend_reports_broken_descendant() {
+    let (_g, tpl) = stacked_template();
+    // Amend p1, removing the line p2 anchors on (line2).
+    weft()
+        .arg("patch")
+        .arg("amend")
+        .arg("p1")
+        .arg("--answer")
+        .arg("project_name=Demo")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    let w = tpl.join(".weft-record/worktree");
+    // Remove a8 — inside p2's context; p2's hunk will no longer anchor.
+    std::fs::write(
+        w.join("config.txt"),
+        "a1\na2\na3\na4\na5\na6\na7\na9\na10\n",
+    )
+    .unwrap();
+    weft()
+        .arg("commit")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--yes")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("amended patch `p1`"))
+        .stderr(predicates::str::contains(
+            "dependent patch no longer applies",
+        ))
+        .stderr(predicates::str::contains("re-record"));
+}
+
+// ---- squash --------------------------------------------------------------
+
+#[test]
+fn squash_combines_a_chain() {
+    let dir = tempfile::tempdir().unwrap();
+    let tpl = dir.path().join("hello");
+    copy_dir(&hello_template(), &tpl);
+    // s1 creates x.txt; s2 (on s1) creates y.txt.
+    weft()
+        .arg("record")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--answer")
+        .arg("project_name=Demo")
+        .assert()
+        .success();
+    std::fs::write(tpl.join(".weft-record/worktree/x.txt"), "ex\n").unwrap();
+    weft()
+        .arg("commit")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--name")
+        .arg("s1")
+        .arg("--yes")
+        .assert()
+        .success();
+    weft()
+        .arg("record")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--base")
+        .arg("s1")
+        .arg("--answer")
+        .arg("project_name=Demo")
+        .assert()
+        .success();
+    std::fs::write(tpl.join(".weft-record/worktree/y.txt"), "why\n").unwrap();
+    weft()
+        .arg("commit")
+        .arg("--template")
+        .arg(&tpl)
+        .arg("--name")
+        .arg("s2")
+        .arg("--yes")
+        .assert()
+        .success();
+
+    weft()
+        .arg("patch")
+        .arg("squash")
+        .arg("s1")
+        .arg("s2")
+        .arg("--into")
+        .arg("combined")
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("squashed"));
+    assert!(!tpl.join("patches/s1.json").exists());
+    assert!(!tpl.join("patches/s2.json").exists());
+    assert!(tpl.join("patches/combined.json").exists());
+
+    let out = tempfile::tempdir().unwrap();
+    let dest = out.path().join("proj");
+    weft()
+        .arg("new")
+        .arg(&tpl)
+        .arg(&dest)
+        .arg("--answer")
+        .arg("project_name=x")
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    assert_eq!(read(&dest, "x.txt"), "ex\n");
+    assert_eq!(read(&dest, "y.txt"), "why\n");
+    weft()
+        .arg("check")
+        .arg(&tpl)
+        .arg("--answer")
+        .arg("project_name=x")
+        .assert()
+        .success();
+}
+
+#[test]
+fn squash_refuses_generator_and_mixed_gates() {
+    let scratch = tempfile::tempdir().unwrap();
+    let src = scratch.path().join("v.txt");
+    std::fs::write(&src, "x\n").unwrap();
+    let (_g, tpl) = with_generator(&src);
+    // squash a generator with base → refused.
+    weft()
+        .arg("patch")
+        .arg("squash")
+        .arg("base")
+        .arg("gen")
+        .arg("--into")
+        .arg("c")
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("generator patch"));
+    // base (no gate) + docker (when use_docker) → different gates refused.
+    weft()
+        .arg("patch")
+        .arg("squash")
+        .arg("base")
+        .arg("docker")
+        .arg("--into")
+        .arg("c")
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("different `when` gates"));
 }

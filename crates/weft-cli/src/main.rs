@@ -471,9 +471,25 @@ enum PatchCmd {
         #[arg(long, default_value = ".")]
         template: Utf8PathBuf,
     },
+    /// Combine several patches into one (their ops concatenated in dependency
+    /// order). Members must be convex in the graph, share a gate, and be
+    /// neither generator nor foreach patches.
+    Squash {
+        /// Patch names to combine (two or more).
+        names: Vec<String>,
+        #[arg(long, default_value = ".")]
+        template: Utf8PathBuf,
+        /// Name of the resulting patch (may reuse a member's name).
+        #[arg(long)]
+        into: String,
+        /// Title for the combined patch (defaults to the tip member's).
+        #[arg(long)]
+        title: Option<String>,
+    },
     /// Edit a patch's recorded content: reopens its contribution in a
     /// scratch worktree; `weft commit` re-derives its ops in place (id
-    /// changes, like any content edit). Leaf patches only for now.
+    /// changes, like any content edit). Dependents replay over the new
+    /// content; commit reports any whose hunks no longer apply.
     Amend {
         /// Patch name (file stem).
         name: String,
@@ -989,6 +1005,15 @@ fn main() -> anyhow::Result<()> {
             PatchCmd::Detach { name, template } => {
                 weft_engine::author::detach_generator(&template, &name)
             }
+            PatchCmd::Squash {
+                names,
+                template,
+                into,
+                title,
+            } => weft_engine::squash::squash(
+                &template,
+                &weft_engine::squash::SquashOptions { names, into, title },
+            ),
             PatchCmd::Amend {
                 name,
                 template,
