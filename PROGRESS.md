@@ -3,6 +3,31 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Self-contained update base (survives history rewrites)
+
+- **The prerequisite for using amend/squash/resync on live templates.**
+  `weft update` rebuilt its 3-way-merge base by looking up the project's
+  pinned patch ids in the CURRENT template → bailed on any id rewrite.
+- **Design correction:** an old→new id map (the earlier roadmap idea) is
+  WRONG for content changes — remapping a pinned id to the amended patch's
+  new id makes base==theirs, so the fix silently wouldn't propagate.
+  Instead the project stores its base patch BODIES in `.weft/base.json`
+  (state.rs StoredPatch/BaseSnapshot; JSON not TOML — ops nest badly in
+  TOML). update reconstructs old_render from those, independent of template
+  ids. Bodies not the rendered tree → secrets stay as {answer} refs, never
+  a resolved value in .weft/.
+- Correct for every rewrite: amend/resync PROPAGATE (stored base = old
+  content → true 3-way merge around user edits); squash is a NO-OP (old and
+  new render identically). Back-compat: no base.json → id-match + bail
+  fallback, self-heals on next successful update. Parent template only;
+  foreach instances keep id-match (follow-up).
+- new.rs writes the snapshot at scaffold; update re-pins after (dry-run
+  untouched). e2e tests/e2e/tests/update_rewrite.rs (4): amend propagates
+  across id rewrite, merges around a user edit (proves base=old content),
+  squash no-op, back-compat with/without snapshot. Docs: state.mdx
+  (.weft/base.json), updating.mdx (surviving rewrites), roadmap correction,
+  + shadcn-ui tutorial demonstrating variant composition.
+
 ## Post-MVP — Patch editing (set-command, detach, amend, squash)
 
 - **The insight:** in a content-addressed Merkle DAG, editing/amending/
