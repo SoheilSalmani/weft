@@ -3,7 +3,11 @@ name = "weft-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Weft command-line interface"
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Weft command-line interface — record-based project scaffolding"
 
 [[bin]]
 name = "weft"

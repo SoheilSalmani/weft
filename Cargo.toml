@@ -12,12 +12,19 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = ""
+repository = "https://github.com/SoheilSalmani/weft"
+homepage = "https://github.com/SoheilSalmani/weft"
+keywords = ["scaffolding", "template", "codegen", "cli"]
+categories = ["development-tools", "command-line-utilities"]
 
+# Internal deps carry a version alongside the path so the crates can be
+# published to crates.io (cargo rewrites the path dep to the version dep on
+# publish). Publish order is leaf-first: weft-core, weft-lang, weft-engine,
+# weft-cli.
 [workspace.dependencies]
-weft-core = { path = "crates/weft-core" }
-weft-engine = { path = "crates/weft-engine" }
-weft-lang = { path = "crates/weft-lang" }
+weft-core = { path = "crates/weft-core", version = "0.1.0" }
+weft-engine = { path = "crates/weft-engine", version = "0.1.0" }
+weft-lang = { path = "crates/weft-lang", version = "0.1.0" }
 
 anyhow = "1"
 base64 = "0.22"

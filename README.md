@@ -23,10 +23,35 @@ Core ideas:
   render time, never persisted (the core `Value::Secret` refuses to
   serialize).
 
-## Build
+## Install
+
+> Weft is pre-1.0. Building from source is the verified path today; prebuilt
+> binaries, `cargo install`, and Homebrew arrive with the first tagged release.
+
+**From source** (works today — needs a Rust toolchain, Linux or macOS):
 
 ```sh
+git clone https://github.com/SoheilSalmani/weft
+cd weft
 cargo build --release          # produces target/release/weft
+install -m 0755 target/release/weft ~/.local/bin/weft   # put it on your PATH
+```
+
+**Prebuilt binary** (with the first release):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SoheilSalmani/weft/main/install.sh | sh
+```
+
+**cargo** (with the first release): `cargo install weft-cli`.
+
+Full instructions and the docs: <https://github.com/SoheilSalmani/weft>.
+
+### Developing
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace         # full test suite (unit + e2e)
 ```
 

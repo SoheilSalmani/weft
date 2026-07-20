@@ -1,0 +1,49 @@
+name: Release
+
+# Cuts release binaries when a version tag is pushed:
+#   git tag v0.1.0 && git push origin v0.1.0
+# Builds the `weft` binary for each target and uploads a
+# `weft-<target>.tar.gz` (plus a .sha256) to the GitHub Release for the tag.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  upload:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+
+      # Builds the bin, cross-compiles when target != host, archives as
+      # weft-<target>.tar.gz, generates a sha256, and uploads to the release.
+      - uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: weft
+          target: ${{ matrix.target }}
+          archive: weft-$target
+          tar: unix
+          checksum: sha256
+          token: ${{ secrets.GITHUB_TOKEN }}
