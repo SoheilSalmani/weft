@@ -198,6 +198,15 @@ enum Command {
         /// see `weft diff` for the keys). Implies accepting the rest.
         #[arg(long = "keep-literal")]
         keep_literal: Vec<String>,
+        /// When changes remain, build the next patch on top of this one (its
+        /// base advances to include it).
+        #[arg(long, conflicts_with = "sibling")]
+        stack: bool,
+        /// When changes remain, keep the next patch independent of this one
+        /// (an unstacked sibling that must commute). This is the default
+        /// non-interactively.
+        #[arg(long)]
+        sibling: bool,
         /// Never open the interactive form; use the default patch name.
         #[arg(long)]
         no_tui: bool,
@@ -214,6 +223,44 @@ enum Command {
         /// Emit the preview as JSON (files, hunks, candidates, occurrences).
         #[arg(long)]
         json: bool,
+        /// Preview only the staged changes (what the next commit will write),
+        /// instead of the whole worktree.
+        #[arg(long, visible_alias = "cached")]
+        staged: bool,
+    },
+    /// Stage worktree changes into the session index (like `git add`). The
+    /// next `weft commit` commits only what is staged.
+    Add {
+        /// Path globs to stage (relative to the worktree root).
+        patterns: Vec<String>,
+        /// Template directory (defaults to `.`).
+        #[arg(long, default_value = ".")]
+        template: Utf8PathBuf,
+        /// Stage everything (equivalent to `.`).
+        #[arg(long, short = 'A')]
+        all: bool,
+    },
+    /// Unstage paths from the session index (like `git reset`). No paths
+    /// unstages everything.
+    Reset {
+        /// Path globs to unstage.
+        patterns: Vec<String>,
+        /// Template directory (defaults to `.`).
+        #[arg(long, default_value = ".")]
+        template: Utf8PathBuf,
+    },
+    /// Show the recording session: staged and unstaged changes, plus the base
+    /// and answers.
+    Status {
+        /// Template directory (defaults to `.`).
+        #[arg(long, default_value = ".")]
+        template: Utf8PathBuf,
+    },
+    /// Manage the active recording session (refresh answers/manifest, or end
+    /// the session).
+    Session {
+        #[command(subcommand)]
+        cmd: SessionCmd,
     },
     /// List or show template presets.
     Presets {
@@ -392,6 +439,43 @@ enum HookCmd {
     Ls {
         #[arg(long, default_value = ".")]
         template: Utf8PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum SessionCmd {
+    /// Re-read weft.toml, re-resolve answers, re-render the base, and 3-way
+    /// merge it onto the worktree (preserving your edits). Use after editing
+    /// the manifest or to change answers mid-session.
+    Refresh {
+        /// Template directory (defaults to `.`).
+        #[arg(long, default_value = ".")]
+        template: Utf8PathBuf,
+        /// Apply a named preset (repeatable).
+        #[arg(long = "preset")]
+        presets: Vec<String>,
+        /// Change an answer inline as KEY=VALUE (repeatable).
+        #[arg(long = "answer")]
+        answers: Vec<String>,
+        /// TOML file with answers.
+        #[arg(long = "answers-file")]
+        answers_file: Option<Utf8PathBuf>,
+        /// Answers as a JSON object.
+        #[arg(long = "answers-json")]
+        answers_json: Option<String>,
+        /// Never prompt; fail if answers are missing.
+        #[arg(long)]
+        non_interactive: bool,
+    },
+    /// End the recording session. Refuses if the worktree has uncommitted
+    /// changes unless `--discard`.
+    End {
+        /// Template directory (defaults to `.`).
+        #[arg(long, default_value = ".")]
+        template: Utf8PathBuf,
+        /// End even with uncommitted changes, throwing them away.
+        #[arg(long)]
+        discard: bool,
     },
 }
 
@@ -1157,8 +1241,17 @@ fn main() -> anyhow::Result<()> {
             tags,
             yes,
             keep_literal,
+            stack,
+            sibling,
             no_tui,
         } => {
+            let link = if stack {
+                Some(weft_engine::commit::CommitLink::Stack)
+            } else if sibling {
+                Some(weft_engine::commit::CommitLink::Sibling)
+            } else {
+                None
+            };
             let (name, title, describe, when, tags) = match name {
                 Some(name) => (Some(name), title, describe, when, tags),
                 None if tui::interactive(no_tui) => {
@@ -1182,6 +1275,7 @@ fn main() -> anyhow::Result<()> {
                 tags,
                 decisions: None,
                 keep_literal,
+                link,
             };
             let mut interaction = auto_interaction(yes);
             let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
@@ -1193,12 +1287,17 @@ fn main() -> anyhow::Result<()> {
             template,
             abstracted,
             json,
+            staged,
         } => {
+            if staged && !weft_engine::stage::exists(&template) {
+                eprintln!("nothing staged; `weft diff` shows the whole worktree");
+                return Ok(());
+            }
             let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
             let tpl = Template::load_with(&template, &mut resolver)?;
             resolver.flush()?;
             let mut interaction = auto_interaction(false);
-            let preview = weft_engine::commit::preview(&tpl, interaction.as_mut())?;
+            let preview = weft_engine::commit::preview_target(&tpl, staged, interaction.as_mut())?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&preview)?);
                 Ok(())
@@ -1206,6 +1305,179 @@ fn main() -> anyhow::Result<()> {
                 diffcmd::print(&preview, abstracted)
             }
         }
+        Command::Add {
+            patterns,
+            template,
+            all,
+        } => {
+            if !weft_engine::session::Session::exists(&template) {
+                anyhow::bail!("no recording session; run `weft record` first");
+            }
+            let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
+            let tpl = Template::load_with(&template, &mut resolver)?;
+            resolver.flush()?;
+            let pats: Vec<String> = if all {
+                vec!["**".to_string()]
+            } else if patterns.is_empty() {
+                anyhow::bail!("specify paths to stage (globs), or pass -A to stage everything");
+            } else {
+                patterns
+                    .into_iter()
+                    .map(|p| if p == "." { "**".to_string() } else { p })
+                    .collect()
+            };
+            let globs = weft_engine::stage::globset(&pats)?;
+            let mut interaction = auto_interaction(true);
+            let trees = weft_engine::commit::session_trees(&tpl, interaction.as_mut())?;
+            let mut staged =
+                weft_engine::stage::staged_tree(&template, &tpl.ignore, &trees.base_tree)?;
+            let n =
+                weft_engine::stage::add(&mut staged, &trees.work_tree, &trees.base_tree, &globs);
+            weft_engine::stage::write(&template, &staged, &trees.base_tree)?;
+            eprintln!("staged {n} path(s)");
+            Ok(())
+        }
+        Command::Reset { patterns, template } => {
+            if !weft_engine::session::Session::exists(&template) {
+                anyhow::bail!("no recording session; run `weft record` first");
+            }
+            let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
+            let tpl = Template::load_with(&template, &mut resolver)?;
+            resolver.flush()?;
+            let mut interaction = auto_interaction(true);
+            let trees = weft_engine::commit::session_trees(&tpl, interaction.as_mut())?;
+            let mut staged =
+                weft_engine::stage::staged_tree(&template, &tpl.ignore, &trees.base_tree)?;
+            let globs = if patterns.is_empty() {
+                None
+            } else {
+                Some(weft_engine::stage::globset(&patterns)?)
+            };
+            weft_engine::stage::reset(&mut staged, &trees.base_tree, globs.as_ref());
+            weft_engine::stage::write(&template, &staged, &trees.base_tree)?;
+            eprintln!("unstaged");
+            Ok(())
+        }
+        Command::Status { template } => {
+            if !weft_engine::session::Session::exists(&template) {
+                println!("no active recording session in `{template}`");
+                return Ok(());
+            }
+            let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
+            let tpl = Template::load_with(&template, &mut resolver)?;
+            resolver.flush()?;
+            let sess = weft_engine::session::Session::load(&template)?;
+            let mut interaction = auto_interaction(true);
+            let trees = weft_engine::commit::session_trees(&tpl, interaction.as_mut())?;
+            let staged = weft_engine::stage::staged_tree(&template, &tpl.ignore, &trees.base_tree)?;
+            let staged_changes = weft_engine::stage::changed_paths(&trees.base_tree, &staged);
+            let unstaged_changes = weft_engine::stage::changed_paths(&staged, &trees.work_tree);
+            println!("recording session on `{}`", tpl.manifest.template.name);
+            let base_names: Vec<_> = sess
+                .session
+                .base
+                .iter()
+                .filter_map(|id| tpl.id_to_name.get(id).cloned())
+                .collect();
+            println!(
+                "  base: {}",
+                if base_names.is_empty() {
+                    "(empty template)".to_owned()
+                } else {
+                    base_names.join(", ")
+                }
+            );
+            for (id, value) in sess.answers.iter() {
+                println!("  answer: {} = {}", id.0, value.render_text());
+            }
+            for id in sess.secrets.keys() {
+                println!("  answer: {} = (secret)", id.0);
+            }
+            println!();
+            if staged_changes.is_empty() {
+                println!("no staged changes (a plain `weft commit` commits the whole worktree)");
+            } else {
+                println!("staged (the next commit takes these):");
+                for p in &staged_changes {
+                    println!("  {p}");
+                }
+            }
+            if !unstaged_changes.is_empty() {
+                println!("unstaged:");
+                for p in &unstaged_changes {
+                    println!("  {p}");
+                }
+            }
+            Ok(())
+        }
+        Command::Session { cmd } => match cmd {
+            SessionCmd::Refresh {
+                template,
+                presets,
+                answers,
+                answers_file,
+                answers_json,
+                non_interactive,
+            } => {
+                let opts = weft_engine::refresh::RefreshOptions {
+                    template,
+                    presets,
+                    answers,
+                    answers_file,
+                    answers_json,
+                };
+                let mut interaction = auto_interaction(non_interactive);
+                let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
+                let result = weft_engine::refresh::run(&opts, &mut resolver, interaction.as_mut());
+                resolver.flush()?;
+                let report = result?;
+                eprintln!(
+                    "session refreshed: {} file(s) updated{}",
+                    report.updated,
+                    if report.conflicts.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", {} conflict(s)", report.conflicts.len())
+                    }
+                );
+                for c in &report.conflicts {
+                    eprintln!("  {c} — resolve the conflict markers");
+                }
+                for n in &report.notes {
+                    eprintln!("  note: {n}");
+                }
+                if report.conflicts.is_empty() {
+                    Ok(())
+                } else {
+                    std::process::exit(1);
+                }
+            }
+            SessionCmd::End { template, discard } => {
+                if !weft_engine::session::Session::exists(&template) {
+                    eprintln!("no active recording session in `{template}`");
+                    return Ok(());
+                }
+                if !discard {
+                    let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
+                    let tpl = Template::load_with(&template, &mut resolver)?;
+                    resolver.flush()?;
+                    let mut interaction = auto_interaction(true);
+                    let trees = weft_engine::commit::session_trees(&tpl, interaction.as_mut())?;
+                    let changed =
+                        weft_engine::stage::changed_paths(&trees.base_tree, &trees.work_tree);
+                    if !changed.is_empty() {
+                        anyhow::bail!(
+                            "{} uncommitted change(s) in the session; commit them, \
+                             or pass --discard to throw them away",
+                            changed.len()
+                        );
+                    }
+                }
+                weft_engine::session::Session::discard(&template)?;
+                eprintln!("recording session ended");
+                Ok(())
+            }
+        },
         Command::Presets { command } => match command {
             PresetsCommand::List { template } => {
                 let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);

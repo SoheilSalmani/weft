@@ -3,6 +3,57 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Git-like recording session (staging index, many patches, sibling/stack)
+
+- **The recording session is now a git-like workspace**: a real staging index,
+  many patches per session, an explicit end, and a per-commit sibling-vs-stack
+  choice. Replaced the earlier interim `commit --only` + `session
+  status/discard` design (which stacked-only, no index). `session refresh`
+  kept.
+- **Staging index** = `weft-engine/src/stage.rs`: a lazy directory mirror at
+  `.weft-record/stage/` (ABSENT means nothing staged = staged tree equals base,
+  so zero disk cost until you `weft add`, and it is cleared after each commit).
+  Helpers: `staged_tree` (stage dir or base), `add`/`reset` (Tree overlays over
+  base), `changed_paths`, `revert_worktree_paths` (the sibling peel), `globset`.
+  No new serialization — reuses fsio write_tree/read_tree_ignoring.
+- **`weft add PATTERN…` / `-A`, `weft reset [PATTERN…]`, `weft status`**
+  (top-level CLI verbs, git-mirrored). Status shows base + answers (secrets
+  `(secret)`) + staged / unstaged. All reconstruct base/work via
+  `commit::session_trees`.
+- **`weft commit` reworked**: commits the STAGED tree if non-empty, else the
+  whole worktree (BACK-COMPAT: empty index ⇒ commit-all, so all ~20 existing
+  record/commit tutorials + e2e pass untouched). After write: if nothing
+  remains uncommitted ⇒ end session (Session::discard, the classic auto-end);
+  else keep open and apply the link — **Stack** advances base + re-pins
+  tree_hash=staged.hash() (next patch depends on this); **Sibling** leaves base,
+  peels committed paths back to base in the worktree (revert_worktree_paths) so
+  the next patch is an independent commuting sibling. Link chosen by
+  `interaction.confirm` (interactive prompt) or `--stack`/`--sibling`;
+  NON-INTERACTIVE DEFAULT = Sibling (NonInteractive::confirm returns the `false`
+  default). Continuing sessions require gate_open. Staging rejected for
+  foreach/generator/amend sessions.
+- **`weft session end [--discard]`**: refuses with a dirty worktree unless
+  --discard.
+- DESIGN (from the user): sibling-default (weft is a DAG, not git's linear
+  history — sibling preserves independence/commutation, which git can't offer);
+  file-level staging first (`add -p` hunks + shared-context guard = v2);
+  `--amend`/`--fixup` = v2 (would fold staged into a patch via the amend/squash
+  rebase engine). e2e tests/e2e/tests/session.rs (6, all pass): sibling-default,
+  stack-depends, plain-commit-commits-all-and-ends (compat), session-end-guard,
+  refresh-new-question, refresh-merge. Gate GREEN (fmt+clippy+cargo test
+  --workspace, zero failures). Docs: reference/cli.mdx (weft add/reset/status,
+  reworked commit, session refresh/end), guides/authoring.mdx ("Many patches
+  from one session"). GOTCHA: staging a file then editing it more before a
+  SIBLING commit loses the later edits (sibling peels committed paths to base) —
+  stage the final version, or use stack.
+- **`weft diff --staged`** (alias `--cached`): `commit::preview` generalized to
+  `preview_target(template, staged, interaction)` — when staged, diffs the base
+  against `stage::staged_tree` (the patch the next commit writes) instead of the
+  whole worktree; `preview` kept as the `staged=false` wrapper (its only caller
+  is the CLI diff handler). Empty index prints a friendly note. e2e:
+  diff_staged_shows_only_the_staged_changes. Docs: reference/cli.mdx weft diff +
+  authoring.mdx.
+
 ## Post-MVP — Self-contained update base (survives history rewrites)
 
 - **The prerequisite for using amend/squash/resync on live templates.**

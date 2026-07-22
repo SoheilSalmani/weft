@@ -10,7 +10,7 @@ use weft_lang::StarlarkEval;
 use crate::abstraction::Abstractor;
 use crate::interact::Interaction;
 use crate::record::base_leaves;
-use crate::session::{self, Session};
+use crate::session::{self, Session, SessionMeta};
 use crate::template::Template;
 use crate::{diff, fsio, secrets};
 
@@ -33,6 +33,20 @@ pub struct CommitOptions {
     /// defaults to 1). Applies to added/created content; secrets can never
     /// be kept literal.
     pub keep_literal: Vec<String>,
+    /// How the next patch should relate to this one when changes remain after
+    /// the commit. `None` prompts interactively and defaults to `Sibling` when
+    /// non-interactive.
+    pub link: Option<CommitLink>,
+}
+
+/// After a commit that leaves more work, how the next patch relates to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitLink {
+    /// Advance the base to include this patch: the next patch builds on it.
+    Stack,
+    /// Keep the base where it is and peel this patch's content out of the
+    /// session: the next patch is an independent sibling that commutes with it.
+    Sibling,
 }
 
 /// Parse `--keep-literal ANSWER@PATH:LINE[:NTH]` into the excepted set.
@@ -80,10 +94,26 @@ pub fn run(
         base_patches,
         parts,
         base_tree,
-        work_tree,
+        work_tree: full_work,
     } = session_trees(&template, interaction)?;
     let eval = StarlarkEval;
-    guard_mounts(&template, sess.foreach.as_ref(), &base_tree, &work_tree)?;
+    guard_mounts(&template, sess.foreach.as_ref(), &base_tree, &full_work)?;
+
+    // The staged tree (`weft add`) is what we commit. An empty index stages
+    // nothing, so the staged tree equals the base and we fall back to the whole
+    // worktree — the classic one-shot flow. When something is staged, the diff
+    // (and everything downstream) sees only the staged subset.
+    let staged = crate::stage::staged_tree(&opts.template, &template.ignore, &base_tree)?;
+    let index_active = staged.hash() != base_tree.hash();
+    if index_active && (sess.foreach.is_some() || sess.generator.is_some() || sess.amend.is_some())
+    {
+        bail!("staging (`weft add`) is not supported for a --foreach, --exec, or amend session");
+    }
+    let work_tree = if index_active {
+        staged
+    } else {
+        full_work.clone()
+    };
 
     // Foreach patches render with `key` and `instance_<id>` in scope, so the
     // abstractor must see the sample instance's values under those names.
@@ -187,6 +217,7 @@ pub fn run(
         foreach_include.clone(),
         ops.clone(),
     );
+    let new_id = candidate.id;
     let mut with_new = base_patches.clone();
     with_new.push(candidate);
     let replayed = crate::compose::render_composed(&with_new, &answers, &parts, &eval)
@@ -195,6 +226,17 @@ pub fn run(
         None => true,
         Some(expr) => eval_gate(expr, &answers)?,
     };
+    // Uncommitted work left in the worktree beyond this patch, and the paths
+    // this patch touches.
+    let remaining = crate::stage::changed_paths(&work_tree, &full_work);
+    let committed = crate::stage::changed_paths(&base_tree, &work_tree);
+    if !remaining.is_empty() && !gate_open {
+        bail!(
+            "this patch is gated off under the session answers, so the session \
+             cannot continue on top of it; commit it in its own session, or change \
+             the answers with `weft session refresh`"
+        );
+    }
     if gate_open && replayed.hash() != work_tree.hash() {
         bail!(
             "replaying the recorded patch does not reproduce the worktree \
@@ -224,13 +266,73 @@ pub fn run(
             generator,
         },
     )?;
-    Session::discard(&opts.template)?;
+    // The index is now empty against whatever base we end at.
+    crate::stage::clear(&opts.template)?;
 
-    eprintln!(
-        "committed patch `{name}` with {} op(s) to `{}`",
-        ops.len(),
-        template.manifest.template.name
-    );
+    let noun = template.manifest.template.name.clone();
+    if remaining.is_empty() {
+        // The whole worktree is committed: end the session (the classic
+        // one-shot flow, and what the existing tests expect).
+        Session::discard(&opts.template)?;
+        eprintln!(
+            "committed patch `{name}` with {} op(s) to `{noun}`",
+            ops.len()
+        );
+        return Ok(());
+    }
+
+    // Changes remain, so the session stays open. Decide how the next patch
+    // relates to this one.
+    let link = match opts.link {
+        Some(l) => l,
+        None => {
+            if interaction.confirm(
+                "keep building on this patch? (no = start the next patch as an independent sibling)",
+                false,
+            )? {
+                CommitLink::Stack
+            } else {
+                CommitLink::Sibling
+            }
+        }
+    };
+    match link {
+        CommitLink::Stack => {
+            // Advance the base to include this patch; the next patch depends on
+            // it. The stored tree hash is the staged tree, which is exactly
+            // `render(base + patch)`.
+            let mut base = sess.session.base.clone();
+            base.push(new_id);
+            Session {
+                session: SessionMeta {
+                    base,
+                    tree_hash: work_tree.hash(),
+                },
+                answers: sess.answers.clone(),
+                secrets: sess.secrets.clone(),
+                foreach: None,
+                generator: None,
+                amend: None,
+            }
+            .save(&opts.template)?;
+            eprintln!(
+                "committed patch `{name}` to `{noun}`, building on it. \
+                 {} file(s) still uncommitted",
+                remaining.len()
+            );
+        }
+        CommitLink::Sibling => {
+            // Keep the base where it is and peel this patch's content out of the
+            // worktree, so the next patch is diffed against the same base and
+            // commutes with this one.
+            crate::stage::revert_worktree_paths(&opts.template, &base_tree, &committed)?;
+            eprintln!(
+                "committed patch `{name}` to `{noun}` as an independent sibling. \
+                 {} file(s) still uncommitted",
+                remaining.len()
+            );
+        }
+    }
     Ok(())
 }
 
@@ -359,20 +461,38 @@ pub struct Preview {
     pub occurrences: Vec<crate::abstraction::Occurrence>,
 }
 
-/// Compute the pre-commit preview for the active record session.
+/// Compute the pre-commit preview for the active record session (the whole
+/// worktree against the base).
 pub fn preview(template: &Template, interaction: &mut dyn Interaction) -> Result<Preview> {
+    preview_target(template, false, interaction)
+}
+
+/// The pre-commit preview, diffing the base against either the whole worktree
+/// (`staged = false`) or the staged tree (`staged = true`, i.e. exactly what
+/// the next `weft commit` will write). An empty index makes the two identical.
+pub fn preview_target(
+    template: &Template,
+    staged: bool,
+    interaction: &mut dyn Interaction,
+) -> Result<Preview> {
     let trees = session_trees(template, interaction)?;
+    let base_tree = &trees.base_tree;
+    let after = if staged {
+        crate::stage::staged_tree(&template.root, &template.ignore, base_tree)?
+    } else {
+        trees.work_tree.clone()
+    };
     let abstractor = Abstractor::from_answers(&trees.answers);
-    let texts = diff::collect_texts(&trees.base_tree, &trees.work_tree);
+    let texts = diff::collect_texts(base_tree, &after);
     let candidates = abstractor.candidates(&texts);
-    let occurrences = diff::added_occurrences(&trees.base_tree, &trees.work_tree, &abstractor);
+    let occurrences = diff::added_occurrences(base_tree, &after, &abstractor);
 
     // Binary sides show as opaque (empty text, `binary: true`) — previews
     // and diffs never try to line-render bytes.
     let text_of = |e: &weft_core::FileEntry| e.content.text().unwrap_or_default().to_owned();
     let mut files = Vec::new();
-    for (path, entry) in trees.work_tree.iter() {
-        match trees.base_tree.get(path) {
+    for (path, entry) in after.iter() {
+        match base_tree.get(path) {
             None => files.push(PreviewFile {
                 path: path.clone(),
                 change: "created",
@@ -401,12 +521,8 @@ pub fn preview(template: &Template, interaction: &mut dyn Interaction) -> Result
             Some(_) => {}
         }
     }
-    for path in trees
-        .base_tree
-        .paths()
-        .filter(|p| trees.work_tree.get(p).is_none())
-    {
-        let base_entry = trees.base_tree.get(path);
+    for path in base_tree.paths().filter(|p| after.get(p).is_none()) {
+        let base_entry = base_tree.get(path);
         files.push(PreviewFile {
             path: path.clone(),
             change: "deleted",

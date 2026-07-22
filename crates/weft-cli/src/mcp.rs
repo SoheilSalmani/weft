@@ -406,6 +406,7 @@ impl WeftMcp {
             tags: p.tags.clone(),
             decisions: Some(p.decisions.clone()),
             keep_literal: p.keep_literal.clone(),
+            link: None,
         };
         weft_engine::commit::run(
             &opts,
