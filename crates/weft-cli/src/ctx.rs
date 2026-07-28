@@ -11,7 +11,11 @@ use weft_engine::discover::{self, WorktreeLink};
 use weft_engine::session::Session;
 
 /// The `--template` / `--session` pair shared by every session command.
+///
+/// `group(skip)`: these are plain flags, and the derived group would collide
+/// with the `weft session scope` subcommand's name.
 #[derive(clap::Args, Clone, Debug, Default)]
+#[group(skip)]
 pub struct Scope {
     /// Template directory. Defaults to the template found by walking up from
     /// the current directory.

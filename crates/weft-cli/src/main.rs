@@ -171,6 +171,14 @@ enum Command {
         /// non-interactively.
         #[arg(long)]
         sibling: bool,
+        /// Depend on these patches instead of the base's leaves (comma
+        /// separated or repeated). They must be in the session's base, and
+        /// the patch must still apply with only them present.
+        #[arg(long = "depends-on", value_delimiter = ',')]
+        depends_on: Vec<String>,
+        /// Depend on exactly this patch — sugar for `--depends-on NAME`.
+        #[arg(long, conflicts_with = "depends_on")]
+        after: Option<String>,
         /// Never open the interactive form; use the default patch name.
         #[arg(long)]
         no_tui: bool,
@@ -452,6 +460,55 @@ enum SessionCmd {
         /// Use sequential prompts instead of the full-screen wizard.
         #[arg(long)]
         no_wizard: bool,
+    },
+    /// Link a directory you already have as a session's worktree, so code you
+    /// wrote in a real project can be promoted back into patches. A project
+    /// scaffolded by `weft new` supplies its own template, base and answers.
+    Adopt {
+        /// The directory to adopt.
+        path: Utf8PathBuf,
+        /// Session name.
+        #[arg(long, short = 'n')]
+        name: String,
+        /// Template to record against (required unless the directory was
+        /// scaffolded by weft).
+        #[arg(long)]
+        template: Option<Utf8PathBuf>,
+        /// Base state: `latest` or a patch name. Defaults to the project's
+        /// own pinned base when scaffolded, `latest` otherwise.
+        #[arg(long)]
+        base: Option<String>,
+        /// Apply a named preset (repeatable).
+        #[arg(long = "preset")]
+        presets: Vec<String>,
+        /// Answer a question inline as KEY=VALUE (repeatable).
+        #[arg(long = "answer")]
+        answers: Vec<String>,
+        /// TOML file with answers.
+        #[arg(long = "answers-file")]
+        answers_file: Option<Utf8PathBuf>,
+        /// Only look at paths matching this glob (repeatable). Without it the
+        /// whole directory is diffed against the base, which on a project weft
+        /// did not scaffold means every file reads as new.
+        #[arg(long = "scope")]
+        scope: Vec<String>,
+        /// Replace an existing session of this name instead of failing.
+        #[arg(long)]
+        force: bool,
+        /// Never prompt; fail if answers are missing.
+        #[arg(long)]
+        non_interactive: bool,
+    },
+    /// Show or change which paths an adopted session looks at.
+    Scope {
+        #[command(flatten)]
+        scope: ctx::Scope,
+        /// Start looking at paths matching this glob (repeatable).
+        #[arg(long = "add")]
+        add: Vec<String>,
+        /// Stop looking at this glob (must match one already recorded).
+        #[arg(long = "rm")]
+        rm: Vec<String>,
     },
     /// List the template's sessions, with a marker for the one you are in.
     #[command(visible_alias = "ls")]
@@ -1233,8 +1290,15 @@ fn main() -> anyhow::Result<()> {
             keep_literal,
             stack,
             sibling,
+            depends_on,
+            after,
             no_tui,
         } => {
+            let depends_on = match (depends_on.is_empty(), after) {
+                (true, None) => None,
+                (_, Some(one)) => Some(vec![one]),
+                (false, None) => Some(depends_on),
+            };
             let link = if stack {
                 Some(weft_engine::commit::CommitLink::Stack)
             } else if sibling {
@@ -1268,6 +1332,7 @@ fn main() -> anyhow::Result<()> {
                 decisions: None,
                 keep_literal,
                 link,
+                depends_on,
             };
             let mut interaction = auto_interaction(yes);
             let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
@@ -1517,6 +1582,71 @@ fn main() -> anyhow::Result<()> {
                 let worktree = weft_engine::start::run(&opts, &mut resolver, interaction.as_mut())?;
                 resolver.flush()?;
                 weft_engine::start::announce(&opts.name, &worktree);
+                Ok(())
+            }
+            SessionCmd::Adopt {
+                path,
+                name,
+                template,
+                base,
+                presets,
+                answers,
+                answers_file,
+                scope,
+                force,
+                non_interactive,
+            } => {
+                let opts = weft_engine::adopt::AdoptOptions {
+                    path,
+                    name,
+                    template,
+                    base,
+                    presets,
+                    answers,
+                    answers_file,
+                    answers_json: None,
+                    scope,
+                    force,
+                };
+                let mut interaction = auto_interaction(non_interactive);
+                let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
+                let result = weft_engine::adopt::run(&opts, &mut resolver, interaction.as_mut());
+                resolver.flush()?;
+                let (template_root, worktree) = result?;
+                println!("{worktree}");
+                eprintln!(
+                    "session `{}` adopted `{worktree}` against `{template_root}` — \
+                     `weft status` shows what it sees",
+                    opts.name
+                );
+                Ok(())
+            }
+            SessionCmd::Scope { scope, add, rm } => {
+                let here = scope.resolve()?;
+                let mut sess = weft_engine::session::Session::load(&here.template, &here.session)?;
+                for glob in &rm {
+                    if !sess.session.scope.iter().any(|g| g == glob) {
+                        anyhow::bail!("`{glob}` is not in this session's scope");
+                    }
+                    sess.session.scope.retain(|g| g != glob);
+                }
+                for glob in add {
+                    if !sess.session.scope.contains(&glob) {
+                        sess.session.scope.push(glob);
+                    }
+                }
+                // Validate before storing: a bad glob would break every later
+                // command on this session.
+                weft_engine::stage::globset(&sess.session.scope)?;
+                sess.save(&here.template, &here.session)?;
+                if sess.session.scope.is_empty() {
+                    println!("session `{}` looks at the whole worktree", here.session);
+                } else {
+                    println!("session `{}` looks at:", here.session);
+                    for glob in &sess.session.scope {
+                        println!("  {glob}");
+                    }
+                }
                 Ok(())
             }
             SessionCmd::List { template } => {

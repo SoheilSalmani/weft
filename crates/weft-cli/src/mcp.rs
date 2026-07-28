@@ -442,6 +442,7 @@ impl WeftMcp {
             decisions: Some(p.decisions.clone()),
             keep_literal: p.keep_literal.clone(),
             link: None,
+            depends_on: None,
         };
         weft_engine::commit::run(
             &opts,

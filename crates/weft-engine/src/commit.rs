@@ -2,6 +2,8 @@
 //! abstract concrete values back into answer references, and append the
 //! result as a new patch.
 
+use std::collections::BTreeSet;
+
 use anyhow::{bail, Context, Result};
 use camino::Utf8PathBuf;
 use weft_core::{AnswerSet, StarlarkExpr, Value};
@@ -39,6 +41,9 @@ pub struct CommitOptions {
     /// the commit. `None` prompts interactively and defaults to `Sibling` when
     /// non-interactive.
     pub link: Option<CommitLink>,
+    /// Place the patch in the graph explicitly instead of depending on the
+    /// base's active leaves. Names must be patches in the session's base.
+    pub depends_on: Option<Vec<String>>,
 }
 
 /// After a commit that leaves more work, how the next patch relates to it.
@@ -101,6 +106,16 @@ pub fn run(
     } = session_trees(&template, &opts.session, interaction)?;
     let eval = StarlarkEval;
     guard_mounts(&template, sess.foreach.as_ref(), &base_tree, &full_work)?;
+    // Refuse impossible options before writing anything: the sibling
+    // transition reverts committed paths in the worktree, which on an adopted
+    // project would delete the author's own files.
+    if sess.session.adopted && opts.link == Some(CommitLink::Sibling) {
+        bail!(
+            "`--sibling` would revert the committed files in `{worktree_root}` back to the \
+             base state, and that worktree is an adopted project, not a scratch render. \
+             Commit it stacked (the default there) instead."
+        );
+    }
 
     // The staged tree (`weft add`) is what we commit. An empty index stages
     // nothing, so the staged tree equals the base and we fall back to the whole
@@ -210,12 +225,16 @@ pub fn run(
     // under the session answers contributed nothing to the recorded state,
     // and depending on it would gate the new patch off with it.
     let active_base = active_ids(&base_patches, &answers, &eval)?;
-    let depends_on = base_leaves(&template, &active_base);
+    let depends_on = match &opts.depends_on {
+        Some(declared) => declared_deps(&template, declared, &active_base)?,
+        None => base_leaves(&template, &active_base),
+    };
 
     // Validation before writing: the new patch applied to the base must
     // reproduce the worktree byte-for-byte (this also catches ambiguous
     // hunk contexts). Skipped when a `when` gate is false under the
     // session answers.
+    //
     let foreach_include = sess.foreach.as_ref().map(|f| f.include.clone());
     let candidate = weft_core::Patch::new_foreach(
         depends_on.iter().map(|n| template.name_to_id[n]).collect(),
@@ -225,9 +244,35 @@ pub fn run(
     );
     let new_id = candidate.id;
     let mut with_new = base_patches.clone();
-    with_new.push(candidate);
+    with_new.push(candidate.clone());
     let replayed = crate::compose::render_composed(&with_new, &answers, &parts, &eval)
         .context("replaying the recorded patch against the base state")?;
+
+    // Declared dependencies are a claim of independence from everything else
+    // in the base, so prove it: the patch must also apply against its own
+    // dependency closure alone. A hunk that only anchors because of a sibling
+    // fails here instead of at `weft check` (or in someone's scaffold).
+    if let Some(declared) = &opts.depends_on {
+        let closure: BTreeSet<_> = depends_on
+            .iter()
+            .flat_map(|n| template.ancestor_closure(template.name_to_id[n]))
+            .collect();
+        let mut alone: Vec<_> = base_patches
+            .iter()
+            .filter(|p| closure.contains(&p.id))
+            .cloned()
+            .collect();
+        alone.push(candidate);
+        if let Err(e) = crate::compose::render_composed(&alone, &answers, &parts, &eval) {
+            bail!(
+                "this patch does not apply with only `{}` in the base: {e}\n\
+                 its content anchors on something else in the session's base — \
+                 declare that patch too, or drop --depends-on/--after to depend on \
+                 the base's leaves",
+                declared.join(", ")
+            );
+        }
+    }
     let gate_open = match &when {
         None => true,
         Some(expr) => eval_gate(expr, &answers)?,
@@ -289,16 +334,25 @@ pub fn run(
 
     // Changes remain, so the session stays open. Decide how the next patch
     // relates to this one.
-    let link = match opts.link {
-        Some(l) => l,
-        None => {
-            if interaction.confirm(
-                "keep building on this patch? (no = start the next patch as an independent sibling)",
-                false,
-            )? {
-                CommitLink::Stack
-            } else {
-                CommitLink::Sibling
+    //
+    // An adopted worktree is the author's real project, not a scratch render:
+    // peeling the committed content back out would delete the very files they
+    // just promoted. Stack is the only safe transition there (checked up
+    // front, before anything is written).
+    let link = if sess.session.adopted {
+        CommitLink::Stack
+    } else {
+        match opts.link {
+            Some(l) => l,
+            None => {
+                if interaction.confirm(
+                    "keep building on this patch? (no = start the next patch as an independent sibling)",
+                    false,
+                )? {
+                    CommitLink::Stack
+                } else {
+                    CommitLink::Sibling
+                }
             }
         }
     };
@@ -368,6 +422,36 @@ fn active_ids(
         }
     }
     Ok(active)
+}
+
+/// Validate `--depends-on` / `--after` names: each must be a patch in the
+/// session's *active* base, since the recorded content was diffed against
+/// exactly that state.
+fn declared_deps(
+    template: &Template,
+    declared: &[String],
+    active_base: &[weft_core::PatchId],
+) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for name in declared {
+        let id = template.name_to_id.get(name).with_context(|| {
+            format!("--depends-on `{name}`: no patch by that name in this template")
+        })?;
+        if !active_base.contains(id) {
+            bail!(
+                "--depends-on `{name}`: that patch is not in this session's base, so the \
+                 recorded content was never diffed against it. Base a new session on it \
+                 (`weft session new N --base {name}`) to build on top."
+            );
+        }
+        if !out.contains(name) {
+            out.push(name.clone());
+        }
+    }
+    if out.is_empty() {
+        bail!("--depends-on needs at least one patch name");
+    }
+    Ok(out)
 }
 
 fn eval_gate(expr: &StarlarkExpr, answers: &AnswerSet) -> Result<bool> {

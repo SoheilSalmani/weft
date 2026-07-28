@@ -279,7 +279,7 @@ pub(crate) fn strip_secrets(answers: &weft_core::AnswerSet) -> weft_core::Answer
 }
 
 /// Resolve a `--base` ref to a set of patch ids.
-fn pin_base(template: &Template, base: &str) -> Result<BTreeSet<PatchId>> {
+pub fn pin_base(template: &Template, base: &str) -> Result<BTreeSet<PatchId>> {
     if base == "latest" {
         return Ok(template.patches.iter().map(|p| p.id).collect());
     }
