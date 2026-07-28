@@ -41,9 +41,9 @@ description = "TODO: what this template scaffolds."
 
 # Declare the questions your template asks, then record your first patch:
 #
-#   weft record --template . --answer "project_name=Demo Project"
-#   # …edit files in the printed worktree…
-#   weft commit --template . --name base --title "Initialize project" --yes
+#   cd $(weft session new base --answer "project_name=Demo Project")
+#   # …you are now in the worktree: write real files with your normal tools…
+#   weft commit --name base --title "Initialize project" --yes
 #
 # [[question]]
 # id = "project_name"

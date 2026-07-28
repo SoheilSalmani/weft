@@ -67,7 +67,7 @@ pub fn hook_add(
 ) -> Result<HookAddOptions> {
     let template = Template::load(root)?;
     if template.patches.is_empty() {
-        bail!("template has no patches yet; record one first (`weft record`)");
+        bail!("template has no patches yet; record one first (`weft session new NAME`)");
     }
     let fields = vec![
         Field::select("patch", "Patch", patch_choices(&template), patch.as_deref())
@@ -185,7 +185,7 @@ pub fn patch_set(
 ) -> Result<PatchSetOptions> {
     let template = Template::load(root)?;
     if template.patches.is_empty() {
-        bail!("template has no patches yet; record one first (`weft record`)");
+        bail!("template has no patches yet; record one first (`weft session new NAME`)");
     }
     // Prefill the current metadata of the chosen patch when it's known.
     let (title, describe, tags) = match &name {

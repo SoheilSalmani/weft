@@ -25,4 +25,4 @@ Requires the `weft` binary on PATH (or pass `bin`).
 ## Schemas without the plugin
 
 taplo / Even Better TOML and jsonls users can get validation with no plugin
-at all — see `docs/guides/editors.mdx`.
+at all — see the editors guide in the published documentation.

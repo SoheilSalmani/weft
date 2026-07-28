@@ -604,7 +604,7 @@ enum PatchCmd {
         template: Utf8PathBuf,
     },
     /// Re-run the stored generator command of patches recorded with
-    /// `weft record --exec` and rewrite their ops from the fresh output.
+    /// `weft session new --exec` and rewrite their ops from the fresh output.
     Resync {
         /// Patch names to resync (or pass --all).
         names: Vec<String>,

@@ -51,7 +51,7 @@ pub struct PatchMeta {
     /// editing a hook never changes the patch id (like `description`/`tags`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hooks: Vec<Hook>,
-    /// Present when this patch's content was produced by `weft record
+    /// Present when this patch's content was produced by `weft session new
     /// --exec`: the command plus what `weft patch resync` needs to re-run
     /// it. Not hashed — like every other metadata field.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -47,7 +47,9 @@ curl -fsSL https://raw.githubusercontent.com/SoheilSalmani/weft/main/install.sh 
 
 **cargo** (with the first release): `cargo install weft-cli`.
 
-Full instructions and the docs: <https://github.com/SoheilSalmani/weft>.
+Full instructions and the documentation: <https://github.com/SoheilSalmani/weft>.
+The docs site (guides, tutorials, cookbook, CLI reference) is built from the
+`weft-cloud` repo and published separately.
 
 ### Developing
 
