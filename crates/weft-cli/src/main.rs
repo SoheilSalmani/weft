@@ -1,3 +1,4 @@
+mod addpatch;
 mod diffcmd;
 mod forms;
 mod hub;
@@ -6,6 +7,8 @@ mod mcp;
 mod schema;
 mod tui;
 mod wizard;
+
+use std::io::IsTerminal;
 
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
@@ -239,6 +242,9 @@ enum Command {
         /// Stage everything (equivalent to `.`).
         #[arg(long, short = 'A')]
         all: bool,
+        /// Choose what to stage hunk by hunk (like `git add -p`).
+        #[arg(long, short = 'p')]
+        patch: bool,
     },
     /// Unstage paths from the session index (like `git reset`). No paths
     /// unstages everything.
@@ -1309,6 +1315,7 @@ fn main() -> anyhow::Result<()> {
             patterns,
             template,
             all,
+            patch,
         } => {
             if !weft_engine::session::Session::exists(&template) {
                 anyhow::bail!("no recording session; run `weft record` first");
@@ -1316,7 +1323,8 @@ fn main() -> anyhow::Result<()> {
             let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
             let tpl = Template::load_with(&template, &mut resolver)?;
             resolver.flush()?;
-            let pats: Vec<String> = if all {
+            // `-p` walks every change by default, like `git add -p`.
+            let pats: Vec<String> = if all || (patch && patterns.is_empty()) {
                 vec!["**".to_string()]
             } else if patterns.is_empty() {
                 anyhow::bail!("specify paths to stage (globs), or pass -A to stage everything");
@@ -1331,8 +1339,28 @@ fn main() -> anyhow::Result<()> {
             let trees = weft_engine::commit::session_trees(&tpl, interaction.as_mut())?;
             let mut staged =
                 weft_engine::stage::staged_tree(&template, &tpl.ignore, &trees.base_tree)?;
-            let n =
-                weft_engine::stage::add(&mut staged, &trees.work_tree, &trees.base_tree, &globs);
+            let n = if patch {
+                let paths: Vec<_> = weft_engine::stage::changed_paths(&staged, &trees.work_tree)
+                    .into_iter()
+                    .filter(|p| globs.is_match(p.as_str()))
+                    .collect();
+                if paths.is_empty() {
+                    eprintln!("nothing to stage — the staged tree already matches the worktree");
+                    return Ok(());
+                }
+                addpatch::stage_interactively(
+                    &mut std::io::stdout(),
+                    &addpatch::Paint {
+                        color: std::io::stdout().is_terminal(),
+                    },
+                    &mut addpatch::TerminalDecider::default(),
+                    &mut staged,
+                    &trees.work_tree,
+                    &paths,
+                )?
+            } else {
+                weft_engine::stage::add(&mut staged, &trees.work_tree, &trees.base_tree, &globs)
+            };
             weft_engine::stage::write(&template, &staged, &trees.base_tree)?;
             eprintln!("staged {n} path(s)");
             Ok(())

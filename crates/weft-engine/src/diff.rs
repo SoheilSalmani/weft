@@ -323,6 +323,237 @@ where
     hunks
 }
 
+/// One line of a selectable hunk's unified-diff body.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HunkLine {
+    Context(String),
+    Removed(String),
+    Added(String),
+}
+
+/// One independently stageable change between two concrete texts (`weft add
+/// -p`). Unlike [`Hunk`] this is not abstracted and not context-anchored: it
+/// carries the exact line ranges it rewrites, so a subset of hunks can be
+/// replayed onto the old text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SelectableHunk {
+    /// Lines of the old text this hunk replaces (0-based, end-exclusive).
+    pub old_range: std::ops::Range<usize>,
+    /// Lines of the new text it replaces them with.
+    pub new_range: std::ops::Range<usize>,
+    /// The same spans widened by the displayed context, for the `@@` header.
+    pub old_span: std::ops::Range<usize>,
+    pub new_span: std::ops::Range<usize>,
+    /// Unified-diff body, in order.
+    pub lines: Vec<HunkLine>,
+}
+
+impl SelectableHunk {
+    /// The `@@ -old,len +new,len @@` header (1-based, git-style).
+    pub fn header(&self) -> String {
+        let (ol, nl) = (self.old_span.len(), self.new_span.len());
+        let (os, ns) = (
+            if ol == 0 { 0 } else { self.old_span.start + 1 },
+            if nl == 0 { 0 } else { self.new_span.start + 1 },
+        );
+        format!("@@ -{os},{ol} +{ns},{nl} @@")
+    }
+
+    /// Can [`split`] break this hunk up? True when it has interior context.
+    pub fn splittable(&self) -> bool {
+        change_runs(&self.lines).len() > 1
+    }
+}
+
+/// Split `old` → `new` into independently stageable hunks, grouped the same
+/// way [`hunks_between`] groups them (change runs closer than
+/// `2 * CONTEXT_RADIUS` share a hunk). An empty `old` with a non-empty `new`
+/// yields one all-added hunk.
+pub fn selectable_hunks(old: &str, new: &str) -> Vec<SelectableHunk> {
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+    let diff = TextDiff::from_slices(&old_lines, &new_lines);
+    diff.grouped_ops(CONTEXT_RADIUS)
+        .iter()
+        .filter_map(|group| selectable_from_ops(group, &old_lines, &new_lines))
+        .collect()
+}
+
+fn selectable_from_ops(
+    ops: &[DiffOp],
+    old_lines: &[&str],
+    new_lines: &[&str],
+) -> Option<SelectableHunk> {
+    use similar::DiffTag;
+    let first = ops.iter().position(|o| o.tag() != DiffTag::Equal)?;
+    let last = ops.iter().rposition(|o| o.tag() != DiffTag::Equal)?;
+
+    let mut lines = Vec::new();
+    for op in ops {
+        match op.tag() {
+            DiffTag::Equal => lines.extend(
+                old_lines[op.old_range()]
+                    .iter()
+                    .map(|l| HunkLine::Context((*l).to_owned())),
+            ),
+            DiffTag::Delete => lines.extend(
+                old_lines[op.old_range()]
+                    .iter()
+                    .map(|l| HunkLine::Removed((*l).to_owned())),
+            ),
+            DiffTag::Insert => lines.extend(
+                new_lines[op.new_range()]
+                    .iter()
+                    .map(|l| HunkLine::Added((*l).to_owned())),
+            ),
+            DiffTag::Replace => {
+                lines.extend(
+                    old_lines[op.old_range()]
+                        .iter()
+                        .map(|l| HunkLine::Removed((*l).to_owned())),
+                );
+                lines.extend(
+                    new_lines[op.new_range()]
+                        .iter()
+                        .map(|l| HunkLine::Added((*l).to_owned())),
+                );
+            }
+        }
+    }
+
+    Some(SelectableHunk {
+        old_range: ops[first].old_range().start..ops[last].old_range().end,
+        new_range: ops[first].new_range().start..ops[last].new_range().end,
+        old_span: ops[0].old_range().start..ops[ops.len() - 1].old_range().end,
+        new_span: ops[0].new_range().start..ops[ops.len() - 1].new_range().end,
+        lines,
+    })
+}
+
+/// Index ranges (into `lines`) of the maximal runs of non-context lines.
+fn change_runs(lines: &[HunkLine]) -> Vec<std::ops::Range<usize>> {
+    let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if matches!(line, HunkLine::Context(_)) {
+            continue;
+        }
+        match runs.last_mut() {
+            Some(run) if run.end == i => run.end = i + 1,
+            _ => runs.push(i..i + 1),
+        }
+    }
+    runs
+}
+
+/// Break a grouped hunk at its interior context into one hunk per change run
+/// (`s` in the picker). Returns `None` when the hunk is a single contiguous
+/// change and cannot be split further.
+///
+/// Sub-hunks may *display* the same context lines, but their `old_range`s are
+/// disjoint, so [`apply_selection`] stays well-defined.
+pub fn split(hunk: &SelectableHunk) -> Option<Vec<SelectableHunk>> {
+    let runs = change_runs(&hunk.lines);
+    if runs.len() < 2 {
+        return None;
+    }
+
+    // Per-display-line positions in the old and new texts.
+    let (mut old_at, mut new_at) = (Vec::new(), Vec::new());
+    let (mut o, mut n) = (hunk.old_span.start, hunk.new_span.start);
+    for line in &hunk.lines {
+        old_at.push(o);
+        new_at.push(n);
+        match line {
+            HunkLine::Context(_) => {
+                o += 1;
+                n += 1;
+            }
+            HunkLine::Removed(_) => o += 1,
+            HunkLine::Added(_) => n += 1,
+        }
+    }
+    old_at.push(o);
+    new_at.push(n);
+
+    let parts = runs
+        .iter()
+        .map(|run| {
+            let ctx_start = run.start.saturating_sub(CONTEXT_RADIUS);
+            let ctx_end = (run.end + CONTEXT_RADIUS).min(hunk.lines.len());
+            SelectableHunk {
+                old_range: old_at[run.start]..old_at[run.end],
+                new_range: new_at[run.start]..new_at[run.end],
+                old_span: old_at[ctx_start]..old_at[ctx_end],
+                new_span: new_at[ctx_start]..new_at[ctx_end],
+                lines: hunk.lines[ctx_start..ctx_end].to_vec(),
+            }
+        })
+        .collect();
+    Some(parts)
+}
+
+/// Rebuild the file from `old`, taking the `new` side for the hunks marked in
+/// `selected` and the `old` side for the rest. `hunks` must be in order with
+/// disjoint `old_range`s (as produced by [`selectable_hunks`] / [`split`]).
+///
+/// Selecting every hunk reproduces `new`; selecting none reproduces `old`.
+pub fn apply_selection(
+    old: &str,
+    new: &str,
+    hunks: &[SelectableHunk],
+    selected: &[bool],
+) -> String {
+    if !hunks.is_empty() {
+        if selected.iter().all(|s| *s) {
+            return new.to_owned();
+        }
+        if !selected.iter().any(|s| *s) {
+            return old.to_owned();
+        }
+    }
+
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+    let mut out: Vec<&str> = Vec::new();
+    // Whether the last emitted line came from `new` — decides whether the
+    // result keeps `new`'s or `old`'s trailing-newline habit.
+    let mut tail_from_new = false;
+    let mut cursor = 0usize;
+
+    for (hunk, take_new) in hunks
+        .iter()
+        .zip(selected.iter().chain(std::iter::repeat(&false)))
+    {
+        out.extend(&old_lines[cursor..hunk.old_range.start]);
+        if hunk.old_range.start > cursor {
+            tail_from_new = false;
+        }
+        if *take_new {
+            out.extend(&new_lines[hunk.new_range.clone()]);
+            if !hunk.new_range.is_empty() {
+                tail_from_new = true;
+            }
+        } else {
+            out.extend(&old_lines[hunk.old_range.clone()]);
+            if !hunk.old_range.is_empty() {
+                tail_from_new = false;
+            }
+        }
+        cursor = hunk.old_range.end;
+    }
+    out.extend(&old_lines[cursor..]);
+    if cursor < old_lines.len() {
+        tail_from_new = false;
+    }
+
+    let mut text = out.join("\n");
+    let source = if tail_from_new { new } else { old };
+    if !text.is_empty() && source.ends_with('\n') {
+        text.push('\n');
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,5 +628,120 @@ mod tests {
         assert_eq!(hunks[0].added, vec![Line::literal("c")]);
         assert!(hunks[0].context_after.is_empty());
         assert_eq!(hunks[0].removed, Vec::<Line>::new());
+    }
+
+    // ---- selectable hunks (`weft add -p`) -------------------------------
+
+    /// Two edits far enough apart to be separate hunks.
+    const FAR_OLD: &str = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n";
+    const FAR_NEW: &str = "1\nTWO\n3\n4\n5\n6\n7\n8\nNINE\n10\n";
+
+    #[test]
+    fn distant_changes_are_separate_selectable_hunks() {
+        let hunks = selectable_hunks(FAR_OLD, FAR_NEW);
+        assert_eq!(hunks.len(), 2);
+        assert_eq!(hunks[0].old_range, 1..2);
+        assert_eq!(hunks[1].old_range, 8..9);
+        assert!(!hunks[0].splittable());
+    }
+
+    #[test]
+    fn selecting_all_or_none_reproduces_the_sides() {
+        let hunks = selectable_hunks(FAR_OLD, FAR_NEW);
+        assert_eq!(
+            apply_selection(FAR_OLD, FAR_NEW, &hunks, &[true, true]),
+            FAR_NEW
+        );
+        assert_eq!(
+            apply_selection(FAR_OLD, FAR_NEW, &hunks, &[false, false]),
+            FAR_OLD
+        );
+    }
+
+    #[test]
+    fn selecting_one_hunk_takes_only_that_edit() {
+        let hunks = selectable_hunks(FAR_OLD, FAR_NEW);
+        assert_eq!(
+            apply_selection(FAR_OLD, FAR_NEW, &hunks, &[true, false]),
+            "1\nTWO\n3\n4\n5\n6\n7\n8\n9\n10\n"
+        );
+        assert_eq!(
+            apply_selection(FAR_OLD, FAR_NEW, &hunks, &[false, true]),
+            "1\n2\n3\n4\n5\n6\n7\n8\nNINE\n10\n"
+        );
+    }
+
+    #[test]
+    fn insertions_and_deletions_apply_selectively() {
+        let old = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\n";
+        let new = "a\nb\nc\nNEW\nd\ne\nf\ng\nh\ni\nk\n"; // insert after c, delete j
+        let hunks = selectable_hunks(old, new);
+        assert_eq!(hunks.len(), 2);
+        assert_eq!(
+            apply_selection(old, new, &hunks, &[true, false]),
+            "a\nb\nc\nNEW\nd\ne\nf\ng\nh\ni\nj\nk\n"
+        );
+        assert_eq!(
+            apply_selection(old, new, &hunks, &[false, true]),
+            "a\nb\nc\nd\ne\nf\ng\nh\ni\nk\n"
+        );
+    }
+
+    #[test]
+    fn created_file_is_one_all_added_hunk() {
+        let hunks = selectable_hunks("", "x\ny\n");
+        assert_eq!(hunks.len(), 1);
+        assert!(hunks[0]
+            .lines
+            .iter()
+            .all(|l| matches!(l, HunkLine::Added(_))));
+        assert_eq!(apply_selection("", "x\ny\n", &hunks, &[true]), "x\ny\n");
+        assert_eq!(apply_selection("", "x\ny\n", &hunks, &[false]), "");
+    }
+
+    #[test]
+    fn split_breaks_a_merged_hunk_at_its_interior_context() {
+        let old = "a\nb\nc\nd\ne\n";
+        let new = "a\nB\nc\nD\ne\n"; // 2 lines apart: one grouped hunk
+        let hunks = selectable_hunks(old, new);
+        assert_eq!(hunks.len(), 1);
+        assert!(hunks[0].splittable());
+
+        let parts = split(&hunks[0]).expect("splittable");
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].old_range, 1..2);
+        assert_eq!(parts[1].old_range, 3..4);
+        assert_eq!(
+            apply_selection(old, new, &parts, &[true, false]),
+            "a\nB\nc\nd\ne\n"
+        );
+        assert_eq!(
+            apply_selection(old, new, &parts, &[false, true]),
+            "a\nb\nc\nD\ne\n"
+        );
+        assert_eq!(apply_selection(old, new, &parts, &[true, true]), new);
+    }
+
+    #[test]
+    fn a_contiguous_change_cannot_be_split() {
+        let hunks = selectable_hunks("a\nb\nc\n", "a\nX\nY\nc\n");
+        assert_eq!(hunks.len(), 1);
+        assert!(!hunks[0].splittable());
+        assert!(split(&hunks[0]).is_none());
+    }
+
+    #[test]
+    fn hunk_header_is_one_based() {
+        let hunks = selectable_hunks(FAR_OLD, FAR_NEW);
+        assert_eq!(hunks[0].header(), "@@ -1,4 +1,4 @@");
+    }
+
+    #[test]
+    fn missing_trailing_newline_is_preserved() {
+        let old = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10";
+        let new = "1\nTWO\n3\n4\n5\n6\n7\n8\nNINE\n10";
+        let hunks = selectable_hunks(old, new);
+        let partial = apply_selection(old, new, &hunks, &[true, false]);
+        assert_eq!(partial, "1\nTWO\n3\n4\n5\n6\n7\n8\n9\n10");
     }
 }

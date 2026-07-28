@@ -53,6 +53,27 @@ deviations from the plan.
   is the CLI diff handler). Empty index prints a friendly note. e2e:
   diff_staged_shows_only_the_staged_changes. Docs: reference/cli.mdx weft diff +
   authoring.mdx.
+- **`weft add -p` / `--patch`** (the v2 item above, done): walk the unstaged
+  changes hunk by hunk and stage a subset. KEY INSIGHT — **no stage-format
+  change**: the stage holds whole-file blobs, so a partially staged file is just
+  "the staged version with the selected hunks applied"; `staged_tree`,
+  `stage::write` and `commit` are untouched. The picker diffs **staged →
+  worktree** (like git: `-p` shows what is not yet staged), not base → worktree.
+  Engine (`diff.rs`): `SelectableHunk`/`HunkLine` + `selectable_hunks` (same
+  `TextDiff` + `CONTEXT_RADIUS` grouping as `hunks_between`, but concrete text
+  plus the exact old/new line ranges), `apply_selection` (rebuild the file from
+  the mask; all-true ⇒ new, all-false ⇒ old, trailing-newline habit preserved)
+  and `split` (break a grouped hunk at its interior context into one hunk per
+  change run — sub-hunks may SHOW shared context but their `old_range`s are
+  disjoint, so apply stays well-defined). CLI: `weft-cli/src/addpatch.rs`, keys
+  `y n a d s q ?` (no `e`/manual edit, no `j`/`k` navigation — deliberate).
+  Deletions, binary content and mode changes are not hunkable: one `[y/n]`
+  prompt, staged whole. Decisions come through the `HunkDecider` trait —
+  `TerminalDecider` reads single raw keypresses on a TTY and **one key per line
+  when stdin is a pipe**, which keeps `-p` scriptable and lets the e2e tests
+  drive it (`write_stdin("y\nn\n")`). `-p` with no patterns means everything.
+  `weft reset` stays file-level (unstage the whole file to redo). Tests: 8 unit
+  in diff.rs, 11 in addpatch.rs, 5 e2e in tests/e2e/tests/add_patch.rs.
 
 ## Post-MVP — Self-contained update base (survives history rewrites)
 
