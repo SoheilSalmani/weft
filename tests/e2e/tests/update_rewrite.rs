@@ -36,14 +36,14 @@ fn scaffolded(note_body: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
     let tpl = dir.path().join("hello");
     copy_dir(&hello_template(), &tpl);
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
         .arg("project_name=Demo")
         .assert()
         .success();
-    std::fs::write(tpl.join(".weft-record/worktree/note.txt"), note_body).unwrap();
+    std::fs::write(tpl.join(".weft-sessions/main/worktree/note.txt"), note_body).unwrap();
     weft()
         .arg("commit")
         .arg("--template")
@@ -84,7 +84,7 @@ fn amend_note(tpl: &Path, new_body: &str) {
         .arg("--non-interactive")
         .assert()
         .success();
-    std::fs::write(tpl.join(".weft-record/worktree/note.txt"), new_body).unwrap();
+    std::fs::write(tpl.join(".weft-sessions/note/worktree/note.txt"), new_body).unwrap();
     weft()
         .arg("commit")
         .arg("--template")
@@ -152,14 +152,14 @@ fn squash_update_is_a_noop() {
     copy_dir(&hello_template(), &tpl);
     // s1 creates a.txt; s2 (on s1) creates b.txt.
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
         .arg("project_name=Demo")
         .assert()
         .success();
-    std::fs::write(tpl.join(".weft-record/worktree/a.txt"), "aaa\n").unwrap();
+    std::fs::write(tpl.join(".weft-sessions/main/worktree/a.txt"), "aaa\n").unwrap();
     weft()
         .arg("commit")
         .arg("--template")
@@ -170,7 +170,7 @@ fn squash_update_is_a_noop() {
         .assert()
         .success();
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--base")
@@ -179,7 +179,7 @@ fn squash_update_is_a_noop() {
         .arg("project_name=Demo")
         .assert()
         .success();
-    std::fs::write(tpl.join(".weft-record/worktree/b.txt"), "bbb\n").unwrap();
+    std::fs::write(tpl.join(".weft-sessions/main/worktree/b.txt"), "bbb\n").unwrap();
     weft()
         .arg("commit")
         .arg("--template")

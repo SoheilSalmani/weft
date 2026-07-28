@@ -128,9 +128,9 @@ fn mcp_scaffold_flow() {
         "describe_template",
         "scaffold",
         "check_template",
-        "record_start",
-        "record_write_file",
-        "record_commit",
+        "session_start",
+        "session_write_file",
+        "session_commit",
     ] {
         assert!(names.contains(&expected), "missing tool {expected}");
     }
@@ -173,7 +173,7 @@ fn mcp_scaffold_flow() {
 }
 
 #[test]
-fn mcp_record_commit_flow() {
+fn mcp_session_commit_flow() {
     // work on a copy so the fixture stays pristine
     let tmp = tempfile::tempdir().unwrap();
     let templates = tmp.path().join("templates");
@@ -198,7 +198,7 @@ fn mcp_record_commit_flow() {
     client.initialize();
 
     let started = client.call_tool(
-        "record_start",
+        "session_start",
         serde_json::json!({
             "template": "hello",
             "answers": {"project_name": "My Shop"},
@@ -211,7 +211,7 @@ fn mcp_record_commit_flow() {
         .any(|f| f == "README.md"));
 
     client.call_tool(
-        "record_write_file",
+        "session_write_file",
         serde_json::json!({
             "template": "hello",
             "path": "Makefile",
@@ -223,7 +223,7 @@ fn mcp_record_commit_flow() {
     let escape = client.request_raw(
         "tools/call",
         serde_json::json!({
-            "name": "record_write_file",
+            "name": "session_write_file",
             "arguments": {"template": "hello", "path": "../evil", "content": "x"},
         }),
     );
@@ -233,7 +233,7 @@ fn mcp_record_commit_flow() {
         .contains("invalid worktree path"));
 
     client.call_tool(
-        "record_commit",
+        "session_commit",
         serde_json::json!({
             "template": "hello",
             "name": "makefile",

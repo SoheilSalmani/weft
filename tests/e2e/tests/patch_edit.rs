@@ -32,7 +32,7 @@ fn with_generator(src: &Path) -> (tempfile::TempDir, PathBuf) {
     let tpl = dir.path().join("hello");
     copy_dir(&hello_template(), &tpl);
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
@@ -148,7 +148,10 @@ fn amend_refuses_generator_patches() {
         .failure()
         .stderr(predicates::str::contains("generator patch"))
         .stderr(predicates::str::contains("resync"));
-    assert!(!tpl.join(".weft-record").exists(), "no session left behind");
+    assert!(
+        !tpl.join(".weft-sessions").exists(),
+        "no session left behind"
+    );
 }
 
 #[test]
@@ -171,7 +174,7 @@ fn amend_non_leaf_warns_about_dependents() {
         .assert()
         .success()
         .stderr(predicates::str::contains("has dependents"));
-    assert!(tpl.join(".weft-record/worktree").exists());
+    assert!(tpl.join(".weft-sessions/base/worktree").exists());
 }
 
 #[test]
@@ -182,7 +185,7 @@ fn amend_rewrites_a_leaf_patch_in_place() {
 
     // Record a fresh leaf patch: adds note.txt referencing project_name.
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
@@ -190,7 +193,7 @@ fn amend_rewrites_a_leaf_patch_in_place() {
         .assert()
         .success();
     std::fs::write(
-        tpl.join(".weft-record/worktree/note.txt"),
+        tpl.join(".weft-sessions/main/worktree/note.txt"),
         "welcome to Demo\n",
     )
     .unwrap();
@@ -221,7 +224,7 @@ fn amend_rewrites_a_leaf_patch_in_place() {
         .arg("--non-interactive")
         .assert()
         .success();
-    let worktree = tpl.join(".weft-record/worktree");
+    let worktree = tpl.join(".weft-sessions/note/worktree");
     assert_eq!(
         read(&worktree, "note.txt"),
         "welcome to Demo\n",
@@ -281,14 +284,14 @@ fn stacked_template() -> (tempfile::TempDir, PathBuf) {
     // p1: create a 10-line config.txt
     let base = "a1\na2\na3\na4\na5\na6\na7\na8\na9\na10\n";
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
         .arg("project_name=Demo")
         .assert()
         .success();
-    std::fs::write(tpl.join(".weft-record/worktree/config.txt"), base).unwrap();
+    std::fs::write(tpl.join(".weft-sessions/main/worktree/config.txt"), base).unwrap();
     weft()
         .arg("commit")
         .arg("--template")
@@ -300,7 +303,7 @@ fn stacked_template() -> (tempfile::TempDir, PathBuf) {
         .success();
     // p2: insert near the bottom (hunk anchors on a7..a10, far from the top)
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--base")
@@ -310,7 +313,7 @@ fn stacked_template() -> (tempfile::TempDir, PathBuf) {
         .assert()
         .success();
     std::fs::write(
-        tpl.join(".weft-record/worktree/config.txt"),
+        tpl.join(".weft-sessions/main/worktree/config.txt"),
         "a1\na2\na3\na4\na5\na6\na7\na8\nINSERTED\na9\na10\n",
     )
     .unwrap();
@@ -341,7 +344,7 @@ fn amend_descendant_still_applies() {
         .arg("--non-interactive")
         .assert()
         .success();
-    let w = tpl.join(".weft-record/worktree");
+    let w = tpl.join(".weft-sessions/p1/worktree");
     // Edit a1 — 7 lines from p2's anchor, outside its context radius.
     std::fs::write(
         w.join("config.txt"),
@@ -390,7 +393,7 @@ fn amend_reports_broken_descendant() {
         .arg("--non-interactive")
         .assert()
         .success();
-    let w = tpl.join(".weft-record/worktree");
+    let w = tpl.join(".weft-sessions/p1/worktree");
     // Remove a8 — inside p2's context; p2's hunk will no longer anchor.
     std::fs::write(
         w.join("config.txt"),
@@ -420,14 +423,14 @@ fn squash_combines_a_chain() {
     copy_dir(&hello_template(), &tpl);
     // s1 creates x.txt; s2 (on s1) creates y.txt.
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
         .arg("project_name=Demo")
         .assert()
         .success();
-    std::fs::write(tpl.join(".weft-record/worktree/x.txt"), "ex\n").unwrap();
+    std::fs::write(tpl.join(".weft-sessions/main/worktree/x.txt"), "ex\n").unwrap();
     weft()
         .arg("commit")
         .arg("--template")
@@ -438,7 +441,7 @@ fn squash_combines_a_chain() {
         .assert()
         .success();
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--base")
@@ -447,7 +450,7 @@ fn squash_combines_a_chain() {
         .arg("project_name=Demo")
         .assert()
         .success();
-    std::fs::write(tpl.join(".weft-record/worktree/y.txt"), "why\n").unwrap();
+    std::fs::write(tpl.join(".weft-sessions/main/worktree/y.txt"), "why\n").unwrap();
     weft()
         .arg("commit")
         .arg("--template")

@@ -23,7 +23,7 @@ fn scaffold_template(dir: &Path) {
     )
     .unwrap();
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(dir)
         .arg("--answer")
@@ -31,7 +31,7 @@ fn scaffold_template(dir: &Path) {
         .assert()
         .success();
     std::fs::write(
-        dir.join(".weft-record/worktree/README.md"),
+        dir.join(".weft-sessions/main/worktree/README.md"),
         "# Demo Project\n",
     )
     .unwrap();
@@ -232,14 +232,14 @@ fn commit_without_name_still_defaults_without_a_tty() {
     let tpl = dir.path().join("tpl");
     scaffold_template(&tpl);
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
         .arg("project_name=Demo Project")
         .assert()
         .success();
-    std::fs::write(tpl.join(".weft-record/worktree/EXTRA.md"), "x\n").unwrap();
+    std::fs::write(tpl.join(".weft-sessions/main/worktree/EXTRA.md"), "x\n").unwrap();
     // No --name, no TTY: the historical auto-name (patch-NNN) still applies.
     weft()
         .arg("commit")
@@ -271,7 +271,7 @@ fn diff_previews_candidates_and_keep_literal_survives_renames() {
     )
     .unwrap();
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
@@ -279,7 +279,7 @@ fn diff_previews_candidates_and_keep_literal_survives_renames() {
         .assert()
         .success();
     std::fs::write(
-        tpl.join(".weft-record/worktree/README.md"),
+        tpl.join(".weft-sessions/main/worktree/README.md"),
         "# my_project\n\nRun my_project now.\nThe word \"my_project\" is prose here.\n",
     )
     .unwrap();
@@ -345,5 +345,5 @@ fn diff_without_a_session_errors_clearly() {
         .arg(&tpl)
         .assert()
         .failure()
-        .stderr(predicates::str::contains("record"));
+        .stderr(predicates::str::contains("weft session new"));
 }

@@ -76,9 +76,16 @@ pub fn resync(
     if opts.names.len() != 1 && (!opts.answers.is_empty() || !opts.keep_literal.is_empty()) {
         bail!("--answer/--keep-literal apply to a single named patch, not --all");
     }
-    if Session::exists(&opts.template) {
+    // Resync rewrites patch bodies underneath any open session's pinned base,
+    // so it refuses while one exists.
+    let open = Session::list(&opts.template)?;
+    if !open.is_empty() {
         bail!(
-            "a recording session is active in `{}`; commit or discard it before resyncing",
+            "session(s) {} are open in `{}`; commit or end them before resyncing",
+            open.iter()
+                .map(|(n, _)| format!("`{n}`"))
+                .collect::<Vec<_>>()
+                .join(", "),
             opts.template
         );
     }
@@ -271,7 +278,7 @@ pub fn resync(
         file.ops = ops.clone();
         if let Some(stored) = &mut file.generator {
             if !opts.answers.is_empty() {
-                stored.answers = crate::record::strip_secrets(&answers);
+                stored.answers = crate::start::strip_secrets(&answers);
             }
             if !opts.keep_literal.is_empty() {
                 stored.keep_literal = specs.clone();

@@ -37,7 +37,7 @@ fn generator_junk_is_ignored() {
     std::fs::write(tpl.join(".weftignore"), "node_modules/\n").unwrap();
 
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
@@ -107,14 +107,14 @@ fn ds_store_ignored_by_default() {
     copy_dir(&hello_template(), &tpl);
 
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
         .arg("project_name=x")
         .assert()
         .success();
-    let worktree = tpl.join(".weft-record/worktree");
+    let worktree = tpl.join(".weft-sessions/main/worktree");
     std::fs::write(worktree.join(".DS_Store"), "finder junk\n").unwrap();
     std::fs::write(worktree.join("real.txt"), "real change\n").unwrap();
     weft()
@@ -142,14 +142,14 @@ fn base_rendered_paths_are_exempt() {
     std::fs::write(tpl.join(".weftignore"), "README.md\n").unwrap();
 
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
         .arg("project_name=x")
         .assert()
         .success();
-    let worktree = tpl.join(".weft-record/worktree");
+    let worktree = tpl.join(".weft-sessions/main/worktree");
     std::fs::remove_file(worktree.join("README.md")).unwrap();
     weft()
         .arg("commit")

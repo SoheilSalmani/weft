@@ -32,7 +32,7 @@ fn append(path: &Path, text: &str) {
 
 fn record(tpl: &Path, name_value: &str) {
     weft()
-        .args(["record", "--template"])
+        .args(["session", "new", "main", "--template"])
         .arg(tpl)
         .args(["--answer", name_value])
         .assert()
@@ -47,7 +47,7 @@ fn deps(tpl: &Path, patch: &str) -> String {
 fn staged_commits_default_to_independent_siblings() {
     let tmp = tempfile::tempdir().unwrap();
     let tpl = init_template(tmp.path());
-    let wt = tpl.join(".weft-record/worktree");
+    let wt = tpl.join(".weft-sessions/main/worktree");
 
     record(&tpl, "project_name=Demo");
     fs::write(wt.join("A.txt"), "a\n").unwrap();
@@ -108,14 +108,14 @@ fn staged_commits_default_to_independent_siblings() {
         .arg(&tpl)
         .assert()
         .success()
-        .stdout(predicates::str::contains("no active recording session"));
+        .stdout(predicates::str::contains("no session in"));
 }
 
 #[test]
 fn stack_makes_the_next_patch_depend_on_the_committed_one() {
     let tmp = tempfile::tempdir().unwrap();
     let tpl = init_template(tmp.path());
-    let wt = tpl.join(".weft-record/worktree");
+    let wt = tpl.join(".weft-sessions/main/worktree");
 
     record(&tpl, "project_name=Demo");
     fs::write(wt.join("A.txt"), "a\n").unwrap();
@@ -150,7 +150,7 @@ fn stack_makes_the_next_patch_depend_on_the_committed_one() {
 fn plain_commit_still_commits_everything_and_ends_the_session() {
     let tmp = tempfile::tempdir().unwrap();
     let tpl = init_template(tmp.path());
-    let wt = tpl.join(".weft-record/worktree");
+    let wt = tpl.join(".weft-sessions/main/worktree");
 
     record(&tpl, "project_name=Demo");
     fs::write(wt.join("README.md"), "# Demo\n").unwrap();
@@ -167,14 +167,14 @@ fn plain_commit_still_commits_everything_and_ends_the_session() {
         .arg(&tpl)
         .assert()
         .success()
-        .stdout(predicates::str::contains("no active recording session"));
+        .stdout(predicates::str::contains("no session in"));
 }
 
 #[test]
 fn session_end_guards_dirty_worktree_and_discards() {
     let tmp = tempfile::tempdir().unwrap();
     let tpl = init_template(tmp.path());
-    let wt = tpl.join(".weft-record/worktree");
+    let wt = tpl.join(".weft-sessions/main/worktree");
 
     record(&tpl, "project_name=A");
     fs::write(wt.join("X.txt"), "x\n").unwrap();
@@ -200,14 +200,14 @@ fn session_end_guards_dirty_worktree_and_discards() {
         .arg(&tpl)
         .assert()
         .success()
-        .stdout(predicates::str::contains("recording session on"));
+        .stdout(predicates::str::contains("session `main` on"));
 }
 
 #[test]
 fn refresh_picks_up_a_new_question_for_abstraction() {
     let tmp = tempfile::tempdir().unwrap();
     let tpl = init_template(tmp.path());
-    let wt = tpl.join(".weft-record/worktree");
+    let wt = tpl.join(".weft-sessions/main/worktree");
 
     record(&tpl, "project_name=Demo");
     append(
@@ -241,7 +241,7 @@ fn refresh_picks_up_a_new_question_for_abstraction() {
 fn refresh_merges_an_answer_change_onto_worktree_edits() {
     let tmp = tempfile::tempdir().unwrap();
     let tpl = init_template(tmp.path());
-    let wt = tpl.join(".weft-record/worktree");
+    let wt = tpl.join(".weft-sessions/main/worktree");
 
     record(&tpl, "project_name=Demo");
     fs::write(wt.join("README.md"), "# Demo\n").unwrap();
@@ -280,7 +280,7 @@ fn refresh_merges_an_answer_change_onto_worktree_edits() {
 fn diff_staged_shows_only_the_staged_changes() {
     let tmp = tempfile::tempdir().unwrap();
     let tpl = init_template(tmp.path());
-    let wt = tpl.join(".weft-record/worktree");
+    let wt = tpl.join(".weft-sessions/main/worktree");
 
     record(&tpl, "project_name=Demo");
     fs::write(wt.join("A.txt"), "a\n").unwrap();

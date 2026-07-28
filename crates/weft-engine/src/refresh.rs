@@ -12,13 +12,15 @@ use weft_core::{render::render, AnswerKind, AnswerSet, FileEntry};
 use weft_lang::StarlarkEval;
 
 use crate::interact::Interaction;
-use crate::record::strip_secrets;
-use crate::session::{self, Session, SessionMeta};
+use crate::session::{Session, SessionMeta};
+use crate::start::strip_secrets;
 use crate::template::Template;
 use crate::{answers, fsio};
 
 pub struct RefreshOptions {
     pub template: Utf8PathBuf,
+    /// Which session to refresh.
+    pub session: String,
     pub presets: Vec<String>,
     pub answers: Vec<String>,
     pub answers_file: Option<Utf8PathBuf>,
@@ -41,13 +43,14 @@ pub fn run(
     interaction: &mut dyn Interaction,
 ) -> Result<RefreshReport> {
     let template = Template::load_with(&opts.template, resolver)?;
-    if !Session::exists(&opts.template) {
-        bail!("no recording session to refresh; run `weft record` first");
+    let name = &opts.session;
+    if !Session::exists(&opts.template, name) {
+        bail!("no session `{name}` to refresh; run `weft session new {name}` first");
     }
-    let sess = Session::load(&opts.template)?;
+    let sess = Session::load(&opts.template, name)?;
     if sess.foreach.is_some() || sess.generator.is_some() || sess.amend.is_some() {
         bail!(
-            "refresh is only supported for a plain recording session \
+            "refresh is only supported for a plain session \
              (not --foreach, --exec, or `weft patch amend`)"
         );
     }
@@ -57,7 +60,7 @@ pub fn run(
         if !template.id_to_name.contains_key(id) {
             bail!(
                 "pinned base patch {} no longer exists in the template; \
-                 a patch changed since `weft record` — re-record",
+                 a patch changed since the session started — start a new one",
                 id.short()
             );
         }
@@ -75,8 +78,8 @@ pub fn run(
     let old_base = render(&base_patches, &old_answers, &eval).context("re-rendering old base")?;
     if old_base.hash() != sess.session.tree_hash {
         bail!(
-            "base state hash changed since `weft record` (a base patch or secret \
-             moved underneath the session); re-record"
+            "base state hash changed since the session started (a base patch or \
+             secret moved underneath it); start a new session"
         );
     }
 
@@ -99,7 +102,7 @@ pub fn run(
     let new_base = render(&base_patches, &new_answers, &eval).context("re-rendering new base")?;
 
     // Current worktree (your edits on top of the old base).
-    let worktree = session::worktree_dir(&template.root);
+    let worktree = sess.worktree(&template.root, name);
     let keep: BTreeSet<_> = old_base.paths().cloned().collect();
     let ours = fsio::read_tree_ignoring(&worktree, &template.ignore, &keep)?;
 
@@ -185,6 +188,9 @@ pub fn run(
         session: SessionMeta {
             base: sess.session.base.clone(),
             tree_hash: new_base.hash(),
+            worktree: sess.session.worktree.clone(),
+            scope: sess.session.scope.clone(),
+            adopted: sess.session.adopted,
         },
         answers: strip_secrets(&new_answers),
         secrets,
@@ -192,7 +198,7 @@ pub fn run(
         generator: None,
         amend: None,
     };
-    refreshed.save(&template.root)?;
+    refreshed.save(&template.root, name)?;
     Ok(report)
 }
 

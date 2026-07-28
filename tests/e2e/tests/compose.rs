@@ -213,7 +213,7 @@ fn record_foreach_authors_an_integration_patch() {
 
     // Mount one sample `connector` instance into the recording base.
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&parent)
         .arg("--answer")
@@ -222,7 +222,7 @@ fn record_foreach_authors_an_integration_patch() {
         .arg("connector=stripe")
         .assert()
         .success();
-    let worktree = parent.join(".weft-record/worktree");
+    let worktree = parent.join(".weft-sessions/main/worktree");
     assert!(
         worktree.join("connectors/stripe/README.md").is_file(),
         "sample instance must be mounted in the worktree"

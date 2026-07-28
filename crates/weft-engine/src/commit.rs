@@ -9,13 +9,15 @@ use weft_lang::StarlarkEval;
 
 use crate::abstraction::Abstractor;
 use crate::interact::Interaction;
-use crate::record::base_leaves;
 use crate::session::{self, Session, SessionMeta};
+use crate::start::base_leaves;
 use crate::template::Template;
 use crate::{diff, fsio, secrets};
 
 pub struct CommitOptions {
     pub template: Utf8PathBuf,
+    /// Which session's worktree to commit.
+    pub session: String,
     /// Patch name; defaults to `patch-NNN`.
     pub name: Option<String>,
     /// Optional `when` condition for the new patch.
@@ -95,7 +97,8 @@ pub fn run(
         parts,
         base_tree,
         work_tree: full_work,
-    } = session_trees(&template, interaction)?;
+        worktree_root,
+    } = session_trees(&template, &opts.session, interaction)?;
     let eval = StarlarkEval;
     guard_mounts(&template, sess.foreach.as_ref(), &base_tree, &full_work)?;
 
@@ -103,7 +106,8 @@ pub fn run(
     // nothing, so the staged tree equals the base and we fall back to the whole
     // worktree — the classic one-shot flow. When something is staged, the diff
     // (and everything downstream) sees only the staged subset.
-    let staged = crate::stage::staged_tree(&opts.template, &template.ignore, &base_tree)?;
+    let staged =
+        crate::stage::staged_tree(&opts.template, &opts.session, &template.ignore, &base_tree)?;
     let index_active = staged.hash() != base_tree.hash();
     if index_active && (sess.foreach.is_some() || sess.generator.is_some() || sess.amend.is_some())
     {
@@ -187,6 +191,8 @@ pub fn run(
         return crate::amend::finish(
             &template,
             &opts.template,
+            &sess,
+            &opts.session,
             &target,
             &base_patches,
             &answers,
@@ -267,13 +273,13 @@ pub fn run(
         },
     )?;
     // The index is now empty against whatever base we end at.
-    crate::stage::clear(&opts.template)?;
+    crate::stage::clear(&opts.template, &opts.session)?;
 
     let noun = template.manifest.template.name.clone();
     if remaining.is_empty() {
         // The whole worktree is committed: end the session (the classic
         // one-shot flow, and what the existing tests expect).
-        Session::discard(&opts.template)?;
+        sess.end(&opts.template, &opts.session)?;
         eprintln!(
             "committed patch `{name}` with {} op(s) to `{noun}`",
             ops.len()
@@ -307,6 +313,7 @@ pub fn run(
                 session: SessionMeta {
                     base,
                     tree_hash: work_tree.hash(),
+                    ..sess.session
                 },
                 answers: sess.answers.clone(),
                 secrets: sess.secrets.clone(),
@@ -314,7 +321,7 @@ pub fn run(
                 generator: None,
                 amend: None,
             }
-            .save(&opts.template)?;
+            .save(&opts.template, &opts.session)?;
             eprintln!(
                 "committed patch `{name}` to `{noun}`, building on it. \
                  {} file(s) still uncommitted",
@@ -325,7 +332,7 @@ pub fn run(
             // Keep the base where it is and peel this patch's content out of the
             // worktree, so the next patch is diffed against the same base and
             // commutes with this one.
-            crate::stage::revert_worktree_paths(&opts.template, &base_tree, &committed)?;
+            session::revert_worktree_paths(&worktree_root, &base_tree, &committed)?;
             eprintln!(
                 "committed patch `{name}` to `{noun}` as an independent sibling. \
                  {} file(s) still uncommitted",
@@ -378,13 +385,16 @@ pub struct SessionTrees<'t> {
     pub parts: Vec<crate::compose::ComposedPart<'t>>,
     pub base_tree: weft_core::Tree,
     pub work_tree: weft_core::Tree,
+    /// Where this session's worktree lives (it may be anywhere on disk).
+    pub worktree_root: Utf8PathBuf,
 }
 
 pub fn session_trees<'t>(
     template: &'t Template,
+    name: &str,
     interaction: &mut dyn Interaction,
 ) -> Result<SessionTrees<'t>> {
-    let sess = Session::load(&template.root)?;
+    let sess = Session::load(&template.root, name)?;
     let eval = StarlarkEval;
 
     // The base must still be reconstructible from the template.
@@ -392,7 +402,7 @@ pub fn session_trees<'t>(
         if !template.id_to_name.contains_key(id) {
             bail!(
                 "pinned base patch {} no longer exists in the template; \
-                 the template changed since `weft record` — re-record",
+                 the template changed since the session started — start a new one",
                 id.short()
             );
         }
@@ -409,25 +419,33 @@ pub fn session_trees<'t>(
         .collect();
     // A foreach session's base includes the mounted sample instance.
     let sample = match &sess.foreach {
-        Some(f) => Some(crate::record::sample_part(template, f, &eval, interaction)?),
+        Some(f) => Some(crate::start::sample_part(template, f, &eval, interaction)?),
         None => None,
     };
     let parts: Vec<_> = sample.into_iter().collect();
-    let base_tree = crate::compose::render_composed(&base_patches, &answers, &parts, &eval)
+    let full_base = crate::compose::render_composed(&base_patches, &answers, &parts, &eval)
         .context("re-rendering base state")?;
-    if base_tree.hash() != sess.session.tree_hash {
+    if full_base.hash() != sess.session.tree_hash {
         bail!(
-            "base state hash changed since `weft record` (template or secret \
-             values moved underneath the session); re-record"
+            "base state hash changed since the session started (template or secret \
+             values moved underneath it); start a new session"
         );
     }
 
-    let worktree = session::worktree_dir(&template.root);
+    // An adopted worktree may opt only part of itself in. The scope is applied
+    // to the base as well, or base files the project never adopted would read
+    // as deletions.
+    let unrestricted = sess.session.scope.is_empty();
+    let scope = crate::stage::globset(&sess.session.scope)?;
+    let base_tree = crate::stage::in_scope(&full_base, &scope, unrestricted);
+
+    let worktree_root = sess.worktree(&template.root, name);
     // `.weftignore` filters junk (generator side-products, OS files) out of
     // the read-back — except paths the base rendered, so deletions of
     // rendered files are still recorded.
     let keep: std::collections::BTreeSet<_> = base_tree.paths().cloned().collect();
-    let work_tree = fsio::read_tree_ignoring(&worktree, &template.ignore, &keep)?;
+    let full_work = fsio::read_tree_ignoring(&worktree_root, &template.ignore, &keep)?;
+    let work_tree = crate::stage::in_scope(&full_work, &scope, unrestricted);
     Ok(SessionTrees {
         sess,
         answers,
@@ -435,6 +453,7 @@ pub fn session_trees<'t>(
         parts,
         base_tree,
         work_tree,
+        worktree_root,
     })
 }
 
@@ -461,10 +480,14 @@ pub struct Preview {
     pub occurrences: Vec<crate::abstraction::Occurrence>,
 }
 
-/// Compute the pre-commit preview for the active record session (the whole
-/// worktree against the base).
-pub fn preview(template: &Template, interaction: &mut dyn Interaction) -> Result<Preview> {
-    preview_target(template, false, interaction)
+/// Compute the pre-commit preview for a session (the whole worktree against
+/// the base).
+pub fn preview(
+    template: &Template,
+    session: &str,
+    interaction: &mut dyn Interaction,
+) -> Result<Preview> {
+    preview_target(template, session, false, interaction)
 }
 
 /// The pre-commit preview, diffing the base against either the whole worktree
@@ -472,13 +495,14 @@ pub fn preview(template: &Template, interaction: &mut dyn Interaction) -> Result
 /// the next `weft commit` will write). An empty index makes the two identical.
 pub fn preview_target(
     template: &Template,
+    session: &str,
     staged: bool,
     interaction: &mut dyn Interaction,
 ) -> Result<Preview> {
-    let trees = session_trees(template, interaction)?;
+    let trees = session_trees(template, session, interaction)?;
     let base_tree = &trees.base_tree;
     let after = if staged {
-        crate::stage::staged_tree(&template.root, &template.ignore, base_tree)?
+        crate::stage::staged_tree(&template.root, session, &template.ignore, base_tree)?
     } else {
         trees.work_tree.clone()
     };

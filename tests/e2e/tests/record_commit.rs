@@ -40,16 +40,16 @@ fn record_commit_new_round_trip() {
 
     // 1. record against the base rendered with concrete answers
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&template)
         .arg("--answer")
         .arg("project_name=My Demo")
         .assert()
         .success()
-        .stdout(predicates::str::contains(".weft-record/worktree"));
+        .stdout(predicates::str::contains(".weft-sessions/main/worktree"));
 
-    let worktree = template.join(".weft-record/worktree");
+    let worktree = template.join(".weft-sessions/main/worktree");
     assert_eq!(
         read(&worktree, "README.md"),
         "# My Demo\n\nScaffolded by weft.\n\nShips with Docker.\n",
@@ -87,7 +87,7 @@ fn record_commit_new_round_trip() {
         "concrete values must be abstracted out of the stored patch: {patch_json}"
     );
     assert!(
-        !template.join(".weft-record").exists(),
+        !template.join(".weft-sessions").exists(),
         "session cleaned up after commit"
     );
 
@@ -114,14 +114,14 @@ fn record_commit_new_round_trip() {
 }
 
 #[test]
-fn record_refuses_second_session_without_force() {
+fn session_new_refuses_a_duplicate_name_without_force() {
     let tmp = tempfile::tempdir().unwrap();
     let template = tmp.path().join("template");
     copy_template(&template);
 
     let record = |extra: &[&str]| {
         let mut cmd = weft();
-        cmd.arg("record")
+        cmd.args(["session", "new", "main"])
             .arg("--template")
             .arg(&template)
             .arg("--answer")
@@ -134,7 +134,7 @@ fn record_refuses_second_session_without_force() {
     record(&[]).success();
     record(&[])
         .failure()
-        .stderr(predicates::str::contains("already active"));
+        .stderr(predicates::str::contains("already exists"));
     record(&["--force"]).success();
 }
 
@@ -145,7 +145,7 @@ fn commit_without_changes_fails() {
     copy_template(&template);
 
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&template)
         .arg("--answer")

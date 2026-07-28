@@ -24,12 +24,12 @@ fn session_with_base_file(dir: &Path) -> (PathBuf, PathBuf) {
         .assert()
         .success();
     weft()
-        .args(["record", "--template"])
+        .args(["session", "new", "main", "--template"])
         .arg(&tpl)
         .assert()
         .success();
 
-    let wt = tpl.join(".weft-record/worktree");
+    let wt = tpl.join(".weft-sessions/main/worktree");
     fs::write(wt.join("f.txt"), BEFORE).unwrap();
     weft()
         .args(["commit", "--template"])
@@ -40,7 +40,7 @@ fn session_with_base_file(dir: &Path) -> (PathBuf, PathBuf) {
     // The session ended with that commit; the next one starts from `latest`,
     // so `f.txt` is part of the base.
     weft()
-        .args(["record", "--template"])
+        .args(["session", "new", "main", "--template"])
         .arg(&tpl)
         .assert()
         .success();

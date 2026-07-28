@@ -29,6 +29,8 @@ pub struct AmendOptions {
     pub template: Utf8PathBuf,
     /// The patch to amend (file stem).
     pub name: String,
+    /// The session to open for the edit; defaults to the patch's name.
+    pub session: String,
     pub presets: Vec<String>,
     pub answers: Vec<String>,
     pub answers_file: Option<Utf8PathBuf>,
@@ -55,13 +57,14 @@ pub fn start(
     interaction: &mut dyn Interaction,
 ) -> Result<Utf8PathBuf> {
     let template = Template::load_with(&opts.template, resolver)?;
-    if Session::exists(&opts.template) {
+    let session_name = &opts.session;
+    if Session::exists(&opts.template, session_name) {
         if opts.force {
-            Session::discard(&opts.template)?;
+            Session::load(&opts.template, session_name)?.end(&opts.template, session_name)?;
         } else {
             bail!(
-                "a recording session is already active in `{}`; \
-                 run `weft commit` to finish it or pass `--force` to discard it",
+                "session `{session_name}` already exists in `{}`; \
+                 finish it with `weft commit`, or pass `--force` to discard it",
                 opts.template
             );
         }
@@ -87,7 +90,7 @@ pub fn start(
     if target.foreach.is_some() {
         bail!(
             "patch `{}` is a foreach (integration) patch; amend does not support these yet — \
-             re-record it with `weft record --foreach …`",
+             re-record it with `weft session new --foreach …`",
             opts.name
         );
     }
@@ -137,9 +140,14 @@ pub fn start(
     weft_core::render::apply_ops(&mut seed, target, &resolved, &eval)
         .with_context(|| format!("applying patch `{}` to seed the worktree", opts.name))?;
 
-    let worktree = session::worktree_dir(&opts.template);
+    let worktree = session::default_worktree_dir(&opts.template, session_name);
     std::fs::create_dir_all(&worktree)?;
     fsio::write_tree(&worktree, &seed)?;
+    crate::discover::WorktreeLink {
+        template: crate::discover::absolute(&opts.template),
+        session: session_name.clone(),
+    }
+    .save(&worktree)?;
 
     let secret_specs: BTreeMap<_, _> = template
         .manifest
@@ -158,23 +166,29 @@ pub fn start(
             // The diff target is the base *without* the patch, so commit
             // re-derives the patch's full contribution from the worktree.
             tree_hash: base_tree.hash(),
+            worktree: None,
+            scope: Vec::new(),
+            adopted: false,
         },
-        answers: crate::record::strip_secrets(&resolved),
+        answers: crate::start::strip_secrets(&resolved),
         secrets: secret_specs,
         foreach: None,
         generator: None,
         amend: Some(opts.name.clone()),
     };
-    sess.save(&opts.template)?;
+    sess.save(&opts.template, session_name)?;
     Ok(worktree)
 }
 
 /// Finish an amend session (called by `weft commit`): re-derive the target's
 /// ops from the worktree and write them back into its file in place. Keeps
 /// the target's name, dependencies, gate, foreach, and metadata.
+#[allow(clippy::too_many_arguments)] // one call site; all of it is the amend's state
 pub(crate) fn finish(
     template: &Template,
     template_root: &Utf8Path,
+    session: &crate::session::Session,
+    session_name: &str,
     target: &str,
     base_patches: &[weft_core::Patch],
     answers: &weft_core::AnswerSet,
@@ -228,7 +242,7 @@ pub(crate) fn finish(
     let op_count = ops.len();
     file.ops = ops;
     template.save_patch_file(target, &file)?;
-    Session::discard(template_root)?;
+    session.end(template_root, session_name)?;
     eprintln!("amended patch `{target}` ({op_count} op(s)); its content id changed");
 
     // Rebase check: if anything depends on the amended patch, its
@@ -246,7 +260,7 @@ pub(crate) fn finish(
             bail!(
                 "a dependent patch no longer applies after the amend: {e}\n\
                  its context anchored on content that moved — re-record it \
-                 (`weft patch amend <name>` or `weft record --base <name> …`), then \
+                 (`weft patch amend <name>` or `weft session new N --base <name>`), then \
                  `weft check`. The amend to `{target}` is written; fix the dependent to \
                  finish the rebase."
             );

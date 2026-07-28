@@ -1,10 +1,12 @@
-//! The staging index for a recording session: a git-style stage that lives in
-//! `.weft-record/stage/` as a snapshot tree. It is absent until you `weft add`
-//! something (absent means "nothing staged", i.e. the staged tree equals the
-//! base), and it is removed again after each commit.
+//! The staging index of one session: a git-style stage that lives in
+//! `.weft-sessions/<name>/stage/` as a snapshot tree. It is absent until you
+//! `weft add` something (absent means "nothing staged", i.e. the staged tree
+//! equals the base), and it is removed again after each commit.
 //!
-//! The staged tree is what `weft commit` turns into a patch. When nothing is
-//! staged, commit falls back to the whole worktree (the classic one-shot flow).
+//! Every session has its own index, so staging in one worktree never touches
+//! another. The staged tree is what `weft commit` turns into a patch; when
+//! nothing is staged, commit falls back to the whole worktree (the classic
+//! one-shot flow).
 
 use std::collections::BTreeSet;
 
@@ -13,9 +15,9 @@ use camino::{Utf8Path, Utf8PathBuf};
 use globset::GlobSet;
 use weft_core::Tree;
 
-use crate::session::record_dir;
+use crate::fsio;
+use crate::session::session_dir;
 use crate::weftignore::IgnoreRules;
-use crate::{fsio, session};
 
 pub const STAGE_DIR: &str = "stage";
 
@@ -29,18 +31,23 @@ pub fn globset(patterns: &[String]) -> Result<GlobSet> {
     builder.build().context("building path glob set")
 }
 
-pub fn stage_dir(root: &Utf8Path) -> Utf8PathBuf {
-    record_dir(root).join(STAGE_DIR)
+pub fn stage_dir(root: &Utf8Path, session: &str) -> Utf8PathBuf {
+    session_dir(root, session).join(STAGE_DIR)
 }
 
-pub fn exists(root: &Utf8Path) -> bool {
-    stage_dir(root).exists()
+pub fn exists(root: &Utf8Path, session: &str) -> bool {
+    stage_dir(root, session).exists()
 }
 
 /// The staged tree: the on-disk stage if present, otherwise `base` (an empty
 /// index stages nothing, so the staged tree is exactly the base).
-pub fn staged_tree(root: &Utf8Path, rules: &IgnoreRules, base: &Tree) -> Result<Tree> {
-    let dir = stage_dir(root);
+pub fn staged_tree(
+    root: &Utf8Path,
+    session: &str,
+    rules: &IgnoreRules,
+    base: &Tree,
+) -> Result<Tree> {
+    let dir = stage_dir(root, session);
     if !dir.exists() {
         return Ok(base.clone());
     }
@@ -50,8 +57,8 @@ pub fn staged_tree(root: &Utf8Path, rules: &IgnoreRules, base: &Tree) -> Result<
 
 /// Replace the stage with `tree`, or remove it entirely when `tree` carries no
 /// changes against the base (keeps "absent == nothing staged" true).
-pub fn write(root: &Utf8Path, tree: &Tree, base: &Tree) -> Result<()> {
-    let dir = stage_dir(root);
+pub fn write(root: &Utf8Path, session: &str, tree: &Tree, base: &Tree) -> Result<()> {
+    let dir = stage_dir(root, session);
     if dir.exists() {
         std::fs::remove_dir_all(&dir).with_context(|| format!("clearing {dir}"))?;
     }
@@ -63,8 +70,8 @@ pub fn write(root: &Utf8Path, tree: &Tree, base: &Tree) -> Result<()> {
 
 /// Remove the stage (used after a commit: the index is empty against the new
 /// base).
-pub fn clear(root: &Utf8Path) -> Result<()> {
-    let dir = stage_dir(root);
+pub fn clear(root: &Utf8Path, session: &str) -> Result<()> {
+    let dir = stage_dir(root, session);
     if dir.exists() {
         std::fs::remove_dir_all(&dir).with_context(|| format!("clearing {dir}"))?;
     }
@@ -126,21 +133,15 @@ pub fn changed_paths(from: &Tree, to: &Tree) -> Vec<Utf8PathBuf> {
         .collect()
 }
 
-/// Revert `paths` in the worktree back to their base version (used by the
-/// "sibling" transition to peel a committed patch's content out of the
-/// session).
-pub fn revert_worktree_paths(root: &Utf8Path, base: &Tree, paths: &[Utf8PathBuf]) -> Result<()> {
-    let worktree = session::worktree_dir(root);
-    for path in paths {
-        match base.get(path) {
-            Some(entry) => fsio::write_file(&worktree, path, entry)?,
-            None => {
-                let full = worktree.join(path);
-                if full.exists() {
-                    std::fs::remove_file(&full).with_context(|| format!("removing {full}"))?;
-                }
-            }
-        }
+/// Restrict a tree to the session's scope globs (empty = no restriction).
+/// Applied to the base tree as well as the worktree, so files an adopted
+/// project never opted into do not read as deletions.
+pub fn in_scope(tree: &Tree, scope: &GlobSet, unrestricted: bool) -> Tree {
+    if unrestricted {
+        return tree.clone();
     }
-    Ok(())
+    tree.iter()
+        .filter(|(path, _)| scope.is_match(path.as_str()))
+        .map(|(path, entry)| (path.clone(), entry.clone()))
+        .collect()
 }

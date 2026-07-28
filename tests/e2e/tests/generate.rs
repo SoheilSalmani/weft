@@ -40,7 +40,7 @@ fn template_with_generated(src: &Path, out_file: &str, name: &str) -> (tempfile:
 
 fn record_generated(tpl: &Path, src: &Path, out_file: &str, name: &str) {
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(tpl)
         .arg("--answer")
@@ -67,7 +67,7 @@ fn record_exec_commits_generator_patch() {
     copy_dir(&hello_template(), &tpl);
 
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
@@ -103,7 +103,7 @@ fn record_exec_commits_generator_patch() {
         patch.contains("\"project_name\": \"My Demo\""),
         "record-time answers stored for resync: {patch}"
     );
-    assert!(!tpl.join(".weft-record").exists(), "session discarded");
+    assert!(!tpl.join(".weft-sessions").exists(), "session discarded");
 
     // The generated patch scaffolds like any other.
     let dest = tempfile::tempdir().unwrap();
@@ -129,7 +129,7 @@ fn record_exec_failure_leaves_no_session() {
     let tpl = dir.path().join("hello");
     copy_dir(&hello_template(), &tpl);
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
@@ -138,7 +138,7 @@ fn record_exec_failure_leaves_no_session() {
         .arg("false")
         .assert()
         .failure();
-    assert!(!tpl.join(".weft-record").exists());
+    assert!(!tpl.join(".weft-sessions").exists());
 }
 
 #[test]
@@ -239,7 +239,7 @@ fn resync_refuses_active_session() {
     let (_guard, tpl) = template_with_generated(&src, "gen.txt", "gen");
 
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
@@ -254,7 +254,7 @@ fn resync_refuses_active_session() {
         .arg(&tpl)
         .assert()
         .failure()
-        .stderr(predicates::str::contains("recording session is active"));
+        .stderr(predicates::str::contains("are open in"));
 }
 
 #[test]
@@ -290,14 +290,14 @@ fn resync_reports_broken_dependent() {
 
     // Hand-record a patch whose hunk anchors on the generated content.
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
         .arg("project_name=My Demo")
         .assert()
         .success();
-    let worktree = tpl.join(".weft-record/worktree");
+    let worktree = tpl.join(".weft-sessions/main/worktree");
     std::fs::write(
         worktree.join("gen.txt"),
         "anchor line v1\nbody\nmanual addition\n",
@@ -341,7 +341,7 @@ fn resync_all_follows_the_dependency_chain() {
     // g2's command consumes g1's output from the base, so g2 depends on g1
     // and must be resynced after it.
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
@@ -396,7 +396,7 @@ fn exec_interpolates_declared_answers() {
     copy_dir(&hello_template(), &tpl);
 
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
@@ -460,7 +460,7 @@ fn exec_shell_vars_stay_literal() {
     copy_dir(&hello_template(), &tpl);
 
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
@@ -569,7 +569,7 @@ fn exec_editor_fallback_records_command() {
     .unwrap();
 
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
@@ -580,7 +580,7 @@ fn exec_editor_fallback_records_command() {
         .assert()
         .success();
     assert_eq!(
-        read(&tpl, ".weft-record/worktree/e.txt"),
+        read(&tpl, ".weft-sessions/main/worktree/e.txt"),
         "from-editor\n",
         "the editor-provided command ran in the worktree"
     );
@@ -605,7 +605,7 @@ fn exec_editor_empty_aborts() {
     std::fs::write(&script, ": > \"$1\"\n").unwrap();
 
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
@@ -616,5 +616,5 @@ fn exec_editor_empty_aborts() {
         .assert()
         .failure()
         .stderr(predicates::str::contains("aborted"));
-    assert!(!tpl.join(".weft-record").exists());
+    assert!(!tpl.join(".weft-sessions").exists());
 }

@@ -1,4 +1,4 @@
-//! `weft record`: materialize a pinned base state into a scratch worktree the
+//! `weft session new`: materialize a pinned base state into a worktree the
 //! author edits with real tools. Their dirty working directory never leaks
 //! in — the worktree starts as exactly `render(base, answers)`.
 
@@ -9,13 +9,19 @@ use camino::{Utf8Path, Utf8PathBuf};
 use weft_core::{AnswerKind, PatchId};
 use weft_lang::StarlarkEval;
 
+use crate::discover::WorktreeLink;
 use crate::interact::Interaction;
 use crate::session::{self, Session, SessionMeta};
 use crate::template::Template;
 use crate::{answers, fsio};
 
-pub struct RecordOptions {
+pub struct StartOptions {
     pub template: Utf8PathBuf,
+    /// The session's name; also its directory under `.weft-sessions/`.
+    pub name: String,
+    /// Where to put the worktree. `None` = the default location inside the
+    /// session directory.
+    pub path: Option<Utf8PathBuf>,
     /// `latest` (all patches) or a patch name (that patch plus its ancestors).
     pub base: String,
     pub presets: Vec<String>,
@@ -31,23 +37,28 @@ pub struct RecordOptions {
     /// the patch, and commit stores it as generator metadata so `weft patch
     /// resync` can re-run it later.
     pub exec: Option<String>,
-    /// Discard an existing session instead of erroring.
+    /// Discard an existing session of the same name instead of erroring.
     pub force: bool,
 }
 
 pub fn run(
-    opts: &RecordOptions,
+    opts: &StartOptions,
     resolver: &mut dyn crate::template::IncludeResolver,
     interaction: &mut dyn Interaction,
 ) -> Result<Utf8PathBuf> {
     let template = Template::load_with(&opts.template, resolver)?;
-    if Session::exists(&opts.template) {
+    let name = &opts.name;
+    if !session::valid_name(name) {
+        bail!("invalid session name `{name}` (letters, digits, `-`, `_`, `.`)");
+    }
+    if Session::exists(&opts.template, name) {
         if opts.force {
-            Session::discard(&opts.template)?;
+            let existing = Session::load(&opts.template, name)?;
+            existing.end(&opts.template, name)?;
         } else {
             bail!(
-                "a recording session is already active in `{}`; \
-                 run `weft commit` to finish it or `weft record --force` to discard it",
+                "session `{name}` already exists in `{}`; \
+                 pick another name, or `weft session end {name}` to finish it",
                 opts.template
             );
         }
@@ -125,9 +136,32 @@ pub fn run(
             .context("rendering base state")?,
     };
 
-    let worktree = session::worktree_dir(&opts.template);
+    let worktree = match &opts.path {
+        Some(path) => {
+            let path = crate::discover::absolute(path);
+            if path.is_dir()
+                && path
+                    .read_dir_utf8()
+                    .map(|mut d| d.next().is_some())
+                    .unwrap_or(false)
+            {
+                bail!(
+                    "`{path}` is not empty; pick an empty or absent directory, \
+                     or link the existing one with `weft session adopt`"
+                );
+            }
+            path
+        }
+        None => session::default_worktree_dir(&opts.template, name),
+    };
     std::fs::create_dir_all(&worktree)?;
     fsio::write_tree(&worktree, &tree)?;
+    // The back-pointer that lets weft be run from inside the worktree.
+    WorktreeLink {
+        template: crate::discover::absolute(&opts.template),
+        session: name.clone(),
+    }
+    .save(&worktree)?;
 
     // `--exec`: the command's output *is* the patch content. Run it now so
     // the author can inspect (`weft diff`) before committing; the command is
@@ -153,7 +187,8 @@ pub fn run(
                 crate::hooks::run_command(&command, "generator", &worktree, &resolved, &eval)
             {
                 // Nothing committed yet — don't leave a broken session behind.
-                let _ = std::fs::remove_dir_all(session::record_dir(&opts.template));
+                let _ = std::fs::remove_dir_all(&worktree);
+                let _ = Session::discard(&opts.template, name);
                 return Err(e.context("running the generator command"));
             }
             // Same `.weftignore` filtering as commit will apply, so the
@@ -183,6 +218,11 @@ pub fn run(
         session: SessionMeta {
             base: base_patches.iter().map(|p| p.id).collect(),
             tree_hash: tree.hash(),
+            // Only record a path when it isn't the default location, so the
+            // session file stays portable with the template.
+            worktree: opts.path.is_some().then(|| worktree.clone()),
+            scope: Vec::new(),
+            adopted: false,
         },
         answers: strip_secrets(&resolved),
         secrets: secret_specs,
@@ -190,7 +230,7 @@ pub fn run(
         generator,
         amend: None,
     };
-    sess.save(&opts.template)?;
+    sess.save(&opts.template, name)?;
 
     Ok(worktree)
 }
@@ -274,10 +314,12 @@ pub fn base_leaves(template: &Template, pinned: &[PatchId]) -> Vec<String> {
         .collect()
 }
 
-/// Convenience for CLI: print where the worktree is.
-pub fn announce(worktree: &Utf8Path) {
+/// Convenience for CLI: print where the worktree is, so `cd $(weft session
+/// new NAME)` drops you straight into it.
+pub fn announce(name: &str, worktree: &Utf8Path) {
     println!("{worktree}");
     eprintln!(
-        "recording session started; edit files in the worktree above, then run `weft commit`"
+        "session `{name}` started — `cd` into the worktree above, edit, \
+         then `weft add` and `weft commit`"
     );
 }

@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ServerCapabilities, ServerInfo};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler, ServiceExt};
@@ -78,6 +78,14 @@ fn validate_rel_path(path: &str) -> Result<Utf8PathBuf, ErrorData> {
     Ok(Utf8PathBuf::from(path))
 }
 
+/// Where a named session's worktree lives (agents may have started it with a
+/// path of its own).
+fn worktree_of(template: &Utf8Path, session: &str) -> Result<Utf8PathBuf, ErrorData> {
+    let sess = weft_engine::session::Session::load(template, session)
+        .map_err(|e| invalid(format!("{e:#}")))?;
+    Ok(sess.worktree(template, session))
+}
+
 fn answers_json(answers: &BTreeMap<String, serde_json::Value>) -> Option<String> {
     if answers.is_empty() {
         None
@@ -99,6 +107,14 @@ pub struct TemplateParam {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+pub struct SessionParam {
+    template: String,
+    /// Session name (defaults to `agent`).
+    #[serde(default = "default_session")]
+    session: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct ScaffoldParams {
     template: String,
     /// Destination directory (created; must not already contain files).
@@ -112,20 +128,31 @@ pub struct ScaffoldParams {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
-pub struct RecordStartParams {
+pub struct SessionStartParams {
     template: String,
+    /// Session name; also its worktree directory. Defaults to `agent`.
+    #[serde(default = "default_session")]
+    session: String,
     #[serde(default)]
     answers: BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     presets: Vec<String>,
-    /// Discard an existing session on this template instead of failing.
+    /// Replace an existing session of this name instead of failing.
     #[serde(default)]
     force: bool,
+}
+
+/// The session agents get when they do not name one.
+fn default_session() -> String {
+    "agent".to_owned()
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct FileParams {
     template: String,
+    /// Session name (defaults to `agent`).
+    #[serde(default = "default_session")]
+    session: String,
     /// Worktree-relative path.
     path: String,
     /// File content (write only).
@@ -136,6 +163,9 @@ pub struct FileParams {
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct CommitParams {
     template: String,
+    /// Session name (defaults to `agent`).
+    #[serde(default = "default_session")]
+    session: String,
     /// Patch name (alphanumeric, - and _).
     name: String,
     /// What this patch does — stored as metadata, shown in describe/graph.
@@ -282,21 +312,23 @@ impl WeftMcp {
     }
 
     #[tool(
-        name = "record_start",
+        name = "session_start",
         description = "Start authoring a patch: renders the template's base state \
-                       (needs a complete answer set) into a scratch worktree. Edit \
-                       files with record_write_file, then record_commit. One \
-                       session per template."
+                       (needs a complete answer set) into a worktree. Edit files with \
+                       session_write_file, then session_commit. A template can hold \
+                       several named sessions at once."
     )]
-    fn record_start(
+    fn session_start(
         &self,
-        Parameters(p): Parameters<RecordStartParams>,
+        Parameters(p): Parameters<SessionStartParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let template_dir = self.template_dir(&p.template)?;
-        let opts = weft_engine::record::RecordOptions {
+        let opts = weft_engine::start::StartOptions {
             foreach: None,
             exec: None,
             template: template_dir,
+            name: p.session.clone(),
+            path: None,
             base: "latest".into(),
             presets: p.presets.clone(),
             answers: vec![],
@@ -304,7 +336,7 @@ impl WeftMcp {
             answers_json: answers_json(&p.answers),
             force: p.force,
         };
-        let worktree = weft_engine::record::run(
+        let worktree = weft_engine::start::run(
             &opts,
             &mut weft_engine::template::PathResolver,
             &mut NonInteractive,
@@ -314,22 +346,23 @@ impl WeftMcp {
             .map(|t| t.paths().map(ToString::to_string).collect())
             .unwrap_or_default();
         Ok(CallToolResult::structured(serde_json::json!({
+            "session": p.session,
             "worktree": worktree.as_str(),
             "files": files,
         })))
     }
 
     #[tool(
-        name = "record_read_file",
-        description = "Read a file from the active recording worktree."
+        name = "session_read_file",
+        description = "Read a file from a session's worktree."
     )]
-    fn record_read_file(
+    fn session_read_file(
         &self,
         Parameters(p): Parameters<FileParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let dir = self.template_dir(&p.template)?;
         let rel = validate_rel_path(&p.path)?;
-        let target = weft_engine::session::worktree_dir(&dir).join(&rel);
+        let target = worktree_of(&dir, &p.session)?.join(&rel);
         let content = std::fs::read_to_string(&target)
             .map_err(|_| invalid(format!("no file {rel} in the worktree")))?;
         Ok(CallToolResult::structured(
@@ -338,10 +371,10 @@ impl WeftMcp {
     }
 
     #[tool(
-        name = "record_write_file",
-        description = "Create or overwrite a file in the active recording worktree."
+        name = "session_write_file",
+        description = "Create or overwrite a file in a session's worktree."
     )]
-    fn record_write_file(
+    fn session_write_file(
         &self,
         Parameters(p): Parameters<FileParams>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -349,12 +382,13 @@ impl WeftMcp {
         let rel = validate_rel_path(&p.path)?;
         let content = p
             .content
-            .ok_or_else(|| invalid("record_write_file needs `content`"))?;
-        let target = weft_engine::session::worktree_dir(&dir).join(&rel);
-        if !weft_engine::session::Session::exists(&dir) {
-            return Err(invalid(
-                "no active recording session; call record_start first",
-            ));
+            .ok_or_else(|| invalid("session_write_file needs `content`"))?;
+        let target = worktree_of(&dir, &p.session)?.join(&rel);
+        if !weft_engine::session::Session::exists(&dir, &p.session) {
+            return Err(invalid(format!(
+                "no session `{}`; call session_start first",
+                p.session
+            )));
         }
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(internal)?;
@@ -366,16 +400,16 @@ impl WeftMcp {
     }
 
     #[tool(
-        name = "record_delete_file",
-        description = "Delete a file from the active recording worktree."
+        name = "session_delete_file",
+        description = "Delete a file from a session's worktree."
     )]
-    fn record_delete_file(
+    fn session_delete_file(
         &self,
         Parameters(p): Parameters<FileParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let dir = self.template_dir(&p.template)?;
         let rel = validate_rel_path(&p.path)?;
-        let target = weft_engine::session::worktree_dir(&dir).join(&rel);
+        let target = worktree_of(&dir, &p.session)?.join(&rel);
         std::fs::remove_file(&target)
             .map_err(|_| invalid(format!("no file {rel} in the worktree")))?;
         Ok(CallToolResult::structured(
@@ -384,21 +418,22 @@ impl WeftMcp {
     }
 
     #[tool(
-        name = "record_commit",
-        description = "Diff the recording worktree against its base, abstract \
+        name = "session_commit",
+        description = "Diff the session's worktree against its base, abstract \
                        answer values (your decisions per answer id; undecided = \
                        accepted, secrets always abstracted), validate by replay, \
                        and append the patch to the template. Give it a clear \
                        description — that metadata is how future agents understand \
                        the patch."
     )]
-    fn record_commit(
+    fn session_commit(
         &self,
         Parameters(p): Parameters<CommitParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let dir = self.template_dir(&p.template)?;
         let opts = weft_engine::commit::CommitOptions {
             template: dir,
+            session: p.session.clone(),
             name: Some(p.name.clone()),
             when: p.when.clone(),
             title: None,
@@ -420,15 +455,18 @@ impl WeftMcp {
     }
 
     #[tool(
-        name = "record_discard",
-        description = "Discard the active recording session and its worktree."
+        name = "session_discard",
+        description = "Discard a session and its worktree."
     )]
-    fn record_discard(
+    fn session_discard(
         &self,
-        Parameters(p): Parameters<TemplateParam>,
+        Parameters(p): Parameters<SessionParam>,
     ) -> Result<CallToolResult, ErrorData> {
         let dir = self.template_dir(&p.template)?;
-        weft_engine::session::Session::discard(&dir).map_err(|e| internal(format!("{e:#}")))?;
+        let sess = weft_engine::session::Session::load(&dir, &p.session)
+            .map_err(|e| invalid(format!("{e:#}")))?;
+        sess.end(&dir, &p.session)
+            .map_err(|e| internal(format!("{e:#}")))?;
         Ok(CallToolResult::structured(
             serde_json::json!({ "discarded": true }),
         ))

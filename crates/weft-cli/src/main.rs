@@ -1,4 +1,5 @@
 mod addpatch;
+mod ctx;
 mod diffcmd;
 mod forms;
 mod hub;
@@ -10,6 +11,7 @@ mod wizard;
 
 use std::io::IsTerminal;
 
+use anyhow::Context as _;
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
 use weft_engine::interact::auto_interaction;
@@ -133,52 +135,11 @@ enum Command {
         #[arg(long)]
         registry: Option<String>,
     },
-    /// Start a recording session: materialize a base state into a scratch
-    /// worktree and print its path.
-    Record {
-        /// Template directory (defaults to `.`).
-        #[arg(long, default_value = ".")]
-        template: Utf8PathBuf,
-        /// Base state: `latest` or a patch name (that patch + ancestors).
-        #[arg(long, default_value = "latest")]
-        base: String,
-        /// Apply a named preset when rendering the base (repeatable).
-        #[arg(long = "preset")]
-        presets: Vec<String>,
-        /// Answer a question inline as KEY=VALUE (repeatable).
-        #[arg(long = "answer")]
-        answers: Vec<String>,
-        /// TOML file with answers.
-        #[arg(long = "answers-file")]
-        answers_file: Option<Utf8PathBuf>,
-        /// Record a foreach integration patch: mount one sample instance of
-        /// a repeatable include as INCLUDE=KEY; commit abstracts the sample
-        /// back out into a `foreach` patch.
-        #[arg(long)]
-        foreach: Option<String>,
-        /// Run this command in the rendered worktree; its output becomes the
-        /// patch and the command is stored so `weft patch resync` can re-run
-        /// it (e.g. --exec "npx shadcn@latest add button"). `${answer}` /
-        /// `${expr}` interpolate declared answers; pass `--exec` with no
-        /// value to write the command in $VISUAL/$EDITOR.
-        #[arg(long, num_args = 0..=1, default_missing_value = "")]
-        exec: Option<String>,
-        /// Discard an existing session instead of failing.
-        #[arg(long)]
-        force: bool,
-        /// Never prompt; fail if answers are missing.
-        #[arg(long)]
-        non_interactive: bool,
-        /// Use sequential prompts instead of the full-screen wizard.
-        #[arg(long)]
-        no_wizard: bool,
-    },
-    /// Diff the recording worktree against its base and append the result as
+    /// Diff the session's worktree against its base and append the result as
     /// a new patch (with value abstraction).
     Commit {
-        /// Template directory (defaults to `.`).
-        #[arg(long, default_value = ".")]
-        template: Utf8PathBuf,
+        #[command(flatten)]
+        scope: ctx::Scope,
         /// Name for the new patch (defaults to patch-NNN).
         #[arg(long)]
         name: Option<String>,
@@ -214,12 +175,11 @@ enum Command {
         #[arg(long)]
         no_tui: bool,
     },
-    /// Show the recording session's changes before committing: the concrete
-    /// diff with abstraction candidates highlighted.
+    /// Show the session's changes before committing: the concrete diff with
+    /// abstraction candidates highlighted.
     Diff {
-        /// Template directory (defaults to `.`).
-        #[arg(long, default_value = ".")]
-        template: Utf8PathBuf,
+        #[command(flatten)]
+        scope: ctx::Scope,
         /// Show the stored form ({answer} placeholders) instead of values.
         #[arg(long)]
         abstracted: bool,
@@ -234,12 +194,11 @@ enum Command {
     /// Stage worktree changes into the session index (like `git add`). The
     /// next `weft commit` commits only what is staged.
     Add {
-        /// Path globs to stage (relative to the worktree root).
+        /// Path globs to stage, relative to the directory you run this in.
         patterns: Vec<String>,
-        /// Template directory (defaults to `.`).
-        #[arg(long, default_value = ".")]
-        template: Utf8PathBuf,
-        /// Stage everything (equivalent to `.`).
+        #[command(flatten)]
+        scope: ctx::Scope,
+        /// Stage the whole worktree, wherever you run this from.
         #[arg(long, short = 'A')]
         all: bool,
         /// Choose what to stage hunk by hunk (like `git add -p`).
@@ -249,21 +208,19 @@ enum Command {
     /// Unstage paths from the session index (like `git reset`). No paths
     /// unstages everything.
     Reset {
-        /// Path globs to unstage.
+        /// Path globs to unstage, relative to the directory you run this in.
         patterns: Vec<String>,
-        /// Template directory (defaults to `.`).
-        #[arg(long, default_value = ".")]
-        template: Utf8PathBuf,
+        #[command(flatten)]
+        scope: ctx::Scope,
     },
-    /// Show the recording session: staged and unstaged changes, plus the base
-    /// and answers.
+    /// Show the session: staged and unstaged changes, plus the base and
+    /// answers.
     Status {
-        /// Template directory (defaults to `.`).
-        #[arg(long, default_value = ".")]
-        template: Utf8PathBuf,
+        #[command(flatten)]
+        scope: ctx::Scope,
     },
-    /// Manage the active recording session (refresh answers/manifest, or end
-    /// the session).
+    /// Start, list, move, and finish sessions — one worktree each, like
+    /// `git worktree`.
     Session {
         #[command(subcommand)]
         cmd: SessionCmd,
@@ -450,13 +407,84 @@ enum HookCmd {
 
 #[derive(Subcommand)]
 enum SessionCmd {
+    /// Start a session: render a base state into a worktree and print its
+    /// path, so `cd $(weft session new NAME)` drops you into it.
+    New {
+        /// Session name (also its directory under `.weft-sessions/`).
+        name: String,
+        /// Where to put the worktree (must be empty or absent). Defaults to
+        /// `<template>/.weft-sessions/<name>/worktree`.
+        #[arg(long)]
+        path: Option<Utf8PathBuf>,
+        /// Template directory (defaults to the one found from here).
+        #[arg(long)]
+        template: Option<Utf8PathBuf>,
+        /// Base state: `latest` or a patch name (that patch + ancestors).
+        #[arg(long, default_value = "latest")]
+        base: String,
+        /// Apply a named preset when rendering the base (repeatable).
+        #[arg(long = "preset")]
+        presets: Vec<String>,
+        /// Answer a question inline as KEY=VALUE (repeatable).
+        #[arg(long = "answer")]
+        answers: Vec<String>,
+        /// TOML file with answers.
+        #[arg(long = "answers-file")]
+        answers_file: Option<Utf8PathBuf>,
+        /// Record a foreach integration patch: mount one sample instance of
+        /// a repeatable include as INCLUDE=KEY; commit abstracts the sample
+        /// back out into a `foreach` patch.
+        #[arg(long)]
+        foreach: Option<String>,
+        /// Run this command in the rendered worktree; its output becomes the
+        /// patch and the command is stored so `weft patch resync` can re-run
+        /// it (e.g. --exec "npx shadcn@latest add button"). `${answer}` /
+        /// `${expr}` interpolate declared answers; pass `--exec` with no
+        /// value to write the command in $VISUAL/$EDITOR.
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        exec: Option<String>,
+        /// Replace an existing session of this name instead of failing.
+        #[arg(long)]
+        force: bool,
+        /// Never prompt; fail if answers are missing.
+        #[arg(long)]
+        non_interactive: bool,
+        /// Use sequential prompts instead of the full-screen wizard.
+        #[arg(long)]
+        no_wizard: bool,
+    },
+    /// List the template's sessions, with a marker for the one you are in.
+    #[command(visible_alias = "ls")]
+    List {
+        /// Template directory (defaults to the one found from here).
+        #[arg(long)]
+        template: Option<Utf8PathBuf>,
+    },
+    /// Print a session's worktree path: `cd $(weft session path NAME)`.
+    Path {
+        /// Session name (defaults to the one you are in, or the only one).
+        name: Option<String>,
+        /// Template directory (defaults to the one found from here).
+        #[arg(long)]
+        template: Option<Utf8PathBuf>,
+    },
+    /// Move a session's worktree to another directory (like `git worktree
+    /// move`). Moving it with `mv` also works — weft repairs the record.
+    Move {
+        /// Session name.
+        name: String,
+        /// The new worktree location (must be empty or absent).
+        dest: Utf8PathBuf,
+        /// Template directory (defaults to the one found from here).
+        #[arg(long)]
+        template: Option<Utf8PathBuf>,
+    },
     /// Re-read weft.toml, re-resolve answers, re-render the base, and 3-way
     /// merge it onto the worktree (preserving your edits). Use after editing
     /// the manifest or to change answers mid-session.
     Refresh {
-        /// Template directory (defaults to `.`).
-        #[arg(long, default_value = ".")]
-        template: Utf8PathBuf,
+        #[command(flatten)]
+        scope: ctx::Scope,
         /// Apply a named preset (repeatable).
         #[arg(long = "preset")]
         presets: Vec<String>,
@@ -473,12 +501,15 @@ enum SessionCmd {
         #[arg(long)]
         non_interactive: bool,
     },
-    /// End the recording session. Refuses if the worktree has uncommitted
-    /// changes unless `--discard`.
+    /// End a session. Refuses if the worktree has uncommitted changes unless
+    /// `--discard`. A worktree weft created is removed; an adopted one is
+    /// only unlinked.
     End {
-        /// Template directory (defaults to `.`).
-        #[arg(long, default_value = ".")]
-        template: Utf8PathBuf,
+        /// Session name (defaults to the one you are in, or the only one).
+        name: Option<String>,
+        /// Template directory (defaults to the one found from here).
+        #[arg(long)]
+        template: Option<Utf8PathBuf>,
         /// End even with uncommitted changes, throwing them away.
         #[arg(long)]
         discard: bool,
@@ -1116,6 +1147,8 @@ fn main() -> anyhow::Result<()> {
             } => {
                 let mut opts = weft_engine::amend::AmendOptions {
                     template,
+                    // The edit gets a session named after the patch.
+                    session: name.clone(),
                     name,
                     presets,
                     answers,
@@ -1189,57 +1222,8 @@ fn main() -> anyhow::Result<()> {
             eprintln!("lock up to date");
             Ok(())
         }
-        Command::Record {
-            template,
-            base,
-            presets,
-            answers,
-            answers_file,
-            foreach,
-            exec,
-            force,
-            non_interactive,
-            no_wizard,
-        } => {
-            // Bare `--exec` opens $VISUAL/$EDITOR to write the command.
-            let exec = match exec {
-                Some(cmd) if cmd.is_empty() => Some(weft_engine::interact::edit_command(
-                    "Enter the generator command; its output becomes the patch.\n\
-                     Lines starting with '#' are ignored. Multi-line commands run via sh -c.\n\
-                     ${answer_or_expr} interpolates declared answers, e.g. ${project_name} or\n\
-                     ${' '.join(components)}; unknown ${...} passes through to the shell.",
-                )?),
-                other => other,
-            };
-            let mut opts = weft_engine::record::RecordOptions {
-                template,
-                base,
-                presets,
-                answers,
-                answers_file,
-                answers_json: None,
-                foreach,
-                exec,
-                force,
-            };
-            maybe_wizard(
-                &opts.template,
-                &opts.presets,
-                opts.answers_file.as_deref(),
-                &opts.answers,
-                &mut opts.answers_json,
-                non_interactive,
-                no_wizard,
-            )?;
-            let mut interaction = auto_interaction(non_interactive);
-            let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
-            let worktree = weft_engine::record::run(&opts, &mut resolver, interaction.as_mut())?;
-            resolver.flush()?;
-            weft_engine::record::announce(&worktree);
-            Ok(())
-        }
         Command::Commit {
-            template,
+            scope,
             name,
             when,
             title,
@@ -1258,10 +1242,11 @@ fn main() -> anyhow::Result<()> {
             } else {
                 None
             };
+            let here = scope.resolve()?;
             let (name, title, describe, when, tags) = match name {
                 Some(name) => (Some(name), title, describe, when, tags),
                 None if tui::interactive(no_tui) => {
-                    let form = forms::commit(&template, title, describe, when, tags)?;
+                    let form = forms::commit(&here.template, title, describe, when, tags)?;
                     (
                         Some(form.name),
                         form.title,
@@ -1273,7 +1258,8 @@ fn main() -> anyhow::Result<()> {
                 None => (None, title, describe, when, tags),
             };
             let opts = weft_engine::commit::CommitOptions {
-                template,
+                template: here.template,
+                session: here.session,
                 name,
                 when,
                 title,
@@ -1290,20 +1276,26 @@ fn main() -> anyhow::Result<()> {
             result
         }
         Command::Diff {
-            template,
+            scope,
             abstracted,
             json,
             staged,
         } => {
-            if staged && !weft_engine::stage::exists(&template) {
+            let here = scope.resolve()?;
+            if staged && !weft_engine::stage::exists(&here.template, &here.session) {
                 eprintln!("nothing staged; `weft diff` shows the whole worktree");
                 return Ok(());
             }
             let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
-            let tpl = Template::load_with(&template, &mut resolver)?;
+            let tpl = Template::load_with(&here.template, &mut resolver)?;
             resolver.flush()?;
             let mut interaction = auto_interaction(false);
-            let preview = weft_engine::commit::preview_target(&tpl, staged, interaction.as_mut())?;
+            let preview = weft_engine::commit::preview_target(
+                &tpl,
+                &here.session,
+                staged,
+                interaction.as_mut(),
+            )?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&preview)?);
                 Ok(())
@@ -1313,32 +1305,40 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Add {
             patterns,
-            template,
+            scope,
             all,
             patch,
         } => {
-            if !weft_engine::session::Session::exists(&template) {
-                anyhow::bail!("no recording session; run `weft record` first");
-            }
+            let here = scope.resolve()?;
             let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
-            let tpl = Template::load_with(&template, &mut resolver)?;
+            let tpl = Template::load_with(&here.template, &mut resolver)?;
             resolver.flush()?;
-            // `-p` walks every change by default, like `git add -p`.
-            let pats: Vec<String> = if all || (patch && patterns.is_empty()) {
-                vec!["**".to_string()]
+            // `-A` means the whole worktree wherever you stand; everything
+            // else is relative to the directory you ran this in, like git.
+            // `-p` with no paths walks every change, like `git add -p`.
+            let pats: Vec<String> = if all {
+                vec!["**".to_owned()]
             } else if patterns.is_empty() {
-                anyhow::bail!("specify paths to stage (globs), or pass -A to stage everything");
+                if !patch {
+                    anyhow::bail!("specify paths to stage (globs), or pass -A to stage everything");
+                }
+                vec![ctx::qualify(&here.prefix, ".")]
             } else {
                 patterns
-                    .into_iter()
-                    .map(|p| if p == "." { "**".to_string() } else { p })
+                    .iter()
+                    .map(|p| ctx::qualify(&here.prefix, p))
                     .collect()
             };
             let globs = weft_engine::stage::globset(&pats)?;
             let mut interaction = auto_interaction(true);
-            let trees = weft_engine::commit::session_trees(&tpl, interaction.as_mut())?;
-            let mut staged =
-                weft_engine::stage::staged_tree(&template, &tpl.ignore, &trees.base_tree)?;
+            let trees =
+                weft_engine::commit::session_trees(&tpl, &here.session, interaction.as_mut())?;
+            let mut staged = weft_engine::stage::staged_tree(
+                &here.template,
+                &here.session,
+                &tpl.ignore,
+                &trees.base_tree,
+            )?;
             let n = if patch {
                 let paths: Vec<_> = weft_engine::stage::changed_paths(&staged, &trees.work_tree)
                     .into_iter()
@@ -1361,46 +1361,65 @@ fn main() -> anyhow::Result<()> {
             } else {
                 weft_engine::stage::add(&mut staged, &trees.work_tree, &trees.base_tree, &globs)
             };
-            weft_engine::stage::write(&template, &staged, &trees.base_tree)?;
+            weft_engine::stage::write(&here.template, &here.session, &staged, &trees.base_tree)?;
             eprintln!("staged {n} path(s)");
             Ok(())
         }
-        Command::Reset { patterns, template } => {
-            if !weft_engine::session::Session::exists(&template) {
-                anyhow::bail!("no recording session; run `weft record` first");
-            }
+        Command::Reset { patterns, scope } => {
+            let here = scope.resolve()?;
             let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
-            let tpl = Template::load_with(&template, &mut resolver)?;
+            let tpl = Template::load_with(&here.template, &mut resolver)?;
             resolver.flush()?;
             let mut interaction = auto_interaction(true);
-            let trees = weft_engine::commit::session_trees(&tpl, interaction.as_mut())?;
-            let mut staged =
-                weft_engine::stage::staged_tree(&template, &tpl.ignore, &trees.base_tree)?;
+            let trees =
+                weft_engine::commit::session_trees(&tpl, &here.session, interaction.as_mut())?;
+            let mut staged = weft_engine::stage::staged_tree(
+                &here.template,
+                &here.session,
+                &tpl.ignore,
+                &trees.base_tree,
+            )?;
             let globs = if patterns.is_empty() {
                 None
             } else {
-                Some(weft_engine::stage::globset(&patterns)?)
+                let pats: Vec<String> = patterns
+                    .iter()
+                    .map(|p| ctx::qualify(&here.prefix, p))
+                    .collect();
+                Some(weft_engine::stage::globset(&pats)?)
             };
             weft_engine::stage::reset(&mut staged, &trees.base_tree, globs.as_ref());
-            weft_engine::stage::write(&template, &staged, &trees.base_tree)?;
+            weft_engine::stage::write(&here.template, &here.session, &staged, &trees.base_tree)?;
             eprintln!("unstaged");
             Ok(())
         }
-        Command::Status { template } => {
-            if !weft_engine::session::Session::exists(&template) {
-                println!("no active recording session in `{template}`");
+        Command::Status { scope } => {
+            let template = scope.template()?;
+            if weft_engine::session::Session::list(&template)?.is_empty() {
+                println!("no session in `{template}` — start one with `weft session new NAME`");
                 return Ok(());
             }
+            let here = scope.resolve()?;
             let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
-            let tpl = Template::load_with(&template, &mut resolver)?;
+            let tpl = Template::load_with(&here.template, &mut resolver)?;
             resolver.flush()?;
-            let sess = weft_engine::session::Session::load(&template)?;
+            let sess = weft_engine::session::Session::load(&here.template, &here.session)?;
             let mut interaction = auto_interaction(true);
-            let trees = weft_engine::commit::session_trees(&tpl, interaction.as_mut())?;
-            let staged = weft_engine::stage::staged_tree(&template, &tpl.ignore, &trees.base_tree)?;
+            let trees =
+                weft_engine::commit::session_trees(&tpl, &here.session, interaction.as_mut())?;
+            let staged = weft_engine::stage::staged_tree(
+                &here.template,
+                &here.session,
+                &tpl.ignore,
+                &trees.base_tree,
+            )?;
             let staged_changes = weft_engine::stage::changed_paths(&trees.base_tree, &staged);
             let unstaged_changes = weft_engine::stage::changed_paths(&staged, &trees.work_tree);
-            println!("recording session on `{}`", tpl.manifest.template.name);
+            println!(
+                "session `{}` on `{}`",
+                here.session, tpl.manifest.template.name
+            );
+            println!("  worktree: {}", here.worktree);
             let base_names: Vec<_> = sess
                 .session
                 .base
@@ -1415,6 +1434,9 @@ fn main() -> anyhow::Result<()> {
                     base_names.join(", ")
                 }
             );
+            if !sess.session.scope.is_empty() {
+                println!("  scope: {}", sess.session.scope.join(", "));
+            }
             for (id, value) in sess.answers.iter() {
                 println!("  answer: {} = {}", id.0, value.render_text());
             }
@@ -1439,16 +1461,154 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Session { cmd } => match cmd {
-            SessionCmd::Refresh {
+            SessionCmd::New {
+                name,
+                path,
                 template,
+                base,
+                presets,
+                answers,
+                answers_file,
+                foreach,
+                exec,
+                force,
+                non_interactive,
+                no_wizard,
+            } => {
+                let template = ctx::Scope {
+                    template,
+                    session: None,
+                }
+                .template()?;
+                // Bare `--exec` opens $VISUAL/$EDITOR to write the command.
+                let exec = match exec {
+                    Some(cmd) if cmd.is_empty() => Some(weft_engine::interact::edit_command(
+                        "Enter the generator command; its output becomes the patch.\n\
+                         Lines starting with '#' are ignored. Multi-line commands run via sh -c.\n\
+                         ${answer_or_expr} interpolates declared answers, e.g. ${project_name} or\n\
+                         ${' '.join(components)}; unknown ${...} passes through to the shell.",
+                    )?),
+                    other => other,
+                };
+                let mut opts = weft_engine::start::StartOptions {
+                    template,
+                    name,
+                    path,
+                    base,
+                    presets,
+                    answers,
+                    answers_file,
+                    answers_json: None,
+                    foreach,
+                    exec,
+                    force,
+                };
+                maybe_wizard(
+                    &opts.template,
+                    &opts.presets,
+                    opts.answers_file.as_deref(),
+                    &opts.answers,
+                    &mut opts.answers_json,
+                    non_interactive,
+                    no_wizard,
+                )?;
+                let mut interaction = auto_interaction(non_interactive);
+                let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
+                let worktree = weft_engine::start::run(&opts, &mut resolver, interaction.as_mut())?;
+                resolver.flush()?;
+                weft_engine::start::announce(&opts.name, &worktree);
+                Ok(())
+            }
+            SessionCmd::List { template } => {
+                let template = ctx::Scope {
+                    template,
+                    session: None,
+                }
+                .template()?;
+                let sessions = weft_engine::session::Session::list(&template)?;
+                if sessions.is_empty() {
+                    eprintln!(
+                        "no sessions in `{template}`; start one with `weft session new NAME`"
+                    );
+                    return Ok(());
+                }
+                // Mark the session whose worktree we are standing in.
+                let current = weft_engine::discover::cwd()
+                    .ok()
+                    .and_then(|c| weft_engine::discover::locate(&c))
+                    .filter(|l| l.template_root == template)
+                    .and_then(|l| l.session);
+                for (name, sess) in sessions {
+                    let mark = if current.as_deref() == Some(name.as_str()) {
+                        "*"
+                    } else {
+                        " "
+                    };
+                    let kind = if sess.session.adopted {
+                        "  (adopted)"
+                    } else {
+                        ""
+                    };
+                    println!("{mark} {name}\t{}{kind}", sess.worktree(&template, &name));
+                }
+                Ok(())
+            }
+            SessionCmd::Path { name, template } => {
+                let here = ctx::Scope {
+                    template,
+                    session: name,
+                }
+                .resolve()?;
+                println!("{}", here.worktree);
+                Ok(())
+            }
+            SessionCmd::Move {
+                name,
+                dest,
+                template,
+            } => {
+                let here = ctx::Scope {
+                    template,
+                    session: Some(name),
+                }
+                .resolve()?;
+                let dest = weft_engine::discover::absolute(&dest);
+                if dest.exists()
+                    && dest
+                        .read_dir_utf8()
+                        .map(|mut d| d.next().is_some())
+                        .unwrap_or(true)
+                {
+                    anyhow::bail!("`{dest}` is not an empty or absent directory");
+                }
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                if dest.exists() {
+                    std::fs::remove_dir(&dest)?;
+                }
+                std::fs::rename(&here.worktree, &dest)
+                    .with_context(|| format!("moving {} to {dest}", here.worktree))?;
+                let mut sess = weft_engine::session::Session::load(&here.template, &here.session)?;
+                sess.session.worktree = Some(dest.clone());
+                sess.save(&here.template, &here.session)?;
+                ctx::link(&dest, &here.template, &here.session)?;
+                println!("{dest}");
+                eprintln!("moved session `{}` to `{dest}`", here.session);
+                Ok(())
+            }
+            SessionCmd::Refresh {
+                scope,
                 presets,
                 answers,
                 answers_file,
                 answers_json,
                 non_interactive,
             } => {
+                let here = scope.resolve()?;
                 let opts = weft_engine::refresh::RefreshOptions {
-                    template,
+                    template: here.template,
+                    session: here.session,
                     presets,
                     answers,
                     answers_file,
@@ -1480,29 +1640,53 @@ fn main() -> anyhow::Result<()> {
                     std::process::exit(1);
                 }
             }
-            SessionCmd::End { template, discard } => {
-                if !weft_engine::session::Session::exists(&template) {
-                    eprintln!("no active recording session in `{template}`");
+            SessionCmd::End {
+                name,
+                template,
+                discard,
+            } => {
+                let scope = ctx::Scope {
+                    template,
+                    session: name,
+                };
+                if weft_engine::session::Session::list(&scope.template()?)?.is_empty() {
+                    eprintln!("no session to end");
                     return Ok(());
                 }
+                let here = scope.resolve()?;
+                let sess = weft_engine::session::Session::load(&here.template, &here.session)?;
                 if !discard {
                     let mut resolver = hub::HubResolver::new(hub::registry_url(None).ok(), false);
-                    let tpl = Template::load_with(&template, &mut resolver)?;
+                    let tpl = Template::load_with(&here.template, &mut resolver)?;
                     resolver.flush()?;
                     let mut interaction = auto_interaction(true);
-                    let trees = weft_engine::commit::session_trees(&tpl, interaction.as_mut())?;
+                    let trees = weft_engine::commit::session_trees(
+                        &tpl,
+                        &here.session,
+                        interaction.as_mut(),
+                    )?;
                     let changed =
                         weft_engine::stage::changed_paths(&trees.base_tree, &trees.work_tree);
                     if !changed.is_empty() {
                         anyhow::bail!(
-                            "{} uncommitted change(s) in the session; commit them, \
+                            "{} uncommitted change(s) in session `{}`; commit them, \
                              or pass --discard to throw them away",
-                            changed.len()
+                            changed.len(),
+                            here.session
                         );
                     }
                 }
-                weft_engine::session::Session::discard(&template)?;
-                eprintln!("recording session ended");
+                let adopted = sess.session.adopted;
+                sess.end(&here.template, &here.session)?;
+                eprintln!(
+                    "session `{}` ended{}",
+                    here.session,
+                    if adopted {
+                        " (its worktree was left in place)"
+                    } else {
+                        ""
+                    }
+                );
                 Ok(())
             }
         },

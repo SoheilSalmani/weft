@@ -34,7 +34,7 @@ fn read(dir: &Path, rel: &str) -> String {
 /// and writes one text file alongside.
 fn record_icon_patch(tpl: &Path, src: &Path) {
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(tpl)
         .arg("--answer")
@@ -118,7 +118,7 @@ fn diff_shows_binary_opaque() {
     let tpl = dir.path().join("hello");
     copy_dir(&hello_template(), &tpl);
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
@@ -185,14 +185,14 @@ fn modifying_a_binary_records_delete_plus_create() {
 
     // Hand-record on top: replace the icon's bytes in the worktree.
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--answer")
         .arg("project_name=My Demo")
         .assert()
         .success();
-    std::fs::write(tpl.join(".weft-record/worktree/app/favicon.ico"), V2).unwrap();
+    std::fs::write(tpl.join(".weft-sessions/main/worktree/app/favicon.ico"), V2).unwrap();
     weft()
         .arg("commit")
         .arg("--template")
@@ -230,14 +230,18 @@ fn modifying_a_binary_records_delete_plus_create() {
 /// rewrites ids and is not update-compatible).
 fn add_icon_patch(tpl: &Path, name: &str, bytes: &[u8]) {
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(tpl)
         .arg("--answer")
         .arg("project_name=My Demo")
         .assert()
         .success();
-    std::fs::write(tpl.join(".weft-record/worktree/app/favicon.ico"), bytes).unwrap();
+    std::fs::write(
+        tpl.join(".weft-sessions/main/worktree/app/favicon.ico"),
+        bytes,
+    )
+    .unwrap();
     weft()
         .arg("commit")
         .arg("--template")

@@ -46,14 +46,14 @@ fn scaffold(template: &Path, dest: &Path) {
 /// Evolve the template: record + commit a patch built from `edit`.
 fn evolve(template: &Path, name: &str, edit: impl FnOnce(&Path)) {
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(template)
         .arg("--answer")
         .arg("project_name=My Demo")
         .assert()
         .success();
-    edit(&template.join(".weft-record/worktree"));
+    edit(&template.join(".weft-sessions/main/worktree"));
     weft()
         .arg("commit")
         .arg("--template")

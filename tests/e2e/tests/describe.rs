@@ -145,14 +145,18 @@ fn commit_metadata_lands_in_describe() {
     copy_dir(&hello_template(), &template);
 
     weft()
-        .arg("record")
+        .args(["session", "new", "main"])
         .arg("--template")
         .arg(&template)
         .arg("--answer")
         .arg("project_name=x")
         .assert()
         .success();
-    std::fs::write(template.join(".weft-record/worktree/extra.txt"), "hi\n").unwrap();
+    std::fs::write(
+        template.join(".weft-sessions/main/worktree/extra.txt"),
+        "hi\n",
+    )
+    .unwrap();
     weft()
         .arg("commit")
         .arg("--template")
