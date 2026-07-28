@@ -131,7 +131,7 @@ input's value changed, or an upstream `task:` input fired.
 | File                              | Owner            | Contents                                    |
 | --------------------------------- | ---------------- | ------------------------------------------- |
 | `<project>/.weft/state.toml`      | scaffolded app   | template path, pinned patch ids, answers (secrets as refs) |
-| `<template>/.weft-record/`        | recording session| pinned base ids, base tree hash, answers, the scratch worktree |
+| `<template>/.weft-sessions/`        | recording session| pinned base ids, base tree hash, answers, the scratch worktree |
 
 Neither ever contains a resolved secret value; the core type system enforces
 it (serializing `Value::Secret` is an error by construction).

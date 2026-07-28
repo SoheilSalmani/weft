@@ -27,11 +27,11 @@ With zero patches, the base state is an empty tree. Record the initial
 scaffold as your first patch:
 
 ```sh
-weft record --answer "project_name=Demo Project"
-# → .weft-record/worktree (empty)
+weft session new work --answer "project_name=Demo Project"
+# → .weft-sessions/work/worktree (empty)
 
 # create the initial files with your normal tools
-cd .weft-record/worktree
+cd .weft-sessions/work/worktree
 git init -q . && uv init …            # whatever produces real files
 cd ../..
 
@@ -47,8 +47,8 @@ that scaffold for any answers.
 Each meaningful change is one recorded patch:
 
 ```sh
-weft record --answer "project_name=Demo Project"
-# edit .weft-record/worktree — add a linter config, change CI, whatever
+weft session new work --answer "project_name=Demo Project"
+# edit .weft-sessions/work/worktree — add a linter config, change CI, whatever
 weft commit --name add-ruff --yes
 ```
 

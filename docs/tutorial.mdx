@@ -66,19 +66,19 @@ echo "My local notes." >> app/README.md
 
 ## 3. Record a template change
 
-`weft record` renders a pinned base state into a scratch worktree. You edit
+`weft session new` renders a pinned base state into a scratch worktree. You edit
 *that* — your app, your shell, your dirty checkout never leak into the
 recording.
 
 ```sh
-weft record --template tpl --answer "project_name=My Shop"
-# prints: tpl/.weft-record/worktree
+weft session new work --template tpl --answer "project_name=My Shop"
+# prints: tpl/.weft-sessions/work/worktree
 ```
 
 Edit the worktree like any directory of files:
 
 ```sh
-printf 'lint:\n\truff check my-shop\n' > tpl/.weft-record/worktree/Makefile
+printf 'lint:\n\truff check my-shop\n' > tpl/.weft-sessions/work/worktree/Makefile
 ```
 
 Note we typed the *concrete* value `my-shop` — no placeholder syntax.
@@ -134,9 +134,9 @@ Change the same line on both sides:
 ```sh
 sed -i '' 's/Scaffolded by weft./Scaffolded by ME./' app/README.md
 
-weft record --template tpl --answer "project_name=My Shop"
+weft session new work --template tpl --answer "project_name=My Shop"
 sed -i '' 's/Scaffolded by weft./Scaffolded by TEMPLATE./' \
-    tpl/.weft-record/worktree/README.md
+    tpl/.weft-sessions/work/worktree/README.md
 weft commit --template tpl --name rebrand --yes
 
 weft update app               # exits nonzero

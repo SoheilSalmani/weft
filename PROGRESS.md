@@ -75,6 +75,67 @@ deviations from the plan.
   `weft reset` stays file-level (unstage the whole file to redo). Tests: 8 unit
   in diff.rs, 11 in addpatch.rs, 5 e2e in tests/e2e/tests/add_patch.rs.
 
+## Post-MVP — Sessions are git-style worktrees (BREAKING: `weft record` removed)
+
+- **The reported pain**: you stood in the template and typed `weft add init`,
+  but the files were in `.weft-record/worktree/`, so nothing tab-completed and
+  the argument read like a name, not a path. FIX = git's model: the worktree is
+  a directory you `cd` into, weft finds itself by walking up, and path arguments
+  are relative to where you stand.
+- **`weft record` is GONE** (hard rename, no alias, decided with the user).
+  `weft session new NAME` replaces it; the name is a required positional.
+  Engine module `record.rs` → `start.rs` (`StartOptions`).
+- **Layout**: `.weft-record/` → `.weft-sessions/<name>/{session.toml, stage/,
+  worktree/}`. A template holds any number of sessions, **each with its own
+  index** (`stage::stage_dir(root, session)`). Legacy layouts migrate to
+  `.weft-sessions/main/` on first touch (`session::migrate_legacy`, idempotent).
+  NOTE for template repos: `.gitignore` needs `.weft-sessions/`.
+- **Discovery** = new `weft-engine/src/discover.rs`. A worktree carries a
+  back-pointer at `<worktree>/.weft/worktree.toml` (git's `.git`-file trick);
+  `.weft/` is already unconditionally skipped by the tree walker, so it can
+  never leak into a patch, and it sits beside the `state.toml`/`base.json` an
+  adopted project already has. `locate()` checks **pointer then manifest at each
+  level**, innermost wins — so a worktree whose render contains its own
+  `weft.toml` is still a worktree, while a genuinely nested template resolves to
+  itself. CLI side: `weft-cli/src/ctx.rs` (`Scope` clap args + `qualify()` for
+  CWD-relative pathspecs). Resolution: CWD's session → `--session` → the only
+  session → error listing them. **No stored "current session" pointer** — that
+  would be a footgun for a command that writes patches.
+- **Worktrees anywhere**: `--path` puts one outside the template (recorded
+  absolute on `SessionMeta::worktree`; the default location is left unrecorded
+  so the session file stays portable). `weft session move`, plus **self-heal** —
+  a bare `mv` is repaired by the next command run inside it, since standing
+  there is proof of where it is (git needs an explicit `worktree repair`).
+- **`weft session adopt PATH -n NAME`** — the inverse of `weft update`. KEY FIT:
+  a `weft new` project already stores everything a session needs in
+  `.weft/state.toml` (template ref, pinned base ids, answers, secret refs), so
+  adopting one takes no arguments and the diff is exactly the author's edits.
+  Base defaults to the project's **own pinned base**, not `latest` — otherwise
+  every patch added since would read as a deletion. Plain directories need
+  `--template` + answers and want `--scope` globs (stored on the session,
+  applied to the **base tree as well**, or out-of-scope base files read as
+  deletions). `weft session scope --add/--rm` widens it later.
+- **GOTCHA FOUND IN TESTING**: the sibling transition reverts committed paths in
+  the worktree — on an adopted project that **deleted the author's real source
+  file**. Adopted sessions now always stack, and `--sibling` on one is refused
+  *up front* (the first version bailed after `write_patch_full`, leaving the
+  patch behind). `session end` unlinks an adopted worktree instead of deleting.
+- **`weft commit --depends-on a,b` / `--after X`** overrides the derived
+  `base_leaves`. Guard rails: names must be in the session's *active* base, and
+  the patch must additionally render against **its declared closure alone** — a
+  claim of independence the content can't honour fails at commit instead of at
+  `weft check`. (The byte-for-byte replay still runs against the full base; the
+  closure render is a second, apply-only check.)
+- MCP `record_*` → `session_*` with a `session` param (default `agent`).
+  Weft Cloud's `web/lib/improve/agent.ts` has its own tool ids over its own HTTP
+  routes — left alone deliberately.
+- Tests: `discover.rs` 5 unit, `session.rs` 3 unit, new
+  `tests/e2e/tests/worktree.rs` 15 e2e (discovery from a subdir, two sessions
+  with separate stages, ambiguity error, list marker, external path + move,
+  mv-repair, adopt scaffolded/plain/scope, adopted-file safety, end semantics,
+  depends-on/after + both rejections). Existing e2e migrated onto the new verbs.
+  Gate GREEN (fmt + clippy + `cargo test --workspace`, 35 binaries).
+
 ## Post-MVP — Self-contained update base (survives history rewrites)
 
 - **The prerequisite for using amend/squash/resync on live templates.**

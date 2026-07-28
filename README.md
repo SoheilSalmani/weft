@@ -9,8 +9,10 @@ Core ideas:
 
 - **Patches store inputs, not outputs.** Rendering is deterministic:
   `render(base, answers, patches) → tree`. Same inputs, byte-identical output.
-- **Record against a clean base.** `weft record` materializes a pinned base
-  state into a scratch worktree; your dirty working directory never leaks in.
+- **Record against a clean base.** `weft session new NAME` materializes a pinned
+  base state into a worktree; your dirty working directory never leaks in.
+  Sessions work like git worktrees: several at once, each with its own staging
+  index, each a directory you `cd` into.
 - **Abstraction happens at commit.** You edit concrete files ("My Demo");
   `weft commit` proposes which literals correspond to which answers and stores
   `{"answer": "project_name"}` segments instead.
@@ -89,15 +91,17 @@ base state:
 
 ```sh
 cp -r fixtures/templates/hello /tmp/tpl
-weft record --template /tmp/tpl --answer "project_name=My Demo"
-# prints: /tmp/tpl/.weft-record/worktree
+cd $(weft session new makefile --template /tmp/tpl --answer "project_name=My Demo")
 ```
 
-Edit the worktree with your normal tools — it's just files:
+`weft session new` prints the worktree path, so `cd $(…)` puts you inside it.
+Edit with your normal tools — it's just files — then commit from there; weft
+finds the template by walking up, and paths are relative to where you stand:
 
 ```sh
-echo "serve-my-demo:\n\techo My Demo" > /tmp/tpl/.weft-record/worktree/Makefile
-weft commit --template /tmp/tpl --name makefile --yes
+echo "serve-my-demo:\n\techo My Demo" > Makefile
+weft add Makefile
+weft commit --name makefile --yes
 ```
 
 Commit diffed the worktree against the base, noticed `my-demo` and `My Demo`

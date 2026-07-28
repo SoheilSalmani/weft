@@ -1,6 +1,6 @@
 ---
 title: State files
-description: .weft/state.toml in scaffolded projects and .weft-record/ recording sessions.
+description: .weft/state.toml in scaffolded projects and .weft-sessions/ recording sessions.
 ---
 
 # State files
@@ -44,13 +44,13 @@ Semantics:
 The `.weft/` directory is ignored when weft reads the project tree back (so
 it never shows up in merges), as is `.git/`.
 
-## `.weft-record/` (recording sessions)
+## `.weft-sessions/` (recording sessions)
 
-Created in the *template* directory by `weft record`, deleted by a successful
+Created in the *template* directory by `weft session new`, deleted by a successful
 `weft commit`:
 
 ```
-<template>/.weft-record/
+<template>/.weft-sessions/
 ├── session.toml
 └── worktree/          ← edit this
 ```
@@ -75,7 +75,7 @@ Semantics:
 - `weft commit` re-renders the base and verifies `tree_hash` still matches;
   if the template (or a secret's resolved value) moved underneath the
   session, commit refuses and asks you to re-record.
-- Only one session per template; `weft record --force` discards a stale one.
+- Only one session per template; `weft session new NAME --force` discards a stale one.
 
 ## Tree hashing
 

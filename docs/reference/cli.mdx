@@ -76,13 +76,13 @@ Behavior notes:
   template-modified keeps it deleted. Both are reported.
 - Running `update` twice in a row is a no-op the second time.
 
-## `weft record`
+## `weft session new`
 
 Start a recording session: materialize a base state into a scratch worktree
 and print its path (stdout).
 
 ```
-weft record [options]
+weft session new work [options]
 ```
 
 | Flag                  | Default  | Meaning                                            |
@@ -95,7 +95,7 @@ weft record [options]
 | `--force`             | off      | discard an existing session instead of failing     |
 | `--non-interactive`   | auto     | never prompt                                       |
 
-The worktree lives at `<template>/.weft-record/worktree/`. Edit it with any
+The worktree lives at `<template>/.weft-sessions/work/worktree/`. Edit it with any
 tools you like, then run `weft commit`. A second `record` without `--force`
 fails while a session is active.
 

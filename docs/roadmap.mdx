@@ -15,9 +15,9 @@ Rough priority order within each section.
 - **Rename detection in `commit`.** Moved files currently record as
   delete + create; similarity-based detection should emit `rename_path` (the
   op already exists in the model and renderer).
-- **`weft record --abort`** as a first-class way to discard a session
-  (today: `weft record --force` on the next session, or delete
-  `.weft-record/`).
+- **`weft session end`** as a first-class way to discard a session
+  (today: `weft session new NAME --force` on the next session, or delete
+  `.weft-sessions/`).
 - **Int/bool value abstraction with confirmation.** Skipped in MVP because
   `8080` or `true` match far too much; needs occurrence-context heuristics
   before proposing.
