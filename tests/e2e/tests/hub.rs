@@ -118,6 +118,58 @@ fn scaffolds_from_a_hub_ref_and_pins_the_resolved_version() {
 }
 
 #[test]
+fn update_keeps_the_hub_ref_and_moves_with_to() {
+    let home = tempfile::tempdir().unwrap();
+    let dest = tempfile::tempdir().unwrap();
+    let out = dest.path().join("out");
+    let (url, _server) = stub_registry(hello_tarball(), false);
+
+    weft()
+        .env("HOME", home.path())
+        .env("WEFT_HUB_URL", &url)
+        .arg("new")
+        .arg("hub:acme/hello@1.0.0")
+        .arg(&out)
+        .arg("--answer")
+        .arg("project_name=Hub Demo")
+        .arg("--skip-tasks")
+        .arg("--non-interactive")
+        .assert()
+        .success();
+
+    // The update runs against the cache checkout but must record the ref,
+    // never the cache directory.
+    weft()
+        .env("HOME", home.path())
+        .env("WEFT_HUB_URL", &url)
+        .arg("update")
+        .arg(&out)
+        .arg("--skip-tasks")
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    let state = std::fs::read_to_string(out.join(".weft/state.toml")).unwrap();
+    assert!(
+        state.contains("template = \"hub:acme/hello@1.0.0\""),
+        "{state}"
+    );
+
+    // `--to` on a version the registry doesn't have is a clear error.
+    weft()
+        .env("HOME", home.path())
+        .env("WEFT_HUB_URL", &url)
+        .arg("update")
+        .arg(&out)
+        .arg("--to")
+        .arg("9.9.9")
+        .arg("--skip-tasks")
+        .arg("--non-interactive")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("9.9.9 does not exist"));
+}
+
+#[test]
 fn pinned_versions_scaffold_offline_from_the_cache() {
     let home = tempfile::tempdir().unwrap();
     let dest = tempfile::tempdir().unwrap();

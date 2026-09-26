@@ -8,7 +8,7 @@ use weft_core::{AnswerKind, AnswerSet, Question};
 use weft_lang::StarlarkEval;
 
 use crate::interact::Interaction;
-use crate::state::{InstanceState, State};
+use crate::state::{InstanceState, State, StoredSource};
 use crate::template::Template;
 use crate::{answers, compose, fsio, hooks};
 
@@ -24,9 +24,9 @@ pub struct NewOptions {
     /// is also implicitly declared by any `include.key.answer=…` answer.
     pub instances: Vec<String>,
     pub skip_tasks: bool,
-    /// What `.weft/state.toml` records as the template (e.g. a resolved
-    /// `hub:owner/name@version` ref). Defaults to the template path.
-    pub stored_ref: Option<String>,
+    /// What `.weft/state.toml` records as the template source (a resolved
+    /// `hub:` or git ref). `None` = the local template path.
+    pub stored: Option<StoredSource>,
 }
 
 /// Parse `include=key` instance declarations.
@@ -138,15 +138,12 @@ pub fn run(
             secrets: secret_specs(&p.template.manifest.questions, &p.instance.answers),
         })
         .collect();
-    // Absolutize so `weft update` works from any cwd later.
-    let stored_ref = opts.stored_ref.clone().unwrap_or_else(|| {
-        opts.template
-            .canonicalize_utf8()
-            .unwrap_or_else(|_| opts.template.clone())
-            .to_string()
-    });
+    let source = opts
+        .stored
+        .clone()
+        .unwrap_or_else(|| StoredSource::path(&opts.template));
     let state = State::new(
-        stored_ref,
+        source,
         template.patches.iter().map(|p| p.id).collect(),
         tree.hash(),
         &resolved,

@@ -73,8 +73,8 @@ pub struct LoadedInclude {
 const MAX_INCLUDE_DEPTH: usize = 8;
 
 /// Resolves an `[[include]]` to a local template directory. Path includes
-/// are trivial; `hub:` includes need a resolver that consults the lockfile,
-/// downloads, and verifies (the CLI/registry provide one) — the engine
+/// are trivial; `hub:` and git includes need a resolver that consults the
+/// lockfile, fetches, and verifies (the CLI provides one) — the engine
 /// itself never touches the network.
 pub trait IncludeResolver {
     /// The local directory holding the child template for `decl`, declared
@@ -86,8 +86,9 @@ pub trait IncludeResolver {
     ) -> Result<Utf8PathBuf>;
 }
 
-/// The default resolver: relative-path includes only. A `hub:` include is an
-/// error (there is no registry to consult from the pure engine).
+/// The default resolver: relative-path includes only. A remote (`hub:` or
+/// git) include is an error — there is nothing to fetch with from the pure
+/// engine.
 pub struct PathResolver;
 
 impl IncludeResolver for PathResolver {
@@ -96,10 +97,10 @@ impl IncludeResolver for PathResolver {
         parent_root: &Utf8Path,
         decl: &crate::manifest::IncludeDecl,
     ) -> Result<Utf8PathBuf> {
-        if decl.is_hub() {
+        if decl.kind() != crate::source::Kind::Path {
             bail!(
-                "include `{}` references `{}` (a registry template); \
-                 resolve it through the CLI (`weft new`/`weft lock`) or a registry",
+                "include `{}` references `{}` (a remote template); \
+                 resolve it through the CLI (`weft new`/`weft lock`)",
                 decl.name,
                 decl.template
             );
@@ -109,8 +110,8 @@ impl IncludeResolver for PathResolver {
 }
 
 impl Template {
-    /// Load a template resolving path includes only. Errors on `hub:`
-    /// includes — use [`Self::load_with`] with a hub-aware resolver.
+    /// Load a template resolving path includes only. Errors on remote
+    /// includes — use [`Self::load_with`] with the CLI's resolver.
     pub fn load(root: &Utf8Path) -> Result<Self> {
         Self::load_with(root, &mut PathResolver)
     }

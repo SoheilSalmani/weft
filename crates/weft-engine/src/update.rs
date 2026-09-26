@@ -5,14 +5,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Context, Result};
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8PathBuf;
 use weft_core::merge::merge3;
 use weft_core::{AnswerId, AnswerSet, FileEntry, Question, Value};
 use weft_lang::StarlarkEval;
 
 use crate::hooks::{self, ChangeSet};
 use crate::interact::Interaction;
-use crate::state::State;
+use crate::state::{State, StoredSource};
 use crate::template::Template;
 use crate::{answers, compose, fsio, secrets};
 
@@ -22,6 +22,9 @@ pub struct UpdateOptions {
     pub dry_run: bool,
     /// Use this template path instead of the one recorded in state.
     pub template_override: Option<Utf8PathBuf>,
+    /// What to record as the template source afterwards (a remote ref the
+    /// CLI resolved `template_override` from). `None` = the template path.
+    pub stored: Option<StoredSource>,
     pub skip_tasks: bool,
     /// Instances `(include, key)` excluded from the *new* side — the
     /// `weft instance remove` path: their files get template-deleted
@@ -399,10 +402,9 @@ pub fn run(
         })
         .collect();
     State::new(
-        template_path
-            .canonicalize_utf8()
-            .unwrap_or(template_path)
-            .to_string(),
+        opts.stored
+            .clone()
+            .unwrap_or_else(|| StoredSource::path(&template_path)),
         template.patches.iter().map(|p| p.id).collect(),
         new_render.hash(),
         &new_answers,
@@ -610,13 +612,4 @@ pub fn finish(report: &UpdateReport) -> Result<()> {
                 .join(", ")
         )
     }
-}
-
-/// Small helper for tests/e2e: does `dir` need an update at all?
-pub fn is_up_to_date(dest: &Utf8Path) -> Result<bool> {
-    let state = State::load(dest)?;
-    let template = Template::load(Utf8Path::new(&state.state.template))?;
-    let pinned: BTreeSet<_> = state.state.base.iter().copied().collect();
-    let current: BTreeSet<_> = template.patches.iter().map(|p| p.id).collect();
-    Ok(pinned == current)
 }

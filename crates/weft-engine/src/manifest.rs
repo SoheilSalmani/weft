@@ -31,14 +31,15 @@ pub struct IncludeDecl {
     /// Include slug; unique per template. Namespaces the child's answers and
     /// (for non-repeat includes) doubles as the implicit instance key.
     pub name: String,
-    /// The child template. Either a directory path relative to this template
-    /// root (`../go-service`) or a registry ref (`hub:owner/name`); the
-    /// latter must carry a `version` requirement and resolves through the
+    /// The child template: a directory path relative to this template root
+    /// (`../go-service`), a registry ref (`hub:owner/name`, which must carry
+    /// a `version` requirement), or a git source (`gh:owner/repo//dir@rev`,
+    /// any git URL — see [`crate::source`]). Remote refs resolve through the
     /// lockfile.
     pub template: Utf8PathBuf,
     /// Semver requirement for a `hub:` template (e.g. `^1.0`). Required for
-    /// hub refs, forbidden for path refs. Resolved to an exact version in
-    /// `weft.lock`.
+    /// hub refs, forbidden otherwise (git includes pin with `@rev` in the
+    /// ref). Resolved to an exact version in `weft.lock`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// Mount prefix inside the rendered tree. May contain `{key}`, which is
@@ -54,9 +55,18 @@ pub struct IncludeDecl {
 }
 
 impl IncludeDecl {
-    /// Is this a registry (`hub:`) include rather than a relative path?
+    pub fn kind(&self) -> crate::source::Kind {
+        crate::source::kind(self.template.as_str())
+    }
+
+    /// Is this a registry (`hub:`) include?
     pub fn is_hub(&self) -> bool {
-        self.template.as_str().starts_with("hub:")
+        self.kind() == crate::source::Kind::Hub
+    }
+
+    /// Is this a git include (`gh:…`, a git URL)?
+    pub fn is_git(&self) -> bool {
+        self.kind() == crate::source::Kind::Git
     }
 
     /// The `hub:owner/name` ref string, if this is a hub include.

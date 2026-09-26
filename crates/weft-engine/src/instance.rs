@@ -12,7 +12,7 @@ use anyhow::{bail, Context, Result};
 use camino::Utf8PathBuf;
 
 use crate::interact::Interaction;
-use crate::state::{InstanceState, State};
+use crate::state::{InstanceState, ProjectTemplate, State};
 use crate::template::Template;
 use crate::update::{self, UpdateOptions, UpdateReport};
 use crate::{answers, compose};
@@ -24,6 +24,8 @@ pub struct InstanceAddOptions {
     /// Child answers (`id=value`, child-scoped — no namespace needed).
     pub answers: Vec<String>,
     pub skip_tasks: bool,
+    /// The project's template, already fetched when it is a remote source.
+    pub source: ProjectTemplate,
 }
 
 pub fn add(
@@ -32,7 +34,7 @@ pub fn add(
     interaction: &mut dyn Interaction,
 ) -> Result<UpdateReport> {
     let mut state = State::load(&opts.dest)?;
-    let template = Template::load_with(&Utf8PathBuf::from(&state.state.template), resolver)?;
+    let template = Template::load_with(&opts.source.dir, resolver)?;
     let inc = template.include(&opts.include).with_context(|| {
         format!(
             "template `{}` has no include named `{}`",
@@ -92,7 +94,8 @@ pub fn add(
         &UpdateOptions {
             dest: opts.dest.clone(),
             dry_run: false,
-            template_override: None,
+            template_override: Some(opts.source.dir.clone()),
+            stored: opts.source.stored.clone(),
             skip_tasks: opts.skip_tasks,
             drop_instances: vec![],
         },
@@ -111,6 +114,7 @@ pub fn remove(
     include: &str,
     key: &str,
     skip_tasks: bool,
+    source: &ProjectTemplate,
     resolver: &mut dyn crate::template::IncludeResolver,
     interaction: &mut dyn Interaction,
 ) -> Result<UpdateReport> {
@@ -126,7 +130,8 @@ pub fn remove(
         &UpdateOptions {
             dest: dest.clone(),
             dry_run: false,
-            template_override: None,
+            template_override: Some(source.dir.clone()),
+            stored: source.stored.clone(),
             skip_tasks,
             drop_instances: vec![(include.to_owned(), key.to_owned())],
         },

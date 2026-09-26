@@ -133,18 +133,56 @@ pub struct InstanceState {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StateMeta {
-    /// Template ref as given on the command line (path for MVP).
+    /// Template source as given on the command line: a local path
+    /// (absolutized), a `hub:owner/name@version` ref, or a git source
+    /// (`gh:owner/repo//dir@rev` — see [`crate::source`]).
     pub template: String,
+    /// For git sources: the commit the tree was rendered from. `template`
+    /// says what to track (a branch or tag); this is where it resolved to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
     /// Pinned base: ids of the patches this tree was rendered from.
     pub base: Vec<PatchId>,
     /// Hash of the rendered tree (pre user edits).
     pub tree_hash: String,
 }
 
+/// What `state.toml` records as the template source: the ref to track plus,
+/// for git, the resolved commit. Produced by whoever fetched the template
+/// (the CLI); the engine only sees a local directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredSource {
+    pub template: String,
+    pub commit: Option<String>,
+}
+
+impl StoredSource {
+    /// A local path source: absolutized so `weft update` works from any cwd.
+    pub fn path(template: &Utf8Path) -> Self {
+        StoredSource {
+            template: template
+                .canonicalize_utf8()
+                .unwrap_or_else(|_| template.to_owned())
+                .to_string(),
+            commit: None,
+        }
+    }
+}
+
+/// Where a scaffolded project's template is right now: a local directory
+/// (the state's own path, or the checkout of a remote source the CLI
+/// fetched) plus what to record as the source afterwards (`None` = the
+/// directory itself).
+#[derive(Debug, Clone)]
+pub struct ProjectTemplate {
+    pub dir: Utf8PathBuf,
+    pub stored: Option<StoredSource>,
+}
+
 impl State {
     /// Split `answers` into persistable values and secret refs.
     pub fn new(
-        template: String,
+        source: StoredSource,
         base: Vec<PatchId>,
         tree_hash: String,
         answers: &AnswerSet,
@@ -161,7 +199,8 @@ impl State {
         }
         State {
             state: StateMeta {
-                template,
+                template: source.template,
+                commit: source.commit,
                 base,
                 tree_hash,
             },

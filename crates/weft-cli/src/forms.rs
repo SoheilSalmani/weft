@@ -435,7 +435,10 @@ pub fn instance_add(
 ) -> Result<InstanceForm> {
     let state_file = weft_engine::state::State::load(dest)
         .with_context(|| format!("`{dest}` is not a weft-scaffolded project"))?;
-    let template = Template::load(Utf8Path::new(&state_file.state.template))?;
+    let located = crate::source::locate_project(&state_file, None, false)?;
+    let mut resolver =
+        crate::source::RemoteResolver::new(crate::hub::registry_url(None).ok(), false);
+    let template = Template::load_with(&located.dir, &mut resolver)?;
     let repeatable: Vec<Choice> = template
         .includes
         .iter()

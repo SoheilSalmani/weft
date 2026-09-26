@@ -132,6 +132,44 @@ Tasks re-fire only when their declared inputs (file globs, answers, upstream
 tasks) actually changed between the two renders. Running `update` twice in a
 row is a no-op.
 
+### Templates from git
+
+A template can live in a git repository — on its own or as one directory of
+a repository of templates. The ref grammar is `<repo>[//<subdir>][@<rev>]`:
+
+```sh
+weft new gh:acme/react-template app                       # GitHub shorthand
+weft new https://github.com/acme/templates.git//base app  # subdirectory
+weft new git@github.com:acme/templates.git//base@v1.2 app # …at a tag
+```
+
+`@rev` is a tag, branch, or commit; without it the remote's default branch is
+tracked. The project records the ref *and* the commit it rendered from:
+
+```toml
+[state]
+template = "gh:acme/templates//base@main"
+commit = "9f3c1e…"
+```
+
+`weft update` fetches, resolves the tracked rev again, and merges whatever
+changed; a tag stays put until you move it. `weft update --to v2.0` (or a
+branch, or a commit) retargets and tracks that from then on; `--offline`
+updates from the local mirror only. Repositories are mirrored under
+`~/.weft/git/` with one immutable export per commit, so a pinned commit
+scaffolds with no network — the same guarantee as `hub:` refs. Everything
+goes through your `git`, so SSH keys and credential helpers just work. A
+template may `[[include]]` a git source the same way
+(`template = "gh:acme/templates//go-service@v1"`); `weft lock` pins the
+commit in `weft.lock`.
+
+**What to commit in a scaffolded project:** `.weft/state.toml` and
+`.weft/base.json` — they hold the source ref, the pinned base, and your
+answers (secrets only as references), and they are what lets any clone of
+the project run `weft update`. `.weft/worktree.toml` (written by `weft
+session adopt`) is a machine-local pointer; weft drops a `.weft/.gitignore`
+that excludes it.
+
 ### Validate a template
 
 ```sh
@@ -145,7 +183,8 @@ weft check /tmp/tpl --answer project_name=x
 
 ```
 my-template/
-├── weft.toml            # [template], [[question]], [[preset]], [[task]]
+├── weft.toml            # [template], [[question]], [[preset]], [[include]]
+├── weft.lock            # pinned versions/commits of remote includes
 ├── presets/*.toml       # partial answer maps; later layers win
 └── patches/*.json       # the recorded patch DAG; deps by patch name
 ```

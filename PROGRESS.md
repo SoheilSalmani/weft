@@ -3,6 +3,81 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Git template sources (`<repo>[//<subdir>][@<rev>]`)
+
+- **Third source kind next to path and `hub:`**: `gh:owner/repo` (→
+  `https://github.com/owner/repo.git`), any git URL (`https://`, `ssh://`,
+  `file://`, scp `git@host:path`), with `//subdir` for a repository of
+  templates and `@rev` (tag/branch/commit; absent = remote default branch).
+  Parsing/classification = `weft-engine/src/source.rs` (pure; the engine
+  never touches the network). `@` is found in the *path* part only, so
+  `git@host:` and `user:tok@host` never read as a revision. Rejected
+  alternatives: npm `#rev` and Cargo `?tag=&dir=` (shell quoting; `@`
+  already exists for `hub:…@version`).
+- **Cargo-shaped tracking**: `state.template` says what to track
+  (`gh:acme/templates//base@main`, no machine paths), new
+  `state.commit` says what rendered. `weft update` fetches, re-resolves the
+  rev, short-circuits "up to date" when the commit is unchanged, else runs
+  the engine update with `UpdateOptions.stored` so the ref is written back.
+  `--to REV` retargets (git rev or hub version — replaces the old
+  "wait for `--to-latest`" note); `--offline` uses the mirror only.
+  `--template DIR` keeps meaning "switch to this local path".
+- **BUG FIXED on the way**: `weft update` on a `hub:` project wrote the cache
+  directory into `state.template` (update.rs canonicalized
+  `template_override`). `StoredSource` now travels through
+  `NewOptions.stored` / `UpdateOptions.stored` / `ProjectTemplate`
+  (instance add/remove); `State::new` takes a `StoredSource`. e2e
+  `hub.rs::update_keeps_the_hub_ref_and_moves_with_to`.
+- **Cache** = `weft-cli/src/git.rs`, Cargo's layout: `~/.weft/git/db/<slug>-
+  <hash>/` bare `--mirror` clones (fetch `--prune`), `~/.weft/git/checkouts/
+  <slug>-<hash>/<sha>/` immutable **whole-tree** exports (`git archive` →
+  the same safe tar unpack as hub). Whole tree, not the subdir, so
+  `templates/base` can `[[include]] template = "../shared"`. A full sha with
+  an existing export = zero network, zero mirror (pinned + cached, same
+  guarantee as hub). Shells out to `git` (user's SSH keys / credential
+  helpers apply; `GIT_TERMINAL_PROMPT=0` when stdin isn't a tty). Mirror
+  HEAD is set at clone time only (a remote renaming its default branch
+  needs `--to`). Wrong `//subdir` lists every `weft.toml` in the export
+  (depth ≤ 4). **Concurrency without a lock file**: every process builds
+  into its own `<target>.staging-<pid>` and `install` is first-writer-wins
+  (`rename` fails onto a populated dir → adopt the winner, drop your copy);
+  a populated db/export is never `remove_dir_all`'d, since another weft may
+  be reading it. NOTE: `hub::ensure_cached` still uses the older
+  remove-then-rename pattern — same treatment would apply there.
+- **Includes**: `[[include]] template = "gh:acme/tpls//go-service@v1"`; no
+  new field — `version` stays hub-only (check + resolver reject it on git
+  with a `@rev` hint). `weft.lock` entries gained `commit`; `version`/
+  `sha256` became `Option` (hub-only; existing lock files load unchanged).
+  TODO weft-hub: its `RegistryResolver` constructs/reads `Locked` — adapt
+  to `Locked::hub(..)` / `Option` fields when bumping the weft crates. Lock
+  key = `repo[//subdir]`, `req` = rev or `HEAD`; a changed rev invalidates
+  the entry like a changed semver req does. `HubResolver` →
+  `source::RemoteResolver` (hub + git + path).
+- **Cached templates are read-only**: a parent root under `~/.weft/{hub,git}`
+  never gets a lock written; an unpinned include there errors with "author
+  must run `weft lock` and commit weft.lock". (Previously a hub cache copy
+  could be mutated by lock writes.)
+- **Adopt/record**: a project scaffolded from a remote source can't be
+  adopted without `--template DIR` (a cache export is not a writable
+  clone) — explicit error instead of "weft.toml not found".
+- **What to commit in a project**: `.weft/state.toml` + `.weft/base.json`
+  (portable now that remote refs carry no paths); `.weft/worktree.toml` is
+  machine-local — `WorktreeLink::save` writes `.weft/.gitignore` excluding it.
+- Deleted `update::is_up_to_date` (no callers). `hub` download message no
+  longer prints `@version` twice. `schemas/*.json` regenerated (the patch
+  schema had drifted: generator + create_binary_file).
+- e2e `tests/e2e/tests/git.rs` (9, all against local `file://` repos built
+  from the hello fixture): subdir@tag pins commit + whole-tree export,
+  branch follow + up-to-date no-op, tag stays until `--to`, sibling include
+  inside the export, wrong subdir listing, pinned-sha offline + `--offline`
+  branch, git include lock (commit pinned, tag moving upstream doesn't move
+  the child, `version` rejected), fetched template must ship its lock,
+  adopt hint. Gate green: fmt + clippy -D warnings + `cargo test
+  --workspace`.
+- Follow-ups: semver over tags (`@^1.0`), `weft cache gc`, SSH default for
+  `gh:` (`WEFT_GH_PROTOCOL`), `weft check`/`graph` accepting sources, MCP
+  scaffold from git refs, nested instance bases in `base.json`.
+
 ## Post-MVP — Git-like recording session (staging index, many patches, sibling/stack)
 
 - **The recording session is now a git-like workspace**: a real staging index,

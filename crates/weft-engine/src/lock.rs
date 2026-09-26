@@ -1,10 +1,11 @@
-//! `weft.lock` — exact resolved versions for a composed template's `hub:`
-//! includes. Cargo-shaped: `weft.toml` declares *requirements*, the lock
-//! pins *versions* + checksums so `Template::load` of a composed template
-//! is reproducible across machines. Committed and published with the
-//! template.
+//! `weft.lock` — exact resolved versions for a composed template's remote
+//! includes. Cargo-shaped: `weft.toml` declares *requirements* (a semver
+//! range for `hub:`, a tracked rev for git), the lock pins *versions* +
+//! checksums (hub) or *commits* (git) so `Template::load` of a composed
+//! template is reproducible across machines. Committed and published with
+//! the template.
 //!
-//! The lock is flat and transitive: a hub child's own hub includes
+//! The lock is flat and transitive: a remote child's own remote includes
 //! contribute entries too, keyed by ref. Entries are kept in sorted order
 //! so the file is stable under version control.
 
@@ -16,17 +17,47 @@ use serde::{Deserialize, Serialize};
 
 pub const LOCK_FILE: &str = "weft.lock";
 
-/// One resolved include.
+/// One resolved include. Hub entries carry `version` + `sha256`; git
+/// entries carry `commit`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Locked {
-    /// The `hub:owner/name` ref.
+    /// The `hub:owner/name` ref, or the git `repo[//subdir]` ref.
     pub r#ref: String,
-    /// The requirement it was resolved from (e.g. `^1.0`).
+    /// The requirement it was resolved from: a semver range (`^1.0`) for
+    /// hub, the tracked rev (`v1.2.0`, `main`, or `HEAD` for the default
+    /// branch) for git.
     pub req: String,
-    /// The exact version chosen.
-    pub version: String,
-    /// sha256 of the child's published tarball.
-    pub sha256: String,
+    /// Hub: the exact version chosen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Hub: sha256 of the child's published tarball.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    /// Git: the commit the rev resolved to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+}
+
+impl Locked {
+    pub fn hub(r#ref: String, req: String, version: String, sha256: String) -> Self {
+        Locked {
+            r#ref,
+            req,
+            version: Some(version),
+            sha256: Some(sha256),
+            commit: None,
+        }
+    }
+
+    pub fn git(r#ref: String, req: String, commit: String) -> Self {
+        Locked {
+            r#ref,
+            req,
+            version: None,
+            sha256: None,
+            commit: Some(commit),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -112,41 +143,53 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = camino::Utf8Path::from_path(dir.path()).unwrap();
         let mut lock = Lock::default();
-        assert!(lock.upsert(Locked {
-            r#ref: "hub:acme/zeta".into(),
-            req: "^1".into(),
-            version: "1.2.0".into(),
-            sha256: "aa".into(),
-        }));
-        assert!(lock.upsert(Locked {
-            r#ref: "hub:acme/alpha".into(),
-            req: "^0.1".into(),
-            version: "0.1.5".into(),
-            sha256: "bb".into(),
-        }));
+        assert!(lock.upsert(Locked::hub(
+            "hub:acme/zeta".into(),
+            "^1".into(),
+            "1.2.0".into(),
+            "aa".into()
+        )));
+        assert!(lock.upsert(Locked::hub(
+            "hub:acme/alpha".into(),
+            "^0.1".into(),
+            "0.1.5".into(),
+            "bb".into()
+        )));
+        assert!(lock.upsert(Locked::git(
+            "gh:acme/tpls//base".into(),
+            "v1".into(),
+            "c0ffee".into()
+        )));
         lock.save(root).unwrap();
 
         let reloaded = Lock::load(root).unwrap();
         // sorted by ref
-        assert_eq!(reloaded.includes[0].r#ref, "hub:acme/alpha");
-        assert_eq!(reloaded.includes[1].r#ref, "hub:acme/zeta");
-        assert_eq!(reloaded.entry("hub:acme/zeta").unwrap().version, "1.2.0");
+        assert_eq!(reloaded.includes[0].r#ref, "gh:acme/tpls//base");
+        assert_eq!(reloaded.includes[1].r#ref, "hub:acme/alpha");
+        assert_eq!(reloaded.includes[2].r#ref, "hub:acme/zeta");
+        assert_eq!(
+            reloaded.entry("hub:acme/zeta").unwrap().version.as_deref(),
+            Some("1.2.0")
+        );
+        let git = reloaded.entry("gh:acme/tpls//base").unwrap();
+        assert_eq!(git.commit.as_deref(), Some("c0ffee"));
+        assert_eq!(git.version, None);
 
         // upsert with the same value reports no change
         let mut again = reloaded.clone();
-        assert!(!again.upsert(Locked {
-            r#ref: "hub:acme/zeta".into(),
-            req: "^1".into(),
-            version: "1.2.0".into(),
-            sha256: "aa".into(),
-        }));
+        assert!(!again.upsert(Locked::hub(
+            "hub:acme/zeta".into(),
+            "^1".into(),
+            "1.2.0".into(),
+            "aa".into()
+        )));
         // a new version reports a change
-        assert!(again.upsert(Locked {
-            r#ref: "hub:acme/zeta".into(),
-            req: "^1".into(),
-            version: "1.3.0".into(),
-            sha256: "cc".into(),
-        }));
+        assert!(again.upsert(Locked::hub(
+            "hub:acme/zeta".into(),
+            "^1".into(),
+            "1.3.0".into(),
+            "cc".into()
+        )));
     }
 
     #[test]

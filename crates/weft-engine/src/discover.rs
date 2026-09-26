@@ -30,11 +30,20 @@ pub fn link_path(worktree: &Utf8Path) -> Utf8PathBuf {
 }
 
 impl WorktreeLink {
+    /// Write the pointer. It names an absolute path on this machine, so it
+    /// must never be committed: a `.weft/.gitignore` excludes it while the
+    /// portable `state.toml` / `base.json` beside it stay tracked.
     pub fn save(&self, worktree: &Utf8Path) -> Result<()> {
         let path = link_path(worktree);
-        std::fs::create_dir_all(path.parent().expect("link path has a parent"))?;
+        let dir = path.parent().expect("link path has a parent");
+        std::fs::create_dir_all(dir)?;
         std::fs::write(&path, toml::to_string_pretty(self)?)
             .with_context(|| format!("writing {path}"))?;
+        let ignore = dir.join(".gitignore");
+        if !ignore.exists() {
+            std::fs::write(&ignore, format!("{LINK_FILE}\n"))
+                .with_context(|| format!("writing {ignore}"))?;
+        }
         Ok(())
     }
 

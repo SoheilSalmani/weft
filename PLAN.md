@@ -11,7 +11,7 @@ Reference design docs (read first if present in repo): `weft-mvp-design.md`, `we
 ## Non-goals (MVP)
 
 - No Jinja compatibility layer, no Copier migration tooling.
-- No remote template registries; templates are local paths or git URLs cloned by the user.
+- No template marketplace UI; templates are local paths, git sources (`gh:owner/repo//dir@rev`, any git URL), or `hub:` refs.
 - No GUI/TUI beyond plain interactive prompts.
 - No structural/AST-aware merge for specific file formats (post-MVP; design for it, don't build it).
 - No Windows support guarantees in MVP (don't gratuitously break it, but test on Linux/macOS only).

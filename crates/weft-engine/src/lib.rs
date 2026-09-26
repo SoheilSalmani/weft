@@ -31,6 +31,7 @@ pub mod preset;
 pub mod refresh;
 pub mod secrets;
 pub mod session;
+pub mod source;
 pub mod squash;
 pub mod stage;
 pub mod start;

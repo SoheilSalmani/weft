@@ -2,6 +2,7 @@
 //! sha256-verified local cache (`~/.weft/hub/…`); immutability makes cache
 //! hits skip the network entirely. Publishing tars the template directory
 //! and PUTs it. The registry URL comes from `--registry` or `WEFT_HUB_URL`.
+//! Include resolution (lockfile + cache) lives in [`crate::source`].
 
 use std::io::Write;
 
@@ -10,7 +11,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use sha2::{Digest, Sha256};
 
 /// A parsed `hub:owner/name[@version]` ref.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HubRef {
     pub owner: String,
     pub name: String,
@@ -189,7 +190,9 @@ pub fn ensure_cached(
     std::fs::create_dir_all(dir.parent().expect("cache path has parent"))?;
     std::fs::rename(&staging, &dir).context("moving download into the cache")?;
     eprintln!(
-        "downloaded {r}@{version} ({} bytes, sha256 verified)",
+        "downloaded hub:{}/{}@{version} ({} bytes, sha256 verified)",
+        r.owner,
+        r.name,
         bytes.len()
     );
     Ok(dir)
@@ -325,124 +328,6 @@ pub fn info(registry: &str, spec: &str) -> Result<()> {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// A hub-aware [`IncludeResolver`]: path includes pass through; `hub:`
-/// includes resolve their version requirement through each template's own
-/// `weft.lock` (loaded lazily per root), download+verify into the cache,
-/// and record the resolution back into that root's lock (unless frozen).
-pub struct HubResolver {
-    registry: Option<String>,
-    frozen: bool,
-    /// root → (lock, changed). Loaded on first touch, flushed at the end.
-    locks: std::collections::BTreeMap<Utf8PathBuf, (weft_engine::lock::Lock, bool)>,
-}
-
-impl HubResolver {
-    pub fn new(registry: Option<String>, frozen: bool) -> Self {
-        Self {
-            registry,
-            frozen,
-            locks: Default::default(),
-        }
-    }
-
-    fn registry(&self) -> Result<&str> {
-        self.registry
-            .as_deref()
-            .context("this template composes a hub template; set WEFT_HUB_URL or pass --registry")
-    }
-
-    /// Forget a template's lock (so `--upgrade` re-resolves its direct
-    /// includes to the newest satisfying versions).
-    pub fn clear_lock(&mut self, root: &Utf8Path) -> Result<()> {
-        let _ = std::fs::remove_file(root.join(weft_engine::lock::LOCK_FILE));
-        self.locks
-            .insert(root.to_owned(), (weft_engine::lock::Lock::default(), false));
-        Ok(())
-    }
-
-    /// Write back every lock that changed. Call after loading is done.
-    pub fn flush(&self) -> Result<()> {
-        for (root, (lock, changed)) in &self.locks {
-            if *changed {
-                lock.save(root)?;
-                eprintln!("updated {}/weft.lock", root);
-            }
-        }
-        Ok(())
-    }
-}
-
-impl weft_engine::template::IncludeResolver for HubResolver {
-    fn resolve(
-        &mut self,
-        parent_root: &Utf8Path,
-        decl: &weft_engine::manifest::IncludeDecl,
-    ) -> Result<Utf8PathBuf> {
-        let Some(refstr) = decl.hub_ref() else {
-            return Ok(parent_root.join(&decl.template));
-        };
-        let req_str = decl.version.as_deref().with_context(|| {
-            format!(
-                "include `{}`: hub template `{refstr}` needs a `version`",
-                decl.name
-            )
-        })?;
-        let req = semver::VersionReq::parse(req_str).with_context(|| {
-            format!(
-                "include `{}`: `{req_str}` is not a semver requirement",
-                decl.name
-            )
-        })?;
-        let hub = match parse_ref(refstr) {
-            Some(r) => r?,
-            None => bail!("include `{}`: `{refstr}` is not a hub ref", decl.name),
-        };
-
-        // Load this root's lock lazily.
-        let (lock, _) = self.locks.entry(parent_root.to_owned()).or_insert_with(|| {
-            (
-                weft_engine::lock::Lock::load(parent_root).unwrap_or_default(),
-                false,
-            )
-        });
-
-        // A matching, satisfying lock entry → use the pinned version.
-        if let Some(locked) = lock.entry(refstr) {
-            if let Ok(v) = semver::Version::parse(&locked.version) {
-                if req.matches(&v) {
-                    let version = locked.version.clone();
-                    let sha = locked.sha256.clone();
-                    let registry = self.registry()?.to_owned();
-                    return ensure_cached(&registry, &hub, &version, &sha);
-                }
-            }
-        }
-
-        // Otherwise resolve fresh (unless frozen, which is for CI).
-        if self.frozen {
-            bail!(
-                "include `{}` ({refstr} {req_str}) is not in weft.lock (or the lock is stale); \
-                 run `weft lock` — refusing to resolve under --frozen",
-                decl.name
-            );
-        }
-        let registry = self.registry()?.to_owned();
-        let (version, sha) = resolve_req(&registry, &hub.owner, &hub.name, &req)?;
-        let dir = ensure_cached(&registry, &hub, &version, &sha)?;
-
-        let (lock, changed) = self.locks.get_mut(parent_root).expect("inserted above");
-        if lock.upsert(weft_engine::lock::Locked {
-            r#ref: refstr.to_owned(),
-            req: req_str.to_owned(),
-            version,
-            sha256: sha,
-        }) {
-            *changed = true;
-        }
-        Ok(dir)
-    }
 }
 
 #[cfg(test)]

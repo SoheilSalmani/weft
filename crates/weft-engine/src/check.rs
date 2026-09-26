@@ -111,8 +111,8 @@ pub fn run(
         let mut mounts: BTreeMap<String, &str> = BTreeMap::new();
         let dummy_parent = answers::dummy_answers(questions);
         for inc in &template.includes {
-            // Hub includes need a version requirement; path includes must
-            // not carry one.
+            // Hub includes need a version requirement; git includes pin
+            // with `@rev` in the ref; path includes carry neither.
             if inc.decl.is_hub() {
                 match &inc.decl.version {
                     None => issue(
@@ -133,6 +133,20 @@ pub fn run(
                             );
                         }
                     }
+                }
+            } else if inc.decl.is_git() {
+                if let Err(e) = crate::source::GitRef::parse(inc.decl.template.as_str()) {
+                    issue(&mut report, format!("include `{}`: {e:#}", inc.decl.name));
+                }
+                if inc.decl.version.is_some() {
+                    issue(
+                        &mut report,
+                        format!(
+                            "include `{}`: `version` only applies to `hub:` templates; pin a git \
+                             template with `@rev` in the ref (`{}@v1.0.0`)",
+                            inc.decl.name, inc.decl.template
+                        ),
+                    );
                 }
             } else if inc.decl.version.is_some() {
                 issue(

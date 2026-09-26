@@ -67,11 +67,23 @@ pub fn run(
         );
     }
 
-    // A weft-scaffolded project already recorded everything we need.
+    // A weft-scaffolded project already recorded everything we need. A
+    // remote source (hub/git) is not a directory to record into, though:
+    // recording wants the author's own clone.
     let state = State::load(&worktree).ok();
     let template_path = match (&opts.template, &state) {
         (Some(path), _) => path.clone(),
-        (None, Some(s)) => Utf8PathBuf::from(&s.state.template),
+        (None, Some(s)) => {
+            if crate::source::kind(&s.state.template) != crate::source::Kind::Path {
+                bail!(
+                    "`{worktree}` was scaffolded from `{}`, a remote template; recording \
+                     needs a writable checkout of it — pass --template DIR pointing at \
+                     your clone",
+                    s.state.template
+                );
+            }
+            Utf8PathBuf::from(&s.state.template)
+        }
         (None, None) => bail!(
             "`{worktree}` was not scaffolded by weft (no `.weft/state.toml`), \
              so it cannot tell which template it belongs to — pass --template DIR"
