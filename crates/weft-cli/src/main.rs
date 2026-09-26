@@ -1042,14 +1042,16 @@ fn main() -> anyhow::Result<()> {
                          --action); run in a terminal for the interactive form or pass the flags"
                     ),
                 };
-                weft_engine::author::hook_add(&template, &opts)
+                source::with_resolver(|r| weft_engine::author::hook_add(&template, &opts, r))
             }
             HookCmd::Rm {
                 patch,
                 id,
                 template,
-            } => weft_engine::author::hook_rm(&template, &patch, &id),
-            HookCmd::Ls { template } => weft_engine::author::hook_ls(&template),
+            } => source::with_resolver(|r| weft_engine::author::hook_rm(&template, &patch, &id, r)),
+            HookCmd::Ls { template } => {
+                source::with_resolver(|r| weft_engine::author::hook_ls(&template, r))
+            }
         },
         Command::Patch { cmd } => match cmd {
             PatchCmd::Set {
@@ -1079,9 +1081,11 @@ fn main() -> anyhow::Result<()> {
                          or run in a terminal for the interactive form"
                     ),
                 };
-                weft_engine::author::patch_set(&template, &opts)
+                source::with_resolver(|r| weft_engine::author::patch_set(&template, &opts, r))
             }
-            PatchCmd::Ls { template } => weft_engine::author::patch_ls(&template),
+            PatchCmd::Ls { template } => {
+                source::with_resolver(|r| weft_engine::author::patch_ls(&template, r))
+            }
             PatchCmd::Resync {
                 names,
                 template,
@@ -1157,7 +1161,9 @@ fn main() -> anyhow::Result<()> {
                          declared answers, e.g. ${project_name} or ${' '.join(components)}.",
                     )?,
                 };
-                weft_engine::author::set_generator_command(&template, &name, &command)?;
+                source::with_resolver(|r| {
+                    weft_engine::author::set_generator_command(&template, &name, &command, r)
+                })?;
                 if resync {
                     let opts = weft_engine::generate::ResyncOptions {
                         template,
@@ -1185,18 +1191,21 @@ fn main() -> anyhow::Result<()> {
                 }
                 Ok(())
             }
-            PatchCmd::Detach { name, template } => {
-                weft_engine::author::detach_generator(&template, &name)
-            }
+            PatchCmd::Detach { name, template } => source::with_resolver(|r| {
+                weft_engine::author::detach_generator(&template, &name, r)
+            }),
             PatchCmd::Squash {
                 names,
                 template,
                 into,
                 title,
-            } => weft_engine::squash::squash(
-                &template,
-                &weft_engine::squash::SquashOptions { names, into, title },
-            ),
+            } => source::with_resolver(|r| {
+                weft_engine::squash::squash(
+                    &template,
+                    &weft_engine::squash::SquashOptions { names, into, title },
+                    r,
+                )
+            }),
             PatchCmd::Amend {
                 name,
                 template,
@@ -1866,7 +1875,7 @@ fn main() -> anyhow::Result<()> {
                 non_interactive,
             } => {
                 use weft_engine::preset::{PresetEntry, PresetSpec};
-                let template = Template::load(&dir)?;
+                let template = source::load_template(&dir)?;
 
                 // Flag prefills: --answer locks, --fix/--block constraints.
                 let mut locks = std::collections::BTreeMap::new();
@@ -1918,7 +1927,7 @@ fn main() -> anyhow::Result<()> {
                     spec.entries
                         .insert(id, PresetEntry::Constraint { fixed, blocked });
                 }
-                weft_engine::preset::save(&dir, &name, &spec)?;
+                source::with_resolver(|r| weft_engine::preset::save(&dir, &name, &spec, r))?;
                 println!("saved preset `{name}`");
                 Ok(())
             }
@@ -1926,7 +1935,7 @@ fn main() -> anyhow::Result<()> {
                 name,
                 template: dir,
             } => {
-                weft_engine::preset::remove(&dir, &name)?;
+                source::with_resolver(|r| weft_engine::preset::remove(&dir, &name, r))?;
                 println!("removed preset `{name}`");
                 Ok(())
             }
@@ -2124,7 +2133,7 @@ fn maybe_wizard(
     if non_interactive || no_wizard || !std::io::stdin().is_terminal() {
         return Ok(false);
     }
-    let template = Template::load(template_dir)?;
+    let template = source::load_template(template_dir)?;
     let layered = weft_engine::answers::layered_with_json_full(
         &template,
         presets,
@@ -2172,7 +2181,7 @@ fn offer_preset_capture(
     interaction: &mut dyn weft_engine::interact::Interaction,
 ) -> anyhow::Result<()> {
     use weft_engine::preset::{PresetEntry, PresetSpec};
-    let template = Template::load(template_dir)?;
+    let template = source::load_template(template_dir)?;
     // No presets selected here: only the user's own layers are captured.
     let captured = weft_engine::answers::layered_with_json(
         &template,
@@ -2208,7 +2217,7 @@ fn offer_preset_capture(
         spec.entries
             .insert(id.clone(), PresetEntry::Lock(value.clone()));
     }
-    weft_engine::preset::save(template_dir, &name, &spec)?;
+    source::with_resolver(|r| weft_engine::preset::save(template_dir, &name, &spec, r))?;
     println!("saved preset `{name}` in {template_dir}");
     Ok(())
 }

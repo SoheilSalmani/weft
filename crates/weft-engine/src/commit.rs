@@ -217,6 +217,7 @@ pub fn run(
             &answers,
             &work_tree,
             ops,
+            resolver,
             interaction,
         );
     }

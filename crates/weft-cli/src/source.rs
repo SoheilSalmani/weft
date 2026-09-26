@@ -209,6 +209,12 @@ impl RemoteResolver {
         Ok(())
     }
 
+    /// The resolver every CLI command uses unless it has its own flags
+    /// (`--frozen`/`--offline`/`--registry`): default registry, not frozen.
+    pub fn standard() -> Self {
+        Self::new(hub::registry_url(None).ok(), false)
+    }
+
     fn lock_for(&mut self, root: &Utf8Path) -> &mut (Lock, bool) {
         self.locks
             .entry(root.to_owned())
@@ -217,7 +223,7 @@ impl RemoteResolver {
 
     /// Why a fresh resolution is not allowed right now, if it isn't.
     fn pinned_only(&self, parent_root: &Utf8Path, decl: &IncludeDecl, req: &str) -> Option<String> {
-        let what = format!("include `{}` (`{}` {req})", decl.name, decl.template);
+        let what = format!("{} (`{}` {req})", decl.label(), decl.template);
         if self.frozen {
             Some(format!(
                 "{what} is not in weft.lock (or the lock is stale); run `weft lock` — \
@@ -225,7 +231,8 @@ impl RemoteResolver {
             ))
         } else if self.offline {
             Some(format!(
-                "{what} is not in weft.lock (or the lock is stale); drop --offline to resolve it"
+                "{what} is not in weft.lock (or the lock is stale) and this run is offline; \
+                 run `weft lock` (or drop --offline) to resolve it"
             ))
         } else if under_cache(parent_root) {
             Some(format!(
@@ -241,19 +248,16 @@ impl RemoteResolver {
         let refstr = decl.template.as_str();
         let req_str = decl.version.as_deref().with_context(|| {
             format!(
-                "include `{}`: hub template `{refstr}` needs a `version`",
-                decl.name
+                "{}: hub template `{refstr}` needs a `version`",
+                decl.label()
             )
         })?;
         let req = semver::VersionReq::parse(req_str).with_context(|| {
-            format!(
-                "include `{}`: `{req_str}` is not a semver requirement",
-                decl.name
-            )
+            format!("{}: `{req_str}` is not a semver requirement", decl.label())
         })?;
         let hub = match hub::parse_ref(refstr) {
             Some(r) => r?,
-            None => bail!("include `{}`: `{refstr}` is not a hub ref", decl.name),
+            None => bail!("{}: `{refstr}` is not a hub ref", decl.label()),
         };
 
         // A matching, satisfying lock entry → use the pinned version.
@@ -288,13 +292,12 @@ impl RemoteResolver {
     }
 
     fn resolve_git(&mut self, parent_root: &Utf8Path, decl: &IncludeDecl) -> Result<Utf8PathBuf> {
-        let r = GitRef::parse(decl.template.as_str())
-            .with_context(|| format!("include `{}`", decl.name))?;
+        let r = GitRef::parse(decl.template.as_str()).with_context(|| decl.label())?;
         if decl.version.is_some() {
             bail!(
-                "include `{}`: `version` only applies to `hub:` templates; pin a git template \
+                "{}: `version` only applies to `hub:` templates; pin a git template \
                  with `@rev` in the ref (`{}@v1.0.0`)",
-                decl.name,
+                decl.label(),
                 r.repo_ref()
             );
         }
@@ -336,4 +339,26 @@ impl weft_engine::template::IncludeResolver for RemoteResolver {
             Kind::Git => self.resolve_git(parent_root, decl),
         }
     }
+}
+
+/// Load a template the way every CLI command must: path, `hub:`, and git
+/// refs in `extends` and `[[include]]` resolve through the lock and caches
+/// (the engine's `Template::load` only knows local paths). Lock updates are
+/// written back.
+pub fn load_template(dir: &Utf8Path) -> Result<weft_engine::template::Template> {
+    let mut resolver = RemoteResolver::standard();
+    let template = weft_engine::template::Template::load_with(dir, &mut resolver)?;
+    resolver.flush()?;
+    Ok(template)
+}
+
+/// Run an engine operation with the standard resolver (so remote `extends`
+/// and includes resolve), writing back any lock it updated.
+pub fn with_resolver<T>(
+    f: impl FnOnce(&mut dyn weft_engine::template::IncludeResolver) -> Result<T>,
+) -> Result<T> {
+    let mut resolver = RemoteResolver::standard();
+    let out = f(&mut resolver)?;
+    resolver.flush()?;
+    Ok(out)
 }

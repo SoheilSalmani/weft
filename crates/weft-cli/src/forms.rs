@@ -65,7 +65,7 @@ pub fn hook_add(
     after: Vec<String>,
     inputs: Vec<String>,
 ) -> Result<HookAddOptions> {
-    let template = Template::load(root)?;
+    let template = crate::source::load_template(root)?;
     if template.patches.is_empty() {
         bail!("template has no patches yet; record one first (`weft session new NAME`)");
     }
@@ -183,7 +183,7 @@ pub fn patch_set(
     tags: Vec<String>,
     clear_tags: bool,
 ) -> Result<PatchSetOptions> {
-    let template = Template::load(root)?;
+    let template = crate::source::load_template(root)?;
     if template.patches.is_empty() {
         bail!("template has no patches yet; record one first (`weft session new NAME`)");
     }
@@ -268,7 +268,7 @@ pub fn commit(
     when: Option<String>,
     tags: Vec<String>,
 ) -> Result<CommitForm> {
-    let template = Template::load(root)?;
+    let template = crate::source::load_template(root)?;
     let default_name = format!("patch-{:03}", template.patches.len() + 1);
     let fields = vec![
         Field::text("name", "Patch name", Some(default_name))
@@ -364,8 +364,13 @@ pub fn new_picker(dest: &Utf8Path, presets: &[String]) -> Result<NewForm> {
         .iter()
         .map(|(name, path)| {
             let mut choice = Choice::labeled(path.as_str(), name.clone());
-            if let Ok(template) = Template::load(path) {
-                if let Some(d) = &template.manifest.template.description {
+            // Only the template's own manifest: no graph load, so listing
+            // never fetches a remote `extends`/include.
+            let manifest = std::fs::read_to_string(path.join(weft_engine::template::MANIFEST_FILE))
+                .ok()
+                .and_then(|src| toml::from_str::<weft_engine::manifest::Manifest>(&src).ok());
+            if let Some(manifest) = manifest {
+                if let Some(d) = &manifest.template.description {
                     choice = choice.help(d.lines().next().unwrap_or_default().to_owned());
                 }
             }

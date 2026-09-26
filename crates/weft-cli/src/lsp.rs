@@ -98,6 +98,18 @@ fn node_at<'t>(
     })
 }
 
+/// The editor's resolver: remote `extends`/includes resolve from the lock and
+/// local caches only — no network on a keystroke, and no lock writes (never
+/// flushed). A remote the machine has not fetched yet surfaces as a
+/// diagnostic; `weft lock` (or any command that loads the template) fetches it.
+fn editor_resolver() -> crate::source::RemoteResolver {
+    crate::source::RemoteResolver::standard().offline(true)
+}
+
+fn load_template(root: &Utf8Path) -> anyhow::Result<Template> {
+    Template::load_with(root, &mut editor_resolver())
+}
+
 /// The on-disk file of a node: `patches/<name>.json` in the template that
 /// owns it — the extended template for an inherited patch, the child
 /// template (through the include chain) for an include node.
@@ -107,7 +119,7 @@ fn node_file(template: &Template, node: &weft_engine::template::Node) -> Option<
         NodeKind::Root(_) => match &template.extends {
             // Inherited: owned by the base (which may inherit it in turn).
             Some(ext) if ext.patches.contains(&node.name) => {
-                let base = Template::load(&ext.root).ok()?;
+                let base = load_template(&ext.root).ok()?;
                 let id = *base.name_to_id.get(&node.name)?;
                 node_file(&base, base.node(id)?)
             }
@@ -180,7 +192,7 @@ impl Backend {
 
         // Collect issues: template load failure is a single issue on the
         // changed file; otherwise run the full structural check.
-        let issues: Vec<String> = match Template::load(&root) {
+        let issues: Vec<String> = match load_template(&root) {
             Err(e) => vec![format!("{e:#}")],
             Ok(_) => match weft_engine::check::run(
                 &weft_engine::check::CheckOptions {
@@ -189,7 +201,7 @@ impl Backend {
                     answers: vec![],
                     answers_file: None,
                 },
-                &mut weft_engine::template::PathResolver,
+                &mut editor_resolver(),
             ) {
                 Ok(report) => report.issues,
                 Err(e) => vec![format!("{e:#}")],
@@ -402,7 +414,7 @@ impl LanguageServer for Backend {
         let Some(root) = template_root(&path) else {
             return Ok(None);
         };
-        let Ok(template) = Template::load(&root) else {
+        let Ok(template) = load_template(&root) else {
             return Ok(None);
         };
 
@@ -474,7 +486,7 @@ impl LanguageServer for Backend {
         let Some(root) = template_root(&path) else {
             return Ok(None);
         };
-        let Ok(template) = Template::load(&root) else {
+        let Ok(template) = load_template(&root) else {
             return Ok(None);
         };
 
@@ -565,7 +577,7 @@ impl LanguageServer for Backend {
         let Some(root) = template_root(&path) else {
             return Ok(None);
         };
-        let Ok(template) = Template::load(&root) else {
+        let Ok(template) = load_template(&root) else {
             return Ok(None);
         };
         let docs = self.docs.lock().await;
@@ -604,7 +616,7 @@ impl LanguageServer for Backend {
         let Some(root) = template_root(&path) else {
             return Ok(None);
         };
-        let Ok(template) = Template::load(&root) else {
+        let Ok(template) = load_template(&root) else {
             return Ok(None);
         };
         let docs = self.docs.lock().await;

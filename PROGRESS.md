@@ -3,6 +3,27 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Fix — remote `extends`/includes resolve in every command
+
+- **Bug**: `weft session new` in a terminal failed on a template with
+  `extends = "gh:…"` (``include `extends` references … (a remote
+  template)``). The wizard, preset capture, the TUI forms (incl. `weft
+  commit`'s), `patch ls/set/set-command/detach/squash`, `hook add/rm/ls`,
+  `presets save/rm`, amend's rebase check, and the MCP tools loaded with the
+  engine's path-only `Template::load`; only the main command paths used the
+  remote resolver.
+- **Fix**: every CLI/MCP load goes through `source::load_template` /
+  `source::with_resolver` (standard `RemoteResolver`, lock written back);
+  engine functions that load (`author::*`, `preset::{save,remove}`,
+  `squash::squash`, `amend::finish`) take the resolver. The LSP resolves
+  **offline** (lock + cache only, no lock writes) so editing never blocks on
+  a fetch. The template picker reads only each manifest.
+  `Template::load` remains for path-only uses (tests).
+- Messages name the base as `` `extends` `` rather than ``include
+  `extends` `` (`IncludeDecl::label`; the synthetic decl is `(extends)`).
+- e2e `git.rs::authoring_commands_resolve_a_git_extends`; the TTY wizard
+  path smoke-tested under `script`.
+
 ## Post-MVP — Git template sources (`<repo>[//<subdir>][@<rev>]`)
 
 - **Third source kind next to path and `hub:`**: `gh:owner/repo` (→

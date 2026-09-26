@@ -52,10 +52,11 @@ fn parse_effect(s: &str) -> Result<HookEffect> {
 /// the original file on any failure.
 fn edit_patch_file(
     root: &Utf8Path,
+    resolver: &mut dyn crate::template::IncludeResolver,
     patch: &str,
     edit: impl FnOnce(&mut crate::template::PatchFile) -> Result<()>,
 ) -> Result<()> {
-    let template = Template::load(root)?;
+    let template = Template::load_with(root, resolver)?;
     let mut file = template.patch_file(patch)?;
     let original = std::fs::read_to_string(template.patch_path(patch))?;
     edit(&mut file)?;
@@ -66,7 +67,7 @@ fn edit_patch_file(
             .context("restoring the original patch file")?;
         bail!("{reason}")
     };
-    let reloaded = match Template::load(root) {
+    let reloaded = match Template::load_with(root, resolver) {
         Ok(t) => t,
         Err(e) => return restore(format!("edit produced an invalid template: {e:#}")),
     };
@@ -81,11 +82,15 @@ fn edit_patch_file(
 }
 
 /// `weft hook add`: append a hook to a patch's metadata.
-pub fn hook_add(root: &Utf8Path, opts: &HookAddOptions) -> Result<()> {
+pub fn hook_add(
+    root: &Utf8Path,
+    opts: &HookAddOptions,
+    resolver: &mut dyn crate::template::IncludeResolver,
+) -> Result<()> {
     // `${…}` in the action interpolates when it names a declared answer or
     // a Starlark expression over them (plus `key` on a foreach patch);
     // anything else stays literal for the shell.
-    let template = Template::load(root)?;
+    let template = Template::load_with(root, resolver)?;
     let mut extra = weft_core::AnswerSet::new();
     let is_foreach = template.patches.iter().any(|p| {
         template.id_to_name.get(&p.id).map(String::as_str) == Some(opts.patch.as_str())
@@ -122,7 +127,7 @@ pub fn hook_add(root: &Utf8Path, opts: &HookAddOptions) -> Result<()> {
             .collect::<Result<_, _>>()
             .map_err(|e| anyhow::anyhow!("invalid --input: {e}"))?,
     };
-    edit_patch_file(root, &opts.patch, |file| {
+    edit_patch_file(root, resolver, &opts.patch, |file| {
         if file.hooks.iter().any(|h| h.id == hook.id) {
             bail!("patch `{}` already has a hook `{}`", opts.patch, hook.id);
         }
@@ -134,8 +139,13 @@ pub fn hook_add(root: &Utf8Path, opts: &HookAddOptions) -> Result<()> {
 }
 
 /// `weft hook rm`: remove a hook from a patch by id.
-pub fn hook_rm(root: &Utf8Path, patch: &str, id: &str) -> Result<()> {
-    edit_patch_file(root, patch, |file| {
+pub fn hook_rm(
+    root: &Utf8Path,
+    patch: &str,
+    id: &str,
+    resolver: &mut dyn crate::template::IncludeResolver,
+) -> Result<()> {
+    edit_patch_file(root, resolver, patch, |file| {
         let before = file.hooks.len();
         file.hooks.retain(|h| h.id.0 != id);
         if file.hooks.len() == before {
@@ -148,8 +158,8 @@ pub fn hook_rm(root: &Utf8Path, patch: &str, id: &str) -> Result<()> {
 }
 
 /// `weft hook ls`: every hook across the template, in execution order.
-pub fn hook_ls(root: &Utf8Path) -> Result<()> {
-    let template = Template::load(root)?;
+pub fn hook_ls(root: &Utf8Path, resolver: &mut dyn crate::template::IncludeResolver) -> Result<()> {
+    let template = Template::load_with(root, resolver)?;
     let mut count = 0;
     for phase in [HookPhase::Pre, HookPhase::Post] {
         for patch in &template.patches {
@@ -193,11 +203,15 @@ pub struct PatchSetOptions {
 }
 
 /// `weft patch set`: edit a patch's display metadata (never its id).
-pub fn patch_set(root: &Utf8Path, opts: &PatchSetOptions) -> Result<()> {
+pub fn patch_set(
+    root: &Utf8Path,
+    opts: &PatchSetOptions,
+    resolver: &mut dyn crate::template::IncludeResolver,
+) -> Result<()> {
     if opts.title.is_none() && opts.describe.is_none() && opts.tags.is_empty() && !opts.clear_tags {
         bail!("nothing to change; pass --title, --describe, --tag, or --clear-tags");
     }
-    edit_patch_file(root, &opts.name, |file| {
+    edit_patch_file(root, resolver, &opts.name, |file| {
         if let Some(title) = &opts.title {
             file.title = (!title.is_empty()).then(|| title.clone());
         }
@@ -221,8 +235,11 @@ pub fn patch_set(root: &Utf8Path, opts: &PatchSetOptions) -> Result<()> {
 /// `weft patch ls`: one line per root-frame patch, in dependency order.
 /// Include nodes are not listed (they are the child template's patches —
 /// `weft graph` shows the composed graph).
-pub fn patch_ls(root: &Utf8Path) -> Result<()> {
-    let template = Template::load(root)?;
+pub fn patch_ls(
+    root: &Utf8Path,
+    resolver: &mut dyn crate::template::IncludeResolver,
+) -> Result<()> {
+    let template = Template::load_with(root, resolver)?;
     for patch in &template.patches {
         let name = &template.id_to_name[&patch.id];
         let title = patch.meta.title.as_deref().unwrap_or("");
@@ -278,8 +295,13 @@ fn require_generator<'t>(template: &'t Template, name: &str) -> Result<&'t weft_
 /// `weft patch set-command`: replace the stored generator command. `${…}`
 /// interpolates declared answers (same rule as `record --exec`). Metadata
 /// only — the patch id never changes.
-pub fn set_generator_command(root: &Utf8Path, name: &str, command: &str) -> Result<()> {
-    let template = Template::load(root)?;
+pub fn set_generator_command(
+    root: &Utf8Path,
+    name: &str,
+    command: &str,
+    resolver: &mut dyn crate::template::IncludeResolver,
+) -> Result<()> {
+    let template = Template::load_with(root, resolver)?;
     require_generator(&template, name)?;
     let parsed = crate::hooks::parse_command(
         command,
@@ -290,7 +312,7 @@ pub fn set_generator_command(root: &Utf8Path, name: &str, command: &str) -> Resu
     if !parsed.is_literal() {
         eprintln!("command interpolates: {}", parsed.source());
     }
-    edit_patch_file(root, name, move |file| {
+    edit_patch_file(root, resolver, name, move |file| {
         let generator = file
             .generator
             .as_mut()
@@ -308,10 +330,14 @@ pub fn set_generator_command(root: &Utf8Path, name: &str, command: &str) -> Resu
 /// `weft patch detach`: drop a patch's generator metadata, turning it into a
 /// plain recorded patch. It becomes freely editable (`weft patch amend`), but
 /// `weft patch resync` no longer applies to it. Metadata only — id unchanged.
-pub fn detach_generator(root: &Utf8Path, name: &str) -> Result<()> {
-    let template = Template::load(root)?;
+pub fn detach_generator(
+    root: &Utf8Path,
+    name: &str,
+    resolver: &mut dyn crate::template::IncludeResolver,
+) -> Result<()> {
+    let template = Template::load_with(root, resolver)?;
     require_generator(&template, name)?;
-    edit_patch_file(root, name, |file| {
+    edit_patch_file(root, resolver, name, |file| {
         file.generator = None;
         Ok(())
     })?;

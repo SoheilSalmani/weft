@@ -350,7 +350,12 @@ fn toml_key(k: &str) -> String {
 /// the `[[preset]]` declaration to `weft.toml`. Validates against the
 /// template first and re-validates the saved file by reloading; any failure
 /// restores the previous state.
-pub fn save(root: &camino::Utf8Path, name: &str, spec: &PresetSpec) -> Result<()> {
+pub fn save(
+    root: &camino::Utf8Path,
+    name: &str,
+    spec: &PresetSpec,
+    resolver: &mut dyn crate::template::IncludeResolver,
+) -> Result<()> {
     let name_ok = !name.is_empty()
         && name
             .chars()
@@ -361,7 +366,7 @@ pub fn save(root: &camino::Utf8Path, name: &str, spec: &PresetSpec) -> Result<()
     if spec.entries.is_empty() {
         bail!("preset `{name}` is empty — answer or constrain at least one question");
     }
-    let template = Template::load(root)?;
+    let template = Template::load_with(root, resolver)?;
     spec.validate(&template)?;
 
     let existing = template.manifest.presets.iter().find(|p| p.name == name);
@@ -409,7 +414,7 @@ pub fn save(root: &camino::Utf8Path, name: &str, spec: &PresetSpec) -> Result<()
     }
 
     // The saved template must load and the preset must round-trip.
-    if let Err(e) = Template::load(root).and_then(|t| t.preset_spec(name)) {
+    if let Err(e) = Template::load_with(root, resolver).and_then(|t| t.preset_spec(name)) {
         restore_file(&original_file);
         bail!("saved preset failed validation: {e:#}");
     }
@@ -417,8 +422,12 @@ pub fn save(root: &camino::Utf8Path, name: &str, spec: &PresetSpec) -> Result<()
 }
 
 /// Remove a preset: its `[[preset]]` declaration and its file.
-pub fn remove(root: &camino::Utf8Path, name: &str) -> Result<()> {
-    let template = Template::load(root)?;
+pub fn remove(
+    root: &camino::Utf8Path,
+    name: &str,
+    resolver: &mut dyn crate::template::IncludeResolver,
+) -> Result<()> {
+    let template = Template::load_with(root, resolver)?;
     let decl = template
         .manifest
         .presets

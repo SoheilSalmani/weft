@@ -233,6 +233,7 @@ pub(crate) fn finish(
     answers: &weft_core::AnswerSet,
     work_tree: &weft_core::Tree,
     ops: Vec<weft_core::Op>,
+    resolver: &mut dyn crate::template::IncludeResolver,
     interaction: &mut dyn Interaction,
 ) -> Result<()> {
     let eval = StarlarkEval;
@@ -290,7 +291,7 @@ pub(crate) fn finish(
     // composed render under the amend answers surfaces a dependent that
     // broke.
     if has_dependents {
-        let reloaded = Template::load(template_root)?;
+        let reloaded = Template::load_with(template_root, resolver)?;
         let full = crate::session::Session {
             session: SessionMeta {
                 base: crate::start::pin_base(&reloaded, "latest")?

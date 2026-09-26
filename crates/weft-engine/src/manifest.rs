@@ -78,7 +78,22 @@ impl IncludeDecl {
     pub fn hub_ref(&self) -> Option<&str> {
         self.is_hub().then(|| self.template.as_str())
     }
+
+    /// How messages name this declaration: ``include `web` ``, or
+    /// `` `extends` `` for the one [`ExtendsDecl::as_include`] builds.
+    pub fn label(&self) -> String {
+        if self.name == EXTENDS_INCLUDE {
+            "`extends`".to_owned()
+        } else {
+            format!("include `{}`", self.name)
+        }
+    }
 }
+
+/// The name of the synthetic include an `extends` resolves through, chosen
+/// so it cannot be mistaken for a declared include (whose names become
+/// answer namespaces and node prefixes, where parentheses would not work).
+pub const EXTENDS_INCLUDE: &str = "(extends)";
 
 /// What a template extends: a base template whose patches, questions, and
 /// includes are imported *as-is* (same names, same ids, no mount) — the
@@ -104,7 +119,7 @@ impl ExtendsDecl {
             ExtendsDecl::Full { template, version } => (template.clone(), version.clone()),
         };
         IncludeDecl {
-            name: "extends".into(),
+            name: EXTENDS_INCLUDE.into(),
             template,
             version,
             path: String::new(),

@@ -171,9 +171,9 @@ impl IncludeResolver for PathResolver {
     ) -> Result<Utf8PathBuf> {
         if decl.kind() != crate::source::Kind::Path {
             bail!(
-                "include `{}` references `{}` (a remote template); \
-                 resolve it through the CLI (`weft new`/`weft lock`)",
-                decl.name,
+                "{} references `{}`, a remote template, and this load only resolves \
+                 local paths (use a remote-aware resolver, e.g. the `weft` CLI)",
+                decl.label(),
                 decl.template
             );
         }

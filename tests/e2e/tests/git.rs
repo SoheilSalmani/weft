@@ -421,6 +421,57 @@ fn git_includes_pin_a_commit_in_the_lock() {
         .stderr(predicates::str::contains("@rev"));
 }
 
+/// A template extending a git-sourced base: every command that loads the
+/// template resolves the remote base — not only `new`/`update`/`session`
+/// (authoring commands used to load local paths only and failed with "a
+/// remote template").
+#[test]
+fn authoring_commands_resolve_a_git_extends() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let (_repo, url) = templates_repo(work.path());
+    let child = work.path().join("child");
+    std::fs::create_dir_all(child.join("patches")).unwrap();
+    std::fs::write(
+        child.join("weft.toml"),
+        format!(
+            "[template]\nname = \"child\"\nweft-version = \"0.1\"\n\
+             extends = \"{url}//templates/hello@v1\"\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        child.join("patches/notes.json"),
+        r#"{"depends_on":["base"],"ops":[{"op":"create_file","path":"NOTES.md","content":["notes"]}]}"#,
+    )
+    .unwrap();
+    let run = |args: &[&str]| {
+        weft()
+            .env("HOME", home.path())
+            .args(args)
+            .arg("--template")
+            .arg(&child)
+            .assert()
+    };
+
+    let listed = run(&["patch", "ls"]).success();
+    let stdout = String::from_utf8_lossy(&listed.get_output().stdout).into_owned();
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.starts_with("base ") && l.contains("[inherited]")),
+        "{stdout}"
+    );
+    assert!(stdout.lines().any(|l| l.starts_with("notes ")), "{stdout}");
+    run(&["hook", "ls"])
+        .success()
+        .stdout(predicates::str::contains("mark-synced"));
+    run(&["patch", "set", "notes", "--title", "Notes"]).success();
+    assert!(std::fs::read_to_string(child.join("patches/notes.json"))
+        .unwrap()
+        .contains("\"title\": \"Notes\""));
+}
+
 #[test]
 fn a_fetched_template_must_ship_its_own_lock() {
     let home = tempfile::tempdir().unwrap();

@@ -60,7 +60,8 @@ impl WeftMcp {
     }
 
     fn load(&self, name: &str) -> Result<Template, ErrorData> {
-        Template::load(&self.template_dir(name)?).map_err(|e| invalid(format!("{e:#}")))
+        crate::source::load_template(&self.template_dir(name)?)
+            .map_err(|e| invalid(format!("{e:#}")))
     }
 }
 
@@ -211,7 +212,7 @@ impl WeftMcp {
             if !dir.join("weft.toml").is_file() {
                 continue;
             }
-            if let Ok(template) = Template::load(&dir) {
+            if let Ok(template) = crate::source::load_template(&dir) {
                 out.push(serde_json::json!({
                     "template": name,
                     "name": template.manifest.template.name,
@@ -268,12 +269,8 @@ impl WeftMcp {
             instances: vec![],
             skip_tasks: true, // guardrail: agents never run template shell tasks
         };
-        weft_engine::new::run(
-            &opts,
-            &mut weft_engine::template::PathResolver,
-            &mut NonInteractive,
-        )
-        .map_err(|e| invalid(format!("{e:#}")))?;
+        crate::source::with_resolver(|r| weft_engine::new::run(&opts, r, &mut NonInteractive))
+            .map_err(|e| invalid(format!("{e:#}")))?;
         let files = weft_engine::fsio::read_tree(&opts.dest)
             .map(|t| t.len())
             .unwrap_or(0);
@@ -294,15 +291,17 @@ impl WeftMcp {
         Parameters(p): Parameters<TemplateParam>,
     ) -> Result<CallToolResult, ErrorData> {
         let dir = self.template_dir(&p.template)?;
-        let report = weft_engine::check::run(
-            &weft_engine::check::CheckOptions {
-                template: dir,
-                presets: vec![],
-                answers: vec![],
-                answers_file: None,
-            },
-            &mut weft_engine::template::PathResolver,
-        )
+        let report = crate::source::with_resolver(|r| {
+            weft_engine::check::run(
+                &weft_engine::check::CheckOptions {
+                    template: dir,
+                    presets: vec![],
+                    answers: vec![],
+                    answers_file: None,
+                },
+                r,
+            )
+        })
         .map_err(|e| invalid(format!("{e:#}")))?;
         Ok(CallToolResult::structured(serde_json::json!({
             "ok": report.issues.is_empty(),
@@ -336,11 +335,9 @@ impl WeftMcp {
             answers_json: answers_json(&p.answers),
             force: p.force,
         };
-        let worktree = weft_engine::start::run(
-            &opts,
-            &mut weft_engine::template::PathResolver,
-            &mut NonInteractive,
-        )
+        let worktree = crate::source::with_resolver(|r| {
+            weft_engine::start::run(&opts, r, &mut NonInteractive)
+        })
         .map_err(|e| invalid(format!("{e:#}")))?;
         let files: Vec<String> = weft_engine::fsio::read_tree(&worktree)
             .map(|t| t.paths().map(ToString::to_string).collect())
@@ -444,12 +441,8 @@ impl WeftMcp {
             link: None,
             depends_on: None,
         };
-        weft_engine::commit::run(
-            &opts,
-            &mut weft_engine::template::PathResolver,
-            &mut NonInteractive,
-        )
-        .map_err(|e| invalid(format!("{e:#}")))?;
+        crate::source::with_resolver(|r| weft_engine::commit::run(&opts, r, &mut NonInteractive))
+            .map_err(|e| invalid(format!("{e:#}")))?;
         Ok(CallToolResult::structured(
             serde_json::json!({ "patch": p.name, "committed": true }),
         ))

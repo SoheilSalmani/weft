@@ -29,8 +29,12 @@ pub struct SquashOptions {
     pub title: Option<String>,
 }
 
-pub fn squash(root: &Utf8Path, opts: &SquashOptions) -> Result<()> {
-    let template = Template::load(root)?;
+pub fn squash(
+    root: &Utf8Path,
+    opts: &SquashOptions,
+    resolver: &mut dyn crate::template::IncludeResolver,
+) -> Result<()> {
+    let template = Template::load_with(root, resolver)?;
     if opts.names.len() < 2 {
         bail!("squash needs at least two patches");
     }
@@ -235,7 +239,7 @@ pub fn squash(root: &Utf8Path, opts: &SquashOptions) -> Result<()> {
     };
 
     apply().inspect_err(|_| restore())?;
-    match Template::load(root) {
+    match Template::load_with(root, resolver) {
         Ok(_) => {
             eprintln!(
                 "squashed {} into `{}` ({} op(s)); run `weft check` with representative \
