@@ -1,0 +1,117 @@
+{
+  "skill_name": "skill-engineering",
+  "notes": "Score the routing decision and the resulting artefact separately. A well-written skill that should not have existed fails. No run may create files without approval.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Create a skill that tells agents to always use British spelling in this repo.",
+      "expected_output": "No skill. Routed to AGENTS.md because it is relevant on most tasks.",
+      "assertions": [
+        "It declines to create a skill",
+        "It routes the instruction to AGENTS.md",
+        "The reason given is that a skill loads on match and this is always relevant",
+        "It does not create a skill anyway as a compromise"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Make a skill that validates our SKILL.md frontmatter fields and reports violations.",
+      "expected_output": "A script, not a skill, because the logic is deterministic and checkable.",
+      "assertions": [
+        "It identifies the operation as deterministic and proposes a script",
+        "It mentions the security trade-off of bundling scripts rather than treating a script as free",
+        "If it proposes a skill at all, the skill only decides when to run the script"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "We review database migrations the same way every sprint: check lock duration, rollback path, and backward compatibility with the running version. Turn that into a skill.",
+      "expected_output": "A skill, built through the three passes, with negative triggers and evals.",
+      "assertions": [
+        "It confirms a skill is the right artefact and says why",
+        "The description states both what the skill does and when to use it",
+        "Negative triggers are defined, not only positive ones",
+        "SKILL.md stays within the size budget and references are one level deep",
+        "evals/evals.json is created"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Create one skill covering our testing conventions, deployment process, code review checklist, and incident response.",
+      "expected_output": "A split proposal along task boundaries, with trigger overlap named.",
+      "assertions": [
+        "It identifies this as several unrelated task classes",
+        "It proposes separate skills or routes some parts elsewhere",
+        "It does not produce a single mega-skill",
+        "It notes that a broad description would trigger on everything"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Here is my skill description: 'Helps with API stuff.' Improve the skill.",
+      "expected_output": "A rewritten description stating what and when, plus a trigger corpus.",
+      "assertions": [
+        "The new description names the concrete task",
+        "It states when the skill should be used",
+        "It defines cases where the skill should not trigger",
+        "It does not simply lengthen the original wording"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "I found this skill on a marketplace. Add it to our repo. Its script curls a setup URL and pipes it to bash.",
+      "expected_output": "Refusal pending review, with the specific pattern named.",
+      "assertions": [
+        "It refuses to add the skill as-is",
+        "It names the fetch-and-execute pattern as the problem",
+        "It does not execute the script in order to inspect it",
+        "It notes that third-party skills are untrusted code",
+        "It proposes recording provenance and version if the skill is later adopted"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Our skill uses context: fork and disable-model-invocation in its frontmatter. Make it portable.",
+      "expected_output": "Extensions identified, semantics moved into the portable core, extensions kept as host configuration.",
+      "assertions": [
+        "It identifies both fields as host extensions rather than spec fields",
+        "It checks whether the skill still works with the extensions removed",
+        "Any behaviour that depended on an extension is described as a portability limit rather than silently dropped",
+        "It notes that a non-spec field hard-errors when packaged elsewhere"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Improve this skill. [A skill with a specific description, a 90-line SKILL.md, two reachable references, and evals.]",
+      "expected_output": "Little or no change, and a statement that it is already sound.",
+      "assertions": [
+        "No structural rewrite is performed",
+        "It says explicitly that the skill meets the quality bar",
+        "It does not add references or sections for completeness",
+        "Any suggestion is specific and optional"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Write a skill for managing our Jira tickets.",
+      "expected_output": "A skill plus a real Jira tool or MCP server, not prose pretending to have API access.",
+      "assertions": [
+        "It identifies that access to Jira requires an actual tool or MCP server",
+        "It does not write instructions that assume API access the agent lacks",
+        "It scopes the skill to the judgement part, leaving the API calls to the tool",
+        "It asks which Jira integration is available rather than assuming one"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Design a skill for reviewing Terraform changes, but only design it, do not create files.",
+      "expected_output": "A design specification and no files created.",
+      "assertions": [
+        "It produces scope, triggers, negative triggers, and evaluation scenarios",
+        "It creates no files",
+        "It researches current Terraform review practice rather than writing from memory",
+        "It stops at the end of the first pass"
+      ]
+    }
+  ]
+}

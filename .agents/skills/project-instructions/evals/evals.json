@@ -1,0 +1,215 @@
+{
+  "skill_name": "project-instructions",
+  "notes": "Score the routing decision and the resulting text separately. A well-written instruction that should not have been permanent fails. No run may edit an instruction file without approval, and no run may state a repository fact it did not verify.",
+  "evals": [
+    {
+      "id": "A",
+      "prompt": "Add this to our agent instructions: use pnpm, never npm or yarn.",
+      "expected_output": "Accepted into persistent context after verifying the repository actually uses pnpm.",
+      "assertions": [
+        "It confirms pnpm against the lockfile or the packageManager field rather than taking the claim on trust",
+        "It keeps the rule to roughly one line",
+        "It does not expand it into a package-management section"
+      ]
+    },
+    {
+      "id": "B",
+      "prompt": "Here is our 80-line pull request procedure. Put it in AGENTS.md.",
+      "expected_output": "Declined. Routed to a pull request skill.",
+      "assertions": [
+        "It declines to put the procedure in persistent context",
+        "It names the reason as cost on every task versus relevance on few",
+        "It routes the content to an Agent Skill",
+        "It does not compromise by including a shortened copy as well"
+      ]
+    },
+    {
+      "id": "C",
+      "prompt": "Add: all TypeScript must be formatted with Prettier.",
+      "expected_output": "Routed to tooling, since a formatter already enforces it.",
+      "assertions": [
+        "It checks whether formatting is already enforced by config or a script",
+        "It declines to duplicate an enforced rule as prose",
+        "It distinguishes enforcement from a genuinely non-obvious operational fact such as which command to run",
+        "It does not claim the repository uses Prettier without checking"
+      ]
+    },
+    {
+      "id": "D",
+      "prompt": "Add: src/generated/ is generated from schema/foo.yaml and must not be edited manually.",
+      "expected_output": "Accepted. A high-value source-of-truth rule.",
+      "assertions": [
+        "It accepts the rule into persistent context",
+        "It justifies inclusion by the silent and destructive cost of omission rather than by frequency",
+        "It verifies both paths exist before writing the rule",
+        "It names where to edit instead, not only what not to touch"
+      ]
+    },
+    {
+      "id": "E",
+      "prompt": "Add our database migration runbook to the agent instructions. We run it about twice a year.",
+      "expected_output": "Declined. Routed to a skill.",
+      "assertions": [
+        "It declines on frequency grounds",
+        "It routes the runbook to a skill",
+        "It does not leave a summary in persistent context as a compromise"
+      ]
+    },
+    {
+      "id": "F",
+      "prompt": "ADR-012 says only the billing service may write billing-owned state. Should that go in AGENTS.md?",
+      "expected_output": "Yes, as one compressed sentence plus a link to the ADR.",
+      "assertions": [
+        "It promotes a one-sentence form rather than the full decision",
+        "It links to the ADR rather than restating the rationale",
+        "It applies a promotion test, in particular whether an agent could violate the rule without reading the ADR",
+        "It confirms ADR-012 exists and is not superseded"
+      ]
+    },
+    {
+      "id": "G",
+      "prompt": "Paste the full rationale and alternatives from ADR-012 into AGENTS.md so agents understand why.",
+      "expected_output": "Declined. Rationale stays in the ADR.",
+      "assertions": [
+        "It declines to copy the rationale",
+        "It explains that the constraint is what agents need routinely, and reasoning is retrieved when questioned",
+        "It keeps or proposes the compressed rule plus pointer"
+      ]
+    },
+    {
+      "id": "H",
+      "prompt": "Our AGENTS.md is 1,500 lines. Fix it.",
+      "expected_output": "A classification and compression pass, with content routed out rather than merely deleted.",
+      "assertions": [
+        "It classifies sections rather than trimming uniformly",
+        "Procedures are routed to skills and enforced rules to tooling",
+        "It reports what moved where instead of only reporting a new line count",
+        "It does not target an arbitrary line number as the goal",
+        "It seeks approval before rewriting the file"
+      ]
+    },
+    {
+      "id": "I",
+      "prompt": "Review our AGENTS.md. It says: write clean code, follow best practices, test your changes.",
+      "expected_output": "Identified as zero-information content and removed.",
+      "assertions": [
+        "It identifies the content as changing no decision",
+        "It proposes removal rather than rewording",
+        "It asks what repository-specific facts should replace it",
+        "It does not invent conventions to fill the space"
+      ]
+    },
+    {
+      "id": "J",
+      "prompt": "In our monorepo the frontend uses pnpm and the backend uses uv. Where does that go?",
+      "expected_output": "Scoped instructions per package, with the root file holding only what is shared.",
+      "assertions": [
+        "It proposes nested or path-scoped instructions rather than two global rules",
+        "It justifies nesting because each rule would be wrong in the other subtree, not merely irrelevant",
+        "It keeps the root file authoritative for shared rules",
+        "It does not restate root content in the nested files"
+      ]
+    },
+    {
+      "id": "K",
+      "prompt": "Now make those two scoped rules work on a target that has no path-scoped instruction mechanism.",
+      "expected_output": "Reported as a partial with the loss named. Neither rule is made global.",
+      "assertions": [
+        "It refuses to widen a scoped rule to repository-wide scope",
+        "It states that widening would make the instruction false in the other subtree",
+        "It classifies the target as partial and enumerates what could not be represented",
+        "It checks the host's documented instruction mechanisms rather than assuming one"
+      ]
+    },
+    {
+      "id": "L",
+      "prompt": "Set up Claude Code to use our canonical AGENTS.md.",
+      "expected_output": "A CLAUDE.md that imports AGENTS.md, with verification that it loads once.",
+      "assertions": [
+        "It establishes that Claude Code does not read AGENTS.md rather than assuming it does",
+        "It uses the documented import syntax and does not copy the content",
+        "It states how to verify the file loaded",
+        "It leaves room for genuinely Claude-specific instructions below the import"
+      ]
+    },
+    {
+      "id": "M",
+      "prompt": "Our repo has AGENTS.md and a CLAUDE.md containing the same rules pasted in. Both load. Fix it.",
+      "expected_output": "One editable source, with the vendor file reduced to an import plus host-specific content.",
+      "assertions": [
+        "It identifies duplicated authoritative instructions rather than mere textual overlap",
+        "It keeps one editable copy and makes the other an adapter",
+        "It preserves any genuinely Claude-specific lines instead of deleting the file",
+        "It notes that duplicate loading can produce contradictions once the copies drift"
+      ]
+    },
+    {
+      "id": "N",
+      "prompt": "AGENTS.md says run npm test. Is that right?",
+      "expected_output": "Detected as stale and corrected from repository evidence.",
+      "assertions": [
+        "It checks the lockfile, packageManager field and scripts rather than answering from the file",
+        "It reports the instruction as stale with the evidence",
+        "It proposes the command the repository actually uses",
+        "It does not silently rewrite other unverified statements at the same time"
+      ]
+    },
+    {
+      "id": "O",
+      "prompt": "Here is our 600-line CLAUDE.md. We now use OpenCode and Hermes too. Migrate it.",
+      "expected_output": "A semantic classification into canonical, skills, Claude-only, docs and tooling, presented before anything moves.",
+      "assertions": [
+        "It does not copy or symlink the file wholesale as a migration step",
+        "Each section is assigned exactly one destination",
+        "Procedures become skills and human onboarding content goes to README or CONTRIBUTING",
+        "Genuinely Claude-specific instructions stay in CLAUDE.md",
+        "It presents a dry run and asks for approval before moving anything",
+        "It verifies Claude Code still loads the instructions afterwards"
+      ]
+    },
+    {
+      "id": "P",
+      "prompt": "Improve our AGENTS.md. [A 40-line file: verified commands, a generated-file rule, one architectural invariant with an ADR link, no procedures.]",
+      "expected_output": "Little or no change, and a statement that it is already well targeted.",
+      "assertions": [
+        "It makes no structural rewrite",
+        "It says explicitly that the file meets the bar",
+        "It does not add sections for completeness",
+        "Any suggestion is specific and optional"
+      ]
+    },
+    {
+      "id": "Q",
+      "prompt": "Our AGENTS.md opens with the project pitch and installation guide copied from the README.",
+      "expected_output": "Removed as human-facing duplication.",
+      "assertions": [
+        "It identifies the content as human onboarding rather than agent operating context",
+        "It removes it and points to the README as the single source",
+        "It distinguishes this from the short orienting sentence an agent genuinely needs",
+        "It does not delete the README content itself"
+      ]
+    },
+    {
+      "id": "R",
+      "prompt": "Add to AGENTS.md: never commit secrets.",
+      "expected_output": "Routed primarily to deterministic enforcement, not left as prose alone.",
+      "assertions": [
+        "It states that correctness here must not depend on the agent remembering",
+        "It proposes a scanner, pre-commit hook or CI check as the primary control",
+        "It does not claim the repository already has such a control without checking",
+        "Any prose kept is a short pointer rather than the whole safeguard"
+      ]
+    },
+    {
+      "id": "S",
+      "prompt": "Add to AGENTS.md: we are currently implementing the Q3 auth migration.",
+      "expected_output": "Declined as transient state.",
+      "assertions": [
+        "It declines to put current status in a durable file",
+        "It explains that a stale status line is trusted repeatedly and is worse than none",
+        "It routes the status to issue tracking or project documentation",
+        "It offers to add any durable constraint the migration creates, separately"
+      ]
+    }
+  ]
+}

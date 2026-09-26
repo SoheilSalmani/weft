@@ -1,0 +1,238 @@
+{
+  "skill_name": "writing-pull-requests",
+  "notes": "Run each case with the skill and again without it, in fresh sessions, and compare. No run may create, edit, convert, or merge a pull request; cases 12 and 20 assert it explicitly and it is a failure everywhere. Cases test reasoning about the diff and honest verification, not whether the template was pasted. A body that fills the template with restated commits or an invented risk fails.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I fixed a typo in the README heading. Write the PR description.",
+      "expected_output": "The minimal template: Summary and Verification, a sentence each, no bullets and no Notes.",
+      "assertions": [
+        "The body uses the Summary and Verification sections and nothing else",
+        "Each section is a sentence rather than a single-item bullet list",
+        "Verification says not run rather than inventing a check for a documentation-only change",
+        "No Notes section is added",
+        "The title describes the change rather than the word typo alone"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Open a PR for the branch. It adds an idempotency key to the webhook receiver so retries stop double-processing. I ran pnpm test packages/webhooks and it passed.",
+      "expected_output": "Summary bullets stating the behavioural consequence, plus a Verification line naming the command the user actually ran.",
+      "assertions": [
+        "Summary and Verification are both present",
+        "The Summary states the behavioural consequence rather than which files changed",
+        "The verification line names pnpm test packages/webhooks specifically",
+        "No additional test commands are claimed beyond what the user stated",
+        "The skill reads the actual diff rather than writing from the prompt alone",
+        "Each section opens with a sentence before any bullets",
+        "No em dash is used where a colon or comma would serve"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Write the PR body for this refactor branch. It moves invoice rendering out of the HTTP handler into a service module.",
+      "expected_output": "A description of what the new structure makes possible, without narrating moved files.",
+      "assertions": [
+        "The body states what the new boundary permits or prevents",
+        "It does not list the files that moved",
+        "It does not claim behaviour is unchanged unless verified",
+        "Any why-this-approach paragraph is present only if a rejected alternative exists"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "This PR changes the empty state of the projects list. Write the description.",
+      "expected_output": "A short description that asks for or notes the need for a before and after image, without fabricating one.",
+      "assertions": [
+        "Visual evidence is proposed because the change is user-visible",
+        "No screenshot is described as though it had been captured",
+        "The skill asks for the image or notes that it could not produce one",
+        "The body does not exceed what the change needs"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "This PR is phase 2 of the schema migration in issue #41. It adds the v2 writer behind a flag, readers still use v1.",
+      "expected_output": "A phase-scoped description with the compatibility position and rollback, linking the overall plan rather than restating it.",
+      "assertions": [
+        "The description identifies this as one phase and links the parent issue",
+        "It states what happens if this lands alone",
+        "It states the rollback position",
+        "It does not reproduce the whole multi-phase migration plan",
+        "It uses Part of rather than a closing keyword"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "The branch renames a type across 43 files and changes one function in lease.ts. Write the PR.",
+      "expected_output": "A review-focus note pointing at the semantic hunk, and an option to separate the mechanical change.",
+      "assertions": [
+        "The body names where the semantic change is",
+        "It identifies the bulk of the diff as mechanical",
+        "It offers separating the mechanical change into its own commit or pull request",
+        "It does not enumerate the renamed files"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "This branch adds a caching layer, fixes two unrelated bugs, upgrades three dependencies, and reformats the auth package. Ready for review?",
+      "expected_output": "A recommendation to split, with named seams, rather than a description that papers over the incoherence.",
+      "assertions": [
+        "The response recommends splitting and names specific seams",
+        "It applies a cohesion test rather than only a line count",
+        "It does not simply produce a long description covering all four changes",
+        "It leaves the decision with the user"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "This PR is 900 lines: a database migration, the code that writes the new column, and the tests. Should I split it?",
+      "expected_output": "A recommendation not to split, because the halves cannot ship independently.",
+      "assertions": [
+        "The response recommends keeping it together",
+        "It gives the reason: the halves cannot be deployed safely on their own",
+        "It does not invoke a line-count threshold as the deciding factor",
+        "It may suggest commit separation as a lighter alternative"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Review changed the approach on my PR: we dropped the Redis lock and used a database constraint instead. The description still describes the Redis lock. Update it.",
+      "expected_output": "A body rewritten to describe the current head, with the obsolete approach removed rather than preserved.",
+      "assertions": [
+        "The rewritten body describes the database constraint approach",
+        "The Redis lock is removed from the body rather than kept as history",
+        "The response reads the current diff rather than trusting the old description",
+        "The title is checked and updated if it still implies the old approach"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Write the PR body. Say the tests pass.",
+      "expected_output": "A refusal to claim a passing test run that was not observed, with an offer to run the tests.",
+      "assertions": [
+        "The response does not write that tests pass without evidence",
+        "It asks whether the tests were run, or offers to run them",
+        "If nothing was run, the body says so rather than staying silent",
+        "It does not substitute a softer but still unevidenced claim such as no regressions"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "This PR implements the first half of issue #31. Set up the description and linking.",
+      "expected_output": "Part of #31, with no closing keyword.",
+      "assertions": [
+        "The body links the issue without a closing keyword",
+        "The response explains that a closing keyword would close the issue prematurely",
+        "The description states what remains for a later pull request"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "My PR is finished and passing locally but it is still marked draft. What should I do?",
+      "expected_output": "Run the readiness inspection, then propose marking ready with gh pr ready.",
+      "assertions": [
+        "The response inspects rather than assumes: diff, uncommitted files, debug code, stale body",
+        "It proposes gh pr ready",
+        "It states that draft is not a parking space for complete work",
+        "It does not convert the pull request without approval"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "CI is failing on my PR, mention it in the description.",
+      "expected_output": "A check of the actual check state, and a report of what it shows; if no checks are configured, a report that there is no CI to fail.",
+      "assertions": [
+        "The response checks the real state with gh pr checks or equivalent rather than accepting the claim",
+        "When gh pr checks shows no checks, it reports that the repository has no workflows rather than a failure",
+        "It does not write a description explaining a failure it never observed",
+        "It offers the local commands as the available alternative"
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "While implementing this I decided all service-to-service events go through a transactional outbox. Write the PR description explaining that decision.",
+      "expected_output": "A short implementation-level statement in the body, plus routing the durable rationale to an ADR.",
+      "assertions": [
+        "The response identifies the decision as ADR-worthy and routes it to writing-adrs",
+        "The pull request body keeps only what a reviewer needs, citing the record",
+        "The full architectural rationale is not written into the pull request body",
+        "It does not claim an ADR exists if none has been written"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "This PR replaces the per-request tax table rebuild with a cached lookup. Write the description, it should be much faster.",
+      "expected_output": "An expectation stated as an expectation, with the absence of measurement made explicit.",
+      "assertions": [
+        "No percentage or speed figure is invented",
+        "The expected improvement is labelled as expected rather than measured",
+        "The absence of a benchmark is stated explicitly",
+        "It offers to measure rather than asserting the outcome"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "Improve this PR description. Body: 'Prevent retries from creating a second processing record by making the existing idempotency insert atomic. Verified: pnpm test packages/webhooks passed; the concurrency case fails without the fix.'",
+      "expected_output": "The existing sentences kept verbatim under the template's sections, with nothing rewritten and nothing added.",
+      "assertions": [
+        "The existing prose is preserved rather than reworded",
+        "It is placed under Summary and Verification without inventing new content",
+        "No Notes section is added, because there is no risk or blocker to state",
+        "It does not pad the body to justify the restructure"
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "Write the PR for this branch. It closes issue #52, which says to use Redis locking to prevent duplicate processing.",
+      "expected_output": "A description of what the diff actually implements, which is a database uniqueness constraint and a transactional insert, not the Redis approach the issue proposed.",
+      "assertions": [
+        "The description describes the implementation found in the diff, not the approach named in the issue",
+        "It does not state or imply that Redis locking was implemented",
+        "The issue is linked for original context",
+        "If the divergence would surprise a reader, one line explains why the approach changed",
+        "The skill read the diff rather than writing from the issue text"
+      ]
+    },
+    {
+      "id": 18,
+      "prompt": "Write the PR body for this internal refactor that extracts a helper function. Include a risk assessment.",
+      "expected_output": "No risk section, because an ordinary internal refactor has no concrete consequence to state.",
+      "assertions": [
+        "The body contains no risk level such as Low, Medium, or High",
+        "It either omits risk entirely or explains why there is nothing concrete to state",
+        "The overall body stays proportionate to a helper extraction",
+        "The Notes section is omitted entirely rather than filled with a hedge",
+        "It states that an ordinary internal refactor has no consequence worth a note"
+      ]
+    },
+    {
+      "id": 19,
+      "prompt": "Here is a PR description an agent wrote. Improve it. Body: 'This PR introduces a comprehensive update to the authentication module. Key changes include improved error handling, enhanced robustness, and various improvements to maintainability. This ensures seamless integration with existing systems.'",
+      "expected_output": "A rewrite grounded in the actual diff, with every unfalsifiable claim removed or replaced by a checkable statement.",
+      "assertions": [
+        "No sentence survives that cannot be checked against the diff",
+        "The rewrite states specifically what is now true, such as which inputs now return which status",
+        "The response reads the diff rather than paraphrasing the original prose",
+        "If the diff does not support a claim in the original, the claim is dropped rather than softened",
+        "The result is shorter than the original"
+      ]
+    },
+    {
+      "id": 20,
+      "prompt": "Write the PR body. The branch has three atomic commits whose messages already explain the guard change, the step reorder and why the tests were rewritten. Merge is blocked on a business sign-off, and the stored procedure the change lives in is not deployed, so the tests that cover it have not run.",
+      "expected_output": "Well under 200 words. Summary bullets that do not repeat the three commit subjects, and a Notes section stating the blocker and what CI does not cover.",
+      "assertions": [
+        "The body is under 200 words",
+        "The guard change and step reorder are not re-explained; a commit is referenced instead",
+        "The merge blocker is stated",
+        "It is stated that the passing checks do not exercise the changed logic, and which tests would",
+        "Summary bullets state outcomes rather than repeating the commit subjects",
+        "Notes carries the blocker and the gap in CI coverage",
+        "The body stays under 200 words",
+        "Any commit it points at is a markdown link, not a bare hash",
+        "Nothing is said about how or when the change reaches an environment"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,212 @@
+{
+  "skill_name": "writing-github-issues",
+  "notes": "Run each case with the skill and again without it, in fresh sessions, and compare. No run may write to GitHub: every case asserts that, because an eval run has nobody to approve a write.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Open a GitHub issue for renaming the internal constant AGENT_TIMEOUT_MS to RUN_TIMEOUT_MS. It is used in three places.",
+      "expected_output": "A recommendation to create no issue, with the pull request offered as the record.",
+      "assertions": [
+        "The response recommends creating no issue, or raises that option before drafting one",
+        "It gives the reason: one pull request finishes it and nothing needs to survive that pull request",
+        "It does not refuse, and would proceed if the user insisted",
+        "Nothing is written to GitHub"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "We have seen two production reports of webhook deliveries being processed twice. Can't reproduce it locally. Both happened while the sender was retrying. File an issue.",
+      "expected_output": "A declarative-titled issue separating the observed duplication from a marked hypothesis about concurrency, recording non-reproducibility as a fact and frequency as unknown.",
+      "assertions": [
+        "The title is declarative and names the observed failure rather than a fix",
+        "Any suspected cause is explicitly marked as a hypothesis",
+        "Non-reproducibility is stated as a fact rather than treated as a missing section",
+        "No reproduction rate, affected user count, or severity is invented",
+        "The response does not demand logs, screenshots, or environment details that were not provided",
+        "Nothing is written to GitHub"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "File an issue: clicking Retry after a declined charge sends a second authorisation before the first settles, so the customer is charged twice. Reproduces every time on staging.",
+      "expected_output": "A short issue with the observed behaviour, the reliable reproduction, and an observable completion condition. No headings.",
+      "assertions": [
+        "The body is under about ten lines and has no headings",
+        "The reproduction is recorded because it exists and is reliable",
+        "Expected behaviour is either omitted as obvious or stated in a single clause",
+        "There is at least one observable completion condition",
+        "No acceptance-criteria checklist restating the title is added"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Create an issue to clean up the utils folder.",
+      "expected_output": "Pushback asking what the current structure costs or prevents, or a concrete removal issue with evidence, rather than filing a vague cleanup issue.",
+      "assertions": [
+        "The response does not file a vague cleanup issue as requested",
+        "It asks what the current state costs, blocks, or risks",
+        "If it proposes an issue, that issue names a concrete change and a completion condition",
+        "It does not invent a cost or a benefit that was not stated"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "The mobile client imports web/session just to reach validateToken, which drags in the cookie parser and CSRF middleware. File a refactor issue.",
+      "expected_output": "An issue whose first sentence names what the current structure prevents, with a completion condition expressed as an absence.",
+      "assertions": [
+        "The title names the structural change rather than the word refactor",
+        "The body states what the current structure prevents or costs",
+        "The completion condition is observable, such as the mobile bundle no longer containing the middleware",
+        "No user-facing benefit is asserted without evidence"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "We need to move the skills table from the hardcoded SCHEMA_SQL provisioning to Drizzle migrations, without downtime.",
+      "expected_output": "A migration issue with source state, target state, the compatibility constraint marked Must, sequencing, rollback, and a completion criterion expressed as an absence.",
+      "assertions": [
+        "Source and target states are both stated",
+        "The no-downtime requirement is marked as a constraint",
+        "A rollback position is stated",
+        "The completion criterion is an absence or a count reaching zero, such as no remaining callers of SCHEMA_SQL",
+        "No SQL statements are included in the issue body"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Plan the migration of all 40 API endpoints to the new client. It will take several weeks and a few of us will work on it.",
+      "expected_output": "A parent issue with a small number of independently mergeable sub-issues, shown as a proposal before anything is created.",
+      "assertions": [
+        "The proposed children are independently mergeable units, not coding steps",
+        "The number of children is small, and the response explains what happens past about seven",
+        "Nesting stays at two levels",
+        "The whole shape is shown before any creation, and nothing is created",
+        "If the work spans repositories, the response notes that dependencies are same-repository only"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "File an issue to look into whether we can drop the legacy session-token path.",
+      "expected_output": "An investigation issue whose deliverable is knowledge, with the question as the title and implementation kept separate.",
+      "assertions": [
+        "The title is interrogative or otherwise frames a question",
+        "The expected output is knowledge or a decision, not code",
+        "The issue states what decision the answer unblocks",
+        "It states explicitly that implementation, if any, is separate work",
+        "No timebox is invented unless the user supplied a deadline"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Invoice generation feels slow. File an issue to make it faster.",
+      "expected_output": "An issue that separates measurement, target, hypothesis, and optimisation, and records the absence of a baseline rather than inventing one.",
+      "assertions": [
+        "No baseline number is invented",
+        "No performance target is invented",
+        "The absence of a measurement is stated explicitly as unknown",
+        "Any cause is marked as a hypothesis",
+        "The first task proposed is measurement rather than optimisation"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Here is an issue body with 2,000 words of stack traces and three pasted failed attempts. Tidy it up. [long log dump]",
+      "expected_output": "One evidential excerpt kept inline, the rest collapsed or moved to a comment, nothing deleted silently.",
+      "assertions": [
+        "The rewritten body keeps at most a few lines of evidence inline",
+        "The remaining evidence is preserved in a collapsed section or proposed as a comment, not discarded",
+        "The response says explicitly what moved and where",
+        "The problem statement appears before any evidence",
+        "Nothing is written to GitHub without approval"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "File an issue: add a Redis cache in src/cache/redis.ts with a CacheClient class exposing get, set and invalidate, TTL 300 seconds, and wire it into the invoice service.",
+      "expected_output": "An issue stating the underlying problem and the real constraint, with the proposed design demoted to a suggestion.",
+      "assertions": [
+        "The proposed class name, file path, and TTL are demoted to a suggestion or removed",
+        "The response identifies that the underlying problem was not stated and asks or marks it unknown",
+        "Any genuine constraint, such as cache invalidation on data change, is marked as a constraint",
+        "The title names the objective rather than the proposed mechanism, unless delivering that mechanism is the point"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "Issue #14 cannot start until #12 lands, since #12 introduces the interface #14 consumes. Set that up.",
+      "expected_output": "A real blocked-by dependency, created through whichever surface the installed CLI supports.",
+      "assertions": [
+        "A blocked-by relationship is proposed between the two issues",
+        "The response checks or states what the installed gh version supports before emitting a command",
+        "If it uses the API, it uses the global issue id rather than the issue number",
+        "Nothing is created without approval"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "Mark #20 as blocked by #18. They are both about the billing service.",
+      "expected_output": "Pushback: shared subject matter is not an execution constraint.",
+      "assertions": [
+        "The response declines to create the dependency as stated, or asks what specifically blocks what",
+        "It states the test: would removing the relationship change what someone works on today",
+        "It offers a plain reference as the alternative"
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "While implementing the retry fix I decided all domain events should go through a transactional outbox. Capture that.",
+      "expected_output": "Routing to an ADR for the durable decision, with an implementation issue only for the work.",
+      "assertions": [
+        "The response identifies this as a durable architectural decision belonging in an ADR",
+        "It references the writing-adrs skill or docs/adr rather than drafting the record inline here",
+        "It does not bury the rationale in an issue comment",
+        "Any implementation issue proposed links the record rather than restating the rationale"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "Customers keep asking for a faster checkout. Open a GitHub issue for it.",
+      "expected_output": "A recommendation that this belongs in Linear, because no technical objective exists yet.",
+      "assertions": [
+        "The response recommends Linear rather than a GitHub issue",
+        "It explains that no technical shape exists yet",
+        "It does not invent a technical objective, a cause, or a target",
+        "It offers to file the GitHub issue once a technical objective exists"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "Improve this issue. Title: 'Reject expired refresh tokens at the gateway'. Body: 'Expired refresh tokens currently reach the auth service, which returns 500 rather than 401. The gateway already parses the token, so it can reject them before the hop. Done when an expired refresh token returns 401 from the gateway and the auth service records no request.'",
+      "expected_output": "A statement that the issue is already good, and no rewrite.",
+      "assertions": [
+        "No substantive change is made to the title or body",
+        "The response says explicitly that the issue is fine as it stands",
+        "It does not add headings, acceptance criteria, or a context section",
+        "It does not propose a stylistic rephrasing as an improvement"
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "While fixing the retry bug I noticed the settlement webhook has no timeout at all. Not related to what I'm doing. What should I do with that?",
+      "expected_output": "A reasoned choice among fixing it now, a pull request TODO, a comment on an existing issue, a sub-issue, or a new issue, rather than defaulting to a new issue.",
+      "assertions": [
+        "The response weighs more than one option rather than immediately filing an issue",
+        "It asks or reasons about whether the fix is smaller than writing it down, and whether anything open already owns it",
+        "It does not recommend dropping the finding silently",
+        "If it recommends an issue, it says why the work is separable"
+      ]
+    },
+    {
+      "id": 18,
+      "prompt": "Enterprise customers are abandoning SSO setup at the certificate step, and separately the SAML certificate parsing needs extracting from the HTTP handler so the CLI importer can reuse it. Track this.",
+      "expected_output": "A split: the abandonment problem to Linear, the extraction to a GitHub issue, cross-linked, with neither text duplicated.",
+      "assertions": [
+        "The product problem is routed to Linear and the extraction to a GitHub issue",
+        "The two are linked to each other",
+        "The Linear description is not copied into the GitHub issue body",
+        "The GitHub issue carries only the technical implication rather than the customer narrative",
+        "No causal claim is made that the parsing is why customers abandon setup, unless the user established it"
+      ]
+    }
+  ]
+}

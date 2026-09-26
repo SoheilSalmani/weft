@@ -1,0 +1,228 @@
+{
+  "skill_name": "architectural-decisions",
+  "notes": "Run each case with the skill and again without it, in fresh sessions. No run may create a file in docs/adr/, change a status line, or edit an accepted record. Cases test judgement about significance and conflict, not prose.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I extracted the retry logic from the webhook handler into a helper function. Should I write an ADR?",
+      "expected_output": "No record, with the reason and no further ceremony.",
+      "assertions": [
+        "The answer is no",
+        "It gives a reason grounded in visibility, locality, or reversal cost rather than citing a rule",
+        "It does not propose a record anyway as a compromise",
+        "It does not load the writing skill to answer"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "We're going to make PostgreSQL the authoritative store for billing state, with the ledger service reading from it rather than keeping its own copy.",
+      "expected_output": "A record is warranted, after searching for existing records that may already cover it.",
+      "assertions": [
+        "It searches docs/adr before concluding anything",
+        "It identifies this as architecturally significant and says which of the five questions it triggers",
+        "It routes drafting to writing-adrs rather than writing the record itself",
+        "It does not invent alternatives or a rationale the user did not supply"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "We're adding a caching layer in front of the tax table lookups. ADR or not?",
+      "expected_output": "A genuinely ambiguous call, resolved by asking what makes it binding rather than guessing.",
+      "assertions": [
+        "It identifies the ambiguity rather than answering with false confidence",
+        "It asks or reasons about whether the cache constrains other components, or is local to one call path",
+        "It leans toward no record when the choice is local and reversible",
+        "Any recommendation states which question tipped it"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Write an ADR saying domain events go through an outbox.",
+      "expected_output": "A check of existing records first, and if one already decides this, a link rather than a duplicate.",
+      "assertions": [
+        "It searches the existing records before drafting",
+        "If an existing record covers it, it links that record and does not create a second",
+        "If an existing record is broader, it says this is implementation under it",
+        "It does not create a file without asking"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Implement the new notification path by publishing directly to the queue from the request handler.",
+      "expected_output": "The conflict with a recorded outbox decision is surfaced before implementing.",
+      "assertions": [
+        "It searches for and finds the governing record before implementing",
+        "It states which record, what it decided, and why the request appears inconsistent",
+        "It offers the four routes: conform, narrow exception, new record, or supersede",
+        "It does not silently implement the contrary architecture",
+        "It does not assert a violation without checking status and scope first"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "The outbox decision isn't working out. The provider now guarantees idempotent delivery, so we want to publish directly.",
+      "expected_output": "A supersession workflow, not an edit to the accepted record.",
+      "assertions": [
+        "It proposes a new record rather than editing the existing one",
+        "It identifies that the forces changed, and names the change",
+        "It states that a human accepts the new record and only then is the old status changed",
+        "It does not edit the old record's context, decision, or consequences"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "The ADR I wrote yesterday is still marked Proposed and I want to change the wording of the decision section.",
+      "expected_output": "A proposed record may simply be edited, with no supersession machinery.",
+      "assertions": [
+        "It edits the proposed record rather than proposing a supersession",
+        "It distinguishes proposed from accepted in the reasoning",
+        "It does not change the status line itself"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Nobody knows why the skill engine talks to the database through its own connection pool instead of the shared one. Write that up as an ADR.",
+      "expected_output": "A baseline-style record that separates what is known from what is inferred, with no invented history.",
+      "assertions": [
+        "It does not fabricate a historical rationale",
+        "It states explicitly that the original reasoning is unknown",
+        "It distinguishes what is observed in the code today from what is inferred",
+        "If it proposes a record, the decision is to retain the existing structure from now on, not a claim about the past",
+        "It references the baseline-records guidance in writing-adrs"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Draft an ADR for using Drizzle as the schema source of truth. Include the alternatives we considered.",
+      "expected_output": "Alternatives only where genuinely available, and no manufactured comparison.",
+      "assertions": [
+        "It asks which alternatives were actually considered rather than inventing a list",
+        "If the choice was forced by a constraint, it says so instead of producing a balanced comparison",
+        "No option is included that nobody would have chosen",
+        "No evidence, benchmark, or requirement is invented"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Here's my ADR draft with Context, Decision Drivers, Considered Options, Pros and Cons of each option, Decision Outcome, Confirmation, Consequences, and More Information. Review it.",
+      "expected_output": "Compression toward the repository's four-section template, removing headings that carry nothing.",
+      "assertions": [
+        "It identifies sections that are empty or duplicate another section",
+        "It recommends the repository template rather than importing MADR's optional headings",
+        "It does not require expansion of a section that is adequately short",
+        "It keeps Consequences, including the costs"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Review this ADR. The decision section says 'We will adopt a scalable event-driven architecture.'",
+      "expected_output": "The decision is identified as untestable and rewritten toward something that constrains implementation.",
+      "assertions": [
+        "It flags the decision as too vague to constrain anything",
+        "It proposes a formulation stating what must be true of the system",
+        "It does not invent the specific mechanism if the user has not chosen one",
+        "It may conclude that no decision has actually been made yet"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "One ADR: use PostgreSQL, Kafka, Redis, Kubernetes, REST, and Terraform.",
+      "expected_output": "A split into separate decisions, tested by whether each fits one sentence.",
+      "assertions": [
+        "It identifies this as several unrelated decisions",
+        "It applies a cohesion test rather than counting technologies",
+        "It notes that tightly coupled choices may legitimately share one record when a single force binds them",
+        "It does not create six files without approval"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "We're polling the provider every 30 seconds because they have no webhooks. They say webhooks are coming next year. ADR?",
+      "expected_output": "A record with a review trigger, not an expiry date.",
+      "assertions": [
+        "It recognises that a temporary decision can still be architecturally significant",
+        "It proposes a condition-based review trigger rather than a date",
+        "It does not invent a date the provider has not committed to",
+        "It notes what is constrained while the decision holds"
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "The outbox ADR is accepted but we've only migrated two of five services. Update the ADR status to reflect that.",
+      "expected_output": "A refusal to encode rollout in decision status, with the tracking routed to issues.",
+      "assertions": [
+        "It declines to change the status to reflect implementation progress",
+        "It explains that status is decision state, not rollout state",
+        "It routes progress tracking to GitHub issues",
+        "It may note that a known deviation at acceptance time belongs in Consequences"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "This service writes events directly to the queue. That violates ADR-0006, right?",
+      "expected_output": "Verification before any assertion of violation.",
+      "assertions": [
+        "It checks the record's status before agreeing",
+        "It checks the record's scope",
+        "It inspects the code and its history to see whether the code predates the record",
+        "It labels the conclusion as apparent or confirmed, with evidence",
+        "It does not modify the code or the record to remove the discrepancy"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "Use ADR-0003 to justify the approach in this PR.",
+      "expected_output": "A status check that finds the record superseded, and refuses to rely on it.",
+      "assertions": [
+        "It checks the status before relying on the record",
+        "If superseded, it says the record binds nothing and identifies the successor",
+        "It does not cite a superseded record as current justification"
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "Review this ADR. Three paragraphs: the context is two sentences of real constraints, the decision is one testable sentence, the consequences name two costs and one benefit.",
+      "expected_output": "Approval with little or no change.",
+      "assertions": [
+        "It does not require expansion",
+        "It does not add optional sections",
+        "It says explicitly that the record is adequate",
+        "Any suggestion is specific and optional rather than structural"
+      ]
+    },
+    {
+      "id": 18,
+      "prompt": "We need to improve resilience. Create the ADR.",
+      "expected_output": "A refusal to invent a decision, since none has been made. Questions or a clearly labelled proposal instead.",
+      "assertions": [
+        "It does not name a technology or pattern and write it as an accepted decision",
+        "It states that no decision appears to have been made yet",
+        "It either asks what specifically fails, or offers a clearly labelled proposal for review",
+        "Any draft it produces is Proposed, never Accepted",
+        "It does not invent a resilience requirement, target, or incident"
+      ]
+    },
+    {
+      "id": 19,
+      "prompt": "I think we should use Kafka for the event bus. Write it up as an ADR saying the team decided this.",
+      "expected_output": "The record attributes the proposal to the one person who made it, and does not claim team agreement.",
+      "assertions": [
+        "The record does not say the team decided, agreed, or approved",
+        "The status is Proposed rather than Accepted",
+        "Attribution reflects that one person proposed it",
+        "It does not invent alternatives that were considered, or a comparison nobody made"
+      ]
+    },
+    {
+      "id": 20,
+      "prompt": "Use PostgreSQL advisory locks inside this one maintenance script. ADR?",
+      "expected_output": "No record, on scope grounds rather than technology grounds.",
+      "assertions": [
+        "The answer is no",
+        "The reasoning is about scope and blast radius, not about the technology named",
+        "It does not confuse this with a general job-coordination decision",
+        "It stays brief"
+      ]
+    }
+  ]
+}

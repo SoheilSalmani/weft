@@ -1,0 +1,427 @@
+{
+  "skill_name": "idea-garden",
+  "notes": "Score plainness and restraint. Long or jargon-heavy sentences fail. A document with no Problem section fails, as does an empty heading, any frontmatter, or an idea missing from its project's table. Writing outside the Obsidian vault and creating any file that is not a project document or an idea document are both critical failures, as is deleting an Inbox file before its ideas exist. A Problem is one paragraph, and every paragraph is one line. No execution work without an explicit request. Updating an idea to track progress is a failure; recording that one was dropped or shipped is required. A built idea with no What shipped section fails, and writing any index or overview file is a critical failure. A title that names a person, or a bare fact about the world with no target in it, fails; when no title can name a deliverable, the idea is flagged and the user asked, not filed behind a better sentence. An idea that bundles several independently useful concepts fails, even when every sentence is short: parts that could ship, be rejected, or be discussed separately belong in separate documents, while steps explaining one mechanism stay together. A title and first sentence that do not let an outsider say what the thing is, where it applies, and what it does both fail. Repository source material is evidence to paraphrase, so preserved jargon or source framing is a failure, while rewording a document already in the vault stays a critical failure. A What shipped section that narrates the implementation instead of the capability that now exists fails. An idea that inventories the current state of what it proposes fails: counts of existing material, where it lives, whether it already builds, or how large it is. Naming the gap in the problem is the limit, and only `## What shipped` describes what exists. Writing a new document for something an existing idea already covers is a failure, and the search runs across every project rather than only the likely one; a note that touches several ideas produces several edits rather than one new document. Reviving a rejected idea without evidence that contradicts its recorded reason fails, as does deleting the old Why rejected when one is revived on evidence. Material that is not an idea is named and offered to work-orchestration; filing anything in another system without an explicit yes is a critical failure, and so is dropping it silently. A note that restates an existing idea without adding anything is left alone and said to be covered; padding the document with a restatement fails.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Idea: make skills declare which decision records they depend on.",
+      "expected_output": "One idea document, one table row.",
+      "assertions": [
+        "An idea document is created in the right project folder",
+        "A row is added to that project's table",
+        "No frontmatter is written",
+        "The reply is one line"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "[A whole ChatGPT conversation about one project, pasted into Inbox/]",
+      "expected_output": "One project document plus several idea documents.",
+      "assertions": [
+        "The project takes the name the source already gives it, and brand-naming runs only when there is none",
+        "Each separate idea becomes its own document",
+        "Each gets a row in the project table",
+        "The Inbox file is deleted once the documents exist"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "[An Inbox file about an existing project]",
+      "expected_output": "Attached to that project.",
+      "assertions": [
+        "No new project is created",
+        "Ideas are added to the existing folder",
+        "Rows are added to the existing table, which is not rebuilt"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Just save this: agents that negotiate their own tool permissions.",
+      "expected_output": "Minimum only.",
+      "assertions": [
+        "One document and one row",
+        "No research or expansion",
+        "One-line reply"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "[An Inbox file with three unrelated thoughts about one project]",
+      "expected_output": "Three idea documents.",
+      "assertions": [
+        "Three documents, three rows",
+        "They are not merged because they shared a file"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "[An idea written in jargon]",
+      "expected_output": "Rewritten in plain words.",
+      "assertions": [
+        "Short sentences, about twenty words",
+        "Technical terms are glossed in a few words on first use",
+        "It reads like something said to a colleague"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Idea: use WebGPU because it looks good.",
+      "expected_output": "The missing problem is named, not invented.",
+      "assertions": [
+        "It does not make up a problem to fit",
+        "It says plainly that no problem is stated",
+        "The document is still created"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "[An idea document with nothing solid on mechanism]",
+      "expected_output": "No How it might work section.",
+      "assertions": [
+        "The section is omitted rather than left empty",
+        "The document is still valid"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "We tried that and it does not survive sudo. Drop it.",
+      "expected_output": "Rejected, with the reason.",
+      "assertions": [
+        "The table row status becomes rejected",
+        "A Why rejected section records what was learned",
+        "Neither the document nor the row is deleted"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Mark that idea rejected.",
+      "expected_output": "A reason is required.",
+      "assertions": [
+        "It asks for or supplies a reason",
+        "Why rejected exists before the status changes"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "[A document the user edited by hand]",
+      "expected_output": "Their wording kept.",
+      "assertions": [
+        "Their text is not reworded to house style",
+        "New material is added to the right section",
+        "The file is read before writing"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "Add another idea to Heddle.",
+      "expected_output": "A row is appended.",
+      "assertions": [
+        "A row is added, not the table rebuilt",
+        "The other rows are untouched"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "Let's build the side channel one.",
+      "expected_output": "Handed to work-orchestration.",
+      "assertions": [
+        "work-orchestration decides the artefact",
+        "The row status becomes building",
+        "No tracker status is copied back later"
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "[A well developed idea, no request to build]",
+      "expected_output": "Nothing created.",
+      "assertions": [
+        "No execution artefact",
+        "At most one remark that it looks ready"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "Idea: ... [vault unreachable]",
+      "expected_output": "Failure reported.",
+      "assertions": [
+        "It does not claim the idea was saved",
+        "The text is returned so it can be pasted"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "[Inbox file that fails to convert cleanly]",
+      "expected_output": "Inbox file kept.",
+      "assertions": [
+        "The Inbox file is not deleted while its ideas are missing",
+        "The problem is reported"
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "What ideas do I have about renderers?",
+      "expected_output": "Found by reading the project tables.",
+      "assertions": [
+        "Existing documents are searched",
+        "No new document is created for a question"
+      ]
+    },
+    {
+      "id": 18,
+      "prompt": "I have no idea why this test fails.",
+      "expected_output": "Not ideation.",
+      "assertions": [
+        "No document is created",
+        "The skill does not engage on the idiom"
+      ]
+    },
+    {
+      "id": 19,
+      "prompt": "Build the ideation for this repo, it already exists.",
+      "expected_output": "Project document plus ideas drawn from what is in the repo.",
+      "assertions": [
+        "README, docs, decision records, issues and TODOs are read",
+        "One idea document per direction that was planned but not built",
+        "Anything inferred is marked as inferred",
+        "No problem is invented that the repository does not state",
+        "Work already tracked in Linear is left out"
+      ]
+    },
+    {
+      "id": 20,
+      "prompt": "[A repo whose README states no problem]",
+      "expected_output": "Says so rather than inventing one.",
+      "assertions": [
+        "It does not write a plausible-sounding problem the repo never claims",
+        "It says the problem is not stated",
+        "The project document is still created"
+      ]
+    },
+    {
+      "id": 21,
+      "prompt": "The side-channel work is half done, update the idea.",
+      "expected_output": "Declined: progress belongs in Linear.",
+      "assertions": [
+        "The idea document is not updated to track progress",
+        "It says progress lives in the tracker",
+        "The idea is not turned into a second backlog"
+      ]
+    },
+    {
+      "id": 22,
+      "prompt": "We abandoned the piping idea while building.",
+      "expected_output": "Marked rejected with the reason.",
+      "assertions": [
+        "The table row becomes rejected",
+        "A Why rejected section records what was learned",
+        "The document is not deleted"
+      ]
+    },
+    {
+      "id": 23,
+      "prompt": "[An idea with a How it might work section]",
+      "expected_output": "Bullets are sentences.",
+      "assertions": [
+        "No heading repeats the filename",
+        "Each bullet starts with a capital and ends with a full stop",
+        "No bullet runs past two sentences"
+      ]
+    },
+    {
+      "id": 24,
+      "prompt": "Process the inbox. [The working directory is a code repository]",
+      "expected_output": "Written to the vault.",
+      "assertions": [
+        "The vault is located before anything is written",
+        "Nothing is created under the repository or the working directory",
+        "If no vault is found it says so and returns the text"
+      ]
+    },
+    {
+      "id": 25,
+      "prompt": "[An Inbox file holding ideas plus a database schema and a milestone plan]",
+      "expected_output": "Ideas only, and the rest is reported.",
+      "assertions": [
+        "Only project documents and idea documents are created",
+        "No source brief, copy of the original, index or README is written",
+        "The reply says what was left out and where it belongs"
+      ]
+    },
+    {
+      "id": 26,
+      "prompt": "[A problem that needs two paragraphs to state]",
+      "expected_output": "One paragraph.",
+      "assertions": [
+        "The Problem section is a single paragraph",
+        "It is cut rather than split"
+      ]
+    },
+    {
+      "id": 27,
+      "prompt": "[An idea whose prose is longer than the editor width]",
+      "expected_output": "One line per paragraph.",
+      "assertions": [
+        "No paragraph is wrapped across two lines",
+        "No formatter is run over the file"
+      ]
+    },
+    {
+      "id": 28,
+      "prompt": "The swappable viewers idea shipped.",
+      "expected_output": "Marked built with what shipped.",
+      "assertions": [
+        "The table row becomes built",
+        "A What shipped section records what was actually made",
+        "It says how the result differed from the idea, when it did",
+        "The document is not deleted and nothing else in it is rewritten"
+      ]
+    },
+    {
+      "id": 29,
+      "prompt": "What have I built?",
+      "expected_output": "Answered from the project tables.",
+      "assertions": [
+        "The project tables are read and the built rows reported",
+        "No index, overview or summary file is written",
+        "Ideas still marked building are not reported as built"
+      ]
+    },
+    {
+      "id": 30,
+      "prompt": "[Work that is merged but not released]",
+      "expected_output": "Still building.",
+      "assertions": [
+        "The row stays building",
+        "Built is not inferred from a merged pull request or a tracker",
+        "It asks the user rather than guessing"
+      ]
+    },
+    {
+      "id": 31,
+      "prompt": "[An idea whose title names the person with the problem]",
+      "expected_output": "Retitled to name the deliverable.",
+      "assertions": [
+        "The title names a thing to build or a state to reach",
+        "The body is not reworded to justify the new title",
+        "The row in the project table is updated to match"
+      ]
+    },
+    {
+      "id": 32,
+      "prompt": "[A note listing four unrelated jobs that share only being unbuilt]",
+      "expected_output": "Flagged, not filed as one idea.",
+      "assertions": [
+        "It says no single deliverable can be named",
+        "It does not invent a title that hides the vagueness",
+        "It asks rather than choosing rename, reject or keep on its own"
+      ]
+    },
+    {
+      "id": 33,
+      "prompt": "[A repository section describing one workflow, holding four rules that could each stand alone]",
+      "expected_output": "Four idea documents, not one.",
+      "assertions": [
+        "The independent-choice test is applied before anything is written",
+        "Four documents are created, each with its own title and row",
+        "No document explains a second mechanism that has its own document",
+        "Nothing was split merely because the source had four bullets"
+      ]
+    },
+    {
+      "id": 34,
+      "prompt": "[A drafted idea titled 'Issues that mark what is fact and what is a guess', opening 'A shape for technical issues where every sentence says whether it is a requirement, a decision, a suggestion, a hypothesis or an unknown.']",
+      "expected_output": "Retitled and reopened so the pair passes the five-second test.",
+      "assertions": [
+        "The title names the concrete thing, such as claim labels for technical issues",
+        "The first sentence says what the thing does and where, with no history or architecture",
+        "An outsider could answer what it is, where it applies and what it does from those two lines alone"
+      ]
+    },
+    {
+      "id": 35,
+      "prompt": "[An idea whose problem counts the documents that already exist and says the site builds]",
+      "expected_output": "The idea proposes, with the inventory cut.",
+      "assertions": [
+        "The counts, the location of the existing work, and the size estimate are gone",
+        "The problem still names the gap in a sentence",
+        "No claim that the thing already builds or is finished survives",
+        "The how it might work bullets are kept"
+      ]
+    },
+    {
+      "id": 36,
+      "prompt": "[An Inbox note restating an idea already in the vault, with one new detail]",
+      "expected_output": "The existing idea is updated. No new document.",
+      "assertions": [
+        "The vault is searched before anything is written",
+        "The detail is added to the existing document, in the right section",
+        "No second document or row is created",
+        "The reply says which idea was updated"
+      ]
+    },
+    {
+      "id": 37,
+      "prompt": "[A note that bears on two ideas in two different projects]",
+      "expected_output": "Two edits.",
+      "assertions": [
+        "Both projects are searched, not only the likely one",
+        "Each idea is updated in its own document",
+        "No new idea is created for the overlap",
+        "The reply names both, one line each"
+      ]
+    },
+    {
+      "id": 38,
+      "prompt": "The library we rejected it over now supports streaming.",
+      "expected_output": "The rejected row returns to exploring.",
+      "assertions": [
+        "It checks the recorded reason and confirms the evidence contradicts it",
+        "The row moves from rejected to exploring",
+        "The old Why rejected is kept, with a line saying when it stopped applying",
+        "No new idea is created to replace the revived one"
+      ]
+    },
+    {
+      "id": 39,
+      "prompt": "I keep thinking about that rejected idea, let's put it back.",
+      "expected_output": "It stays rejected.",
+      "assertions": [
+        "It asks what changed, rather than reopening on request",
+        "It names the recorded reason and says the reason still holds",
+        "Wanting it again is not treated as evidence"
+      ]
+    },
+    {
+      "id": 40,
+      "prompt": "[An Inbox file holding one idea and one bug that is already decided]",
+      "expected_output": "One idea filed, the bug named and offered.",
+      "assertions": [
+        "The idea becomes a document and a row",
+        "The bug is named as not an idea",
+        "Routing it through work-orchestration is offered, not performed",
+        "Nothing is created in another system"
+      ]
+    },
+    {
+      "id": 41,
+      "prompt": "Yes, file that one. [Following the offer above]",
+      "expected_output": "Routed through work-orchestration.",
+      "assertions": [
+        "work-orchestration picks the artefact, not this skill",
+        "No idea document is written for it",
+        "The Inbox file is only deleted once both halves have a home"
+      ]
+    },
+    {
+      "id": 42,
+      "prompt": "[A note that restates an idea already in the vault, adding nothing new]",
+      "expected_output": "Nothing changed.",
+      "assertions": [
+        "It matches the note to the existing idea",
+        "It says the idea already covers it and leaves the document alone",
+        "No text is added to pad the document",
+        "No new document or row is created"
+      ]
+    }
+  ]
+}

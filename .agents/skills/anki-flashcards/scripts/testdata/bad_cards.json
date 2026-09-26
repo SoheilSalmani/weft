@@ -1,0 +1,62 @@
+{
+  "deckName": "Career::Sanofi",
+  "modelName": "Basic",
+  "notes": [
+    {
+      "fields": {
+        "Front": "Sanofi R&D: what does the committee <b>IDCC</b> stand for, and what does it decide?",
+        "Back": "<b>Integrated Development &amp; Commercial Council</b> — <b>major investment decisions</b>."
+      },
+      "tags": ["Sanofi", "R&D", "Organization", "Governance"]
+    },
+    {
+      "fields": {
+        "Front": "Sanofi R&D: what does the committee <b>BRAC</b> stand for, and what does it decide?",
+        "Back": "<b>Benefit Risk Assessment Committee</b> — <b>safety &amp; efficacy evaluation</b>."
+      },
+      "tags": ["Sanofi", "R&D", "Organization", "Governance"]
+    },
+    {
+      "fields": {
+        "Front": "Sanofi R&D: what does the committee <b>TARC</b> stand for, and what does it decide?",
+        "Back": "<b>Therapeutic Area Review Committee</b> — <b>strategic portfolio alignment</b>."
+      },
+      "tags": ["Sanofi", "R&D", "Organization", "Governance"]
+    },
+    {
+      "fields": {
+        "Front": "Sanofi R&D: how is R&D organized at the <b>top level</b>?",
+        "Back": "Around <b>5 main functional pillars</b>, each with its own <b>Function Head</b>:<br><br>Research · Development (DEV) · CMC · TMU · Regulatory Affairs"
+      },
+      "tags": ["Sanofi", "R&D", "Organization", "Pillars"]
+    },
+    {
+      "fields": {
+        "Front": "Sanofi R&D: within what deadline must the GPH distribute <b>committee decisions</b> to all core team members?",
+        "Back": "<b>7 business days.</b>"
+      },
+      "tags": ["Sanofi", "R&D", "Organization", "Roles"]
+    },
+    {
+      "fields": {
+        "Front": "Sanofi R&D: why is the organization described as a <b>matrix organization</b>?",
+        "Back": "Because <b>Function Heads</b> (CMC, Regulatory, …) sit in <b>two places at once</b>:<br><br>• in the <b>governance committees</b>, AND<br>• supplying <b>functional representatives to the GPT</b><br><br>So a function reaches a project both top-down (governance) and sideways (team membership)."
+      },
+      "tags": ["Sanofi", "R&D", "Organization", "Governance"]
+    },
+    {
+      "fields": {
+        "Front": "Sanofi R&D: what does <b>GPT</b> stand for, and what is it?",
+        "Back": "<b>Global Product/Brand Team</b> — the <b>cross-functional team supporting the GPH</b>, responsible for <b>executing</b> the project strategy across all disciplines.<br><br>Representatives from: Clinical, CMC, Regulatory, Safety, Market Access, Commercial, etc."
+      },
+      "tags": ["Sanofi", "R&D", "Organization", "Roles"]
+    },
+    {
+      "fields": {
+        "Front": "🔬 Sanofi R&D: which committee endorses <b>Gate 4</b> (Go to File)?",
+        "Back": "<b>PSC</b> — “Go to File” endorsement."
+      },
+      "tags": ["Sanofi", "R&D", "Organization", "Governance"]
+    }
+  ]
+}

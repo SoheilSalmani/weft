@@ -1,0 +1,45 @@
+{
+  "skill_name": "reviewing-linear",
+  "notes": "This skill is user-invoked only, so trigger tuning does not apply. Evaluate output quality: findings must be specific, ranked, and free of invented replacement content. No run may modify Linear.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "/reviewing-linear the labels on the Engineering team",
+      "expected_output": "A ranked findings list identifying duplicate and unused labels, proposing merges, deletions, and archives, without proposing a replacement taxonomy.",
+      "assertions": [
+        "Duplicate pairs such as Bug and type:bug are identified as duplicates and a merge is proposed",
+        "Labels applied to no issues are identified, with a proposal to delete or archive",
+        "The response distinguishes archiving from deleting and says when each applies",
+        "It does not propose a new label scheme to replace the existing one",
+        "Each surviving label is justified by naming a view or automation, or flagged as unjustified",
+        "Nothing is changed in Linear"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "/reviewing-linear the Billing platform foundations project. The plan changed a few weeks ago and I don't think the issues reflect it.",
+      "expected_output": "Findings covering stale descriptions, misplaced implementation detail, and structural noise, ranked by consequence, each with a concrete fix and a destination for anything removed.",
+      "assertions": [
+        "Findings are ranked, with wrong-object and stale findings above cosmetic ones",
+        "Each finding names the object by identifier and states a concrete fix",
+        "Implementation detail identified for removal is given a destination such as a pull request, GitHub issue, ADR, or comment",
+        "Where a description is thin, the finding says what is missing rather than supplying invented content",
+        "Trivial findings of the same kind are grouped rather than listed one by one",
+        "Passes that found nothing are reported as clean",
+        "Nothing is changed in Linear"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "/reviewing-linear check whether our milestones are any good",
+      "expected_output": "A verdict per milestone using the can-this-be-true test, with renames proposed for those that name teams, layers, or phases, and confirmation of the ones that already name states.",
+      "assertions": [
+        "Each milestone is judged by whether its name can become true",
+        "Milestones that already name states are confirmed as good rather than rewritten",
+        "Proposed renames are states that can become true, not phases or disciplines",
+        "A milestone that cannot be renamed because it encodes no outcome is flagged as such rather than given an invented outcome",
+        "Nothing is changed in Linear"
+      ]
+    }
+  ]
+}

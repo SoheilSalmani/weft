@@ -1,0 +1,5 @@
+# Toolchain pins for this repository, installed with `mise install`.
+# Personal overrides (extra tools, local env) go in mise.local.toml, which is gitignored.
+
+[tools]
+node = "24"

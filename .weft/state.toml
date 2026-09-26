@@ -1,0 +1,28 @@
+[state]
+template = "gh:SoheilSalmani/templates//base"
+commit = "d1b46ed699b9d0119facc2385d2836600d6aaed1"
+base = [
+    "359f256ab8a376591d1ae30c5188d7b78d67fac33d441f8f917e50226f61778b",
+    "fb3843bc6e78691ca9217b6270355a8d9defc43d247d37760580e238ebab3253",
+    "ea96114ddb8c334000c30d6750d5cdaf47a3707057aa3aeccab95c640a3434c6",
+    "acd01f0f1a7cd77a249e9ec45b7066e4ef72bc577ebfbc603f68940fc1642846",
+    "b3347ca434de9035917dc5851460e9e4058f54af920f2d04dc13d977510cdc0e",
+    "778ce9b2f212956a0516adfacd3c149eb64f1d4ad1664e6cbace42803390a718",
+    "94fd529fcea40b6f04f772f100a64120ce96b3a3038509dc22265127951e9f95",
+    "06bc0c4eb7bc362f746f5cdf8701630b48c9b6e6522f2cf58a351b9c12ff732f",
+    "f49a7afca11175813d15f6049989ff637fd30cf42172e4e44a98027d27ecdcd3",
+    "a62e4b741ccbffd2acb482e5a727aeeb949db081cf16530995e0c5173fa968e9",
+    "3a880bc731abc23133766b6766b49a7979d9261daf827cbcbf54ab21a6c067cd",
+    "fbb76de461743ab2b7dbde86b12c6da23d71153c06d79035877eeb522f765df2",
+]
+tree_hash = "593e0da41204444751d3ecbed226b8801938f1d7efb573fdc04d4d7c8508fd7d"
+
+[answers]
+project_name = "weft"
+use_anki = true
+use_github = true
+use_jira = false
+use_linear = true
+use_obsidian = true
+
+[secrets]

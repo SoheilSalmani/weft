@@ -1,0 +1,655 @@
+{
+  "skill_name": "brand-naming",
+  "notes": "Score the process, not the prettiness. A pleasant name that skipped archetype weighting or screening fails. No case may register, purchase or publish anything. Availability assertions must carry a source and timestamp, and an unavailable screen must never be reported as clear. Cases 16-21 and 59-61 depend on live network state; use fixtures rather than asserting live availability in CI.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Name our commercial SaaS platform for release orchestration.",
+      "expected_output": "Deep tier. Extensibility and trademark weighted.",
+      "assertions": [
+        "Archetype established as platform before generating",
+        "Territories precede candidates",
+        "Trademark screened in jurisdictions derived from project context, not user nationality",
+        "Finalists differ strategically, not by suffix"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Name this small CLI that lints Kubernetes manifests.",
+      "expected_output": "Lightweight tier, CLI weighting.",
+      "assertions": [
+        "Typing effort and shell collision weighted heavily",
+        ".com is not treated as required",
+        "Realistic subcommands are tested",
+        "No deep trademark ceremony for a small utility"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Name this npm library.",
+      "expected_output": "Registry-first.",
+      "assertions": [
+        "npm checked with lowercase normalisation",
+        "Scoped fallback considered if bare name taken",
+        "Import ergonomics considered"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Name this Python package.",
+      "expected_output": "PyPI normalisation applied.",
+      "assertions": [
+        "PEP 503 normalisation applied before concluding availability",
+        "Case and separator variants are treated as one name"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Name this Rust CLI crate.",
+      "expected_output": "crates.io plus CLI weighting.",
+      "assertions": [
+        "crates.io queried with a User-Agent",
+        "A 403 is reported as unknown, never as free or taken",
+        "Separator normalisation applied"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Name our web framework.",
+      "expected_output": "Semantic range weighted.",
+      "assertions": [
+        "Ecosystem identity and breadth considered",
+        "Not named after one feature"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Name the SDK for our platform Meridian.",
+      "expected_output": "Parent-relationship, not a new brand.",
+      "assertions": [
+        "Parent architecture inspected first",
+        "A standalone brand is not invented without reason",
+        "Branded-house option presented"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Name this wire protocol for agent object streaming.",
+      "expected_output": "Descriptive is acceptable here.",
+      "assertions": [
+        "It states that distinctiveness may be a liability for a standard",
+        "Descriptive credibility weighted over brand flair"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Name this consumer mobile app.",
+      "expected_output": "Memorability and pronunciation weighted.",
+      "assertions": [
+        "Radio test applied",
+        "App store collision considered",
+        "Emotional fit assessed"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Name this open-source developer tool.",
+      "expected_output": "Search ownership weighted.",
+      "assertions": [
+        "GitHub prominence checked, not just repo availability",
+        "Registry checked",
+        "Trademark depth kept proportionate"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Name our internal migration project.",
+      "expected_output": "Minimal ceremony.",
+      "assertions": [
+        "No trademark or domain screening",
+        "Codename treated as disposable"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "[idea-garden concept note reaches project-concept maturity]",
+      "expected_output": "Naming invoked automatically.",
+      "assertions": [
+        "Naming runs before a durable project name is assigned",
+        "The result is a brand, not a generic descriptive title",
+        "The concept note keeps its original text and the old title as an alias",
+        "No execution work is created"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "Idea: maybe agent-aware migrations.",
+      "expected_output": "Too early. Not named.",
+      "assertions": [
+        "It declines to generate a brand",
+        "It explains the concept is not yet a project concept",
+        "It offers to shape positioning instead",
+        "No coined word is invented from ambiguous input"
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "Name this platform. It strips AI metadata today but will do content provenance broadly later.",
+      "expected_output": "Expansion horizon drives abstraction.",
+      "assertions": [
+        "A name encoding watermark removal is rejected as a trap",
+        "Ambition is asked about rather than assumed",
+        "Extensibility weighted heavily"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "Name this fifty-line CLI that does one thing.",
+      "expected_output": "Abstraction matched down.",
+      "assertions": [
+        "An overly abstract evocative name is questioned",
+        "Concreteness favoured"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "[Candidate with exact .com free]",
+      "expected_output": "Noted, not decisive.",
+      "assertions": [
+        "Availability reported with timestamp",
+        ".com freedom does not by itself win"
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "[Exact .com taken, .dev excellent]",
+      "expected_output": "Proceed.",
+      "assertions": [
+        "The candidate is not rejected for lacking .com",
+        "TLD ranked by archetype"
+      ]
+    },
+    {
+      "id": 18,
+      "prompt": "[Exact .com owned by a famous adjacent company]",
+      "expected_output": "Collision signal.",
+      "assertions": [
+        "Treated as a serious signal distinct from merely taken",
+        "Affiliation confusion named as the reason",
+        "Likely rejected"
+      ]
+    },
+    {
+      "id": 19,
+      "prompt": "[Domain parked]",
+      "expected_output": "Reported as its own state.",
+      "assertions": [
+        "Parked is distinguished from free and from actively used"
+      ]
+    },
+    {
+      "id": 20,
+      "prompt": "[Domain premium]",
+      "expected_output": "Reported as premium.",
+      "assertions": [
+        "Not reported as simply available",
+        "Price noted as volatile if mentioned"
+      ]
+    },
+    {
+      "id": 21,
+      "prompt": "[Domain previously hosted malware]",
+      "expected_output": "Material risk flagged.",
+      "assertions": [
+        "History screened for deep finalists",
+        "Conclusions not overstated"
+      ]
+    },
+    {
+      "id": 22,
+      "prompt": "[Package name unavailable]",
+      "expected_output": "Reject or scope.",
+      "assertions": [
+        "Scoped fallback considered",
+        "Confusability with the existing package assessed"
+      ]
+    },
+    {
+      "id": 23,
+      "prompt": "[PyPI collision only after normalisation]",
+      "expected_output": "Detected.",
+      "assertions": [
+        "Normalisation applied before declaring availability"
+      ]
+    },
+    {
+      "id": 24,
+      "prompt": "[Candidate collides with a shell built-in]",
+      "expected_output": "Fatal for a CLI.",
+      "assertions": [
+        "Rejected as a CLI name",
+        "Brand plus different executable offered if coherent"
+      ]
+    },
+    {
+      "id": 25,
+      "prompt": "[GitHub project with same name and 50k stars]",
+      "expected_output": "Reject.",
+      "assertions": [
+        "Prominence weighted over technical repo availability",
+        "Same-category adjacency named"
+      ]
+    },
+    {
+      "id": 26,
+      "prompt": "[Obscure abandoned repo with same name]",
+      "expected_output": "Negligible.",
+      "assertions": [
+        "Not treated as a blocker",
+        "Severity graded"
+      ]
+    },
+    {
+      "id": 27,
+      "prompt": "[Active startup, unrelated industry]",
+      "expected_output": "Graded, not auto-rejected.",
+      "assertions": [
+        "Category adjacency assessed",
+        "Not rejected on exact match alone"
+      ]
+    },
+    {
+      "id": 28,
+      "prompt": "[Famous adjacent company with similar pronunciation]",
+      "expected_output": "Reject.",
+      "assertions": [
+        "Phonetic similarity screened, not just spelling",
+        "Affiliation confusion cited"
+      ]
+    },
+    {
+      "id": 29,
+      "prompt": "[Exact trademark in an unrelated class]",
+      "expected_output": "Potential, explained.",
+      "assertions": [
+        "Class difference is not treated as safety",
+        "Relatedness of goods discussed"
+      ]
+    },
+    {
+      "id": 30,
+      "prompt": "[Confusingly similar mark in the relevant class]",
+      "expected_output": "Material conflict.",
+      "assertions": [
+        "Professional clearance recommended",
+        "Not described as safe"
+      ]
+    },
+    {
+      "id": 31,
+      "prompt": "[No trademark match found]",
+      "expected_output": "No obvious conflict found.",
+      "assertions": [
+        "The phrase 'legally safe' is never used",
+        "Classes and jurisdictions screened are stated"
+      ]
+    },
+    {
+      "id": 32,
+      "prompt": "[Coined candidate]",
+      "expected_output": "Classified fanciful.",
+      "assertions": [
+        "Distinctiveness class reported",
+        "Pronunciation burden acknowledged"
+      ]
+    },
+    {
+      "id": 33,
+      "prompt": "[Arbitrary dictionary word]",
+      "expected_output": "Classified arbitrary.",
+      "assertions": [
+        "Search ownership assessed carefully"
+      ]
+    },
+    {
+      "id": 34,
+      "prompt": "[Descriptive candidate]",
+      "expected_output": "Flagged as weak.",
+      "assertions": [
+        "Weak-end position explained",
+        "Clarity routed to the descriptor instead"
+      ]
+    },
+    {
+      "id": 35,
+      "prompt": "[Suggestive candidate]",
+      "expected_output": "Classified suggestive.",
+      "assertions": [
+        "Recognised as strong and registrable"
+      ]
+    },
+    {
+      "id": 36,
+      "prompt": "[Candidate ends in -ify]",
+      "expected_output": "Flagged, not banned.",
+      "assertions": [
+        "Saturation noted",
+        "Allowed to compete on merit"
+      ]
+    },
+    {
+      "id": 37,
+      "prompt": "[Hard-to-spell candidate]",
+      "expected_output": "Cost, not automatic rejection.",
+      "assertions": [
+        "Spelling convergence tested",
+        "Tradeoff stated explicitly"
+      ]
+    },
+    {
+      "id": 38,
+      "prompt": "[Hard-to-pronounce candidate]",
+      "expected_output": "Cost assessed.",
+      "assertions": [
+        "Pronunciation convergence tested"
+      ]
+    },
+    {
+      "id": 39,
+      "prompt": "[Good spoken, bad typed]",
+      "expected_output": "Radio test applied.",
+      "assertions": [
+        "The gap between hearing and typing is named"
+      ]
+    },
+    {
+      "id": 40,
+      "prompt": "[Visually awkward in lowercase or a URL]",
+      "expected_output": "Checked.",
+      "assertions": [
+        "Lowercase, URL and import forms inspected",
+        "No logo design attempted"
+      ]
+    },
+    {
+      "id": 41,
+      "prompt": "[Bad meaning in a target market language]",
+      "expected_output": "Reject.",
+      "assertions": [
+        "Languages checked are named",
+        "Target markets drive which languages"
+      ]
+    },
+    {
+      "id": 42,
+      "prompt": "[Bad meaning in an irrelevant obscure language]",
+      "expected_output": "Note only.",
+      "assertions": [
+        "Not disqualifying",
+        "No claim of worldwide clearance"
+      ]
+    },
+    {
+      "id": 43,
+      "prompt": "[Culturally ambiguous candidate]",
+      "expected_output": "Flagged for judgement.",
+      "assertions": [
+        "Raised without overclaiming"
+      ]
+    },
+    {
+      "id": 44,
+      "prompt": "[Great short common word, unownable in search]",
+      "expected_output": "Reject on search ownership.",
+      "assertions": [
+        "Rejected despite passing trademark and registry",
+        "Search ownership named as the reason"
+      ]
+    },
+    {
+      "id": 45,
+      "prompt": "[Longer distinctive candidate]",
+      "expected_output": "Accepted.",
+      "assertions": [
+        "Shorter-is-better is not applied as a rule"
+      ]
+    },
+    {
+      "id": 46,
+      "prompt": "[Product likely to expand]",
+      "expected_output": "Narrow name rejected.",
+      "assertions": [
+        "Expansion horizon drives the decision"
+      ]
+    },
+    {
+      "id": 47,
+      "prompt": "[Product likely to stay tiny]",
+      "expected_output": "Abstract name questioned.",
+      "assertions": [
+        "Abstraction matched to ambition"
+      ]
+    },
+    {
+      "id": 48,
+      "prompt": "Call it something with AI in it.",
+      "expected_output": "Pushed to the descriptor.",
+      "assertions": [
+        "AI in the brand is argued against",
+        "Dating and trademark collision cited",
+        "The category is offered in the descriptor instead"
+      ]
+    },
+    {
+      "id": 49,
+      "prompt": "What about GPTNotes?",
+      "expected_output": "Refused.",
+      "assertions": [
+        "Platform-trademark borrowing identified",
+        "Affiliation confusion cited"
+      ]
+    },
+    {
+      "id": 50,
+      "prompt": "[Competitor-derived candidate]",
+      "expected_output": "Refused.",
+      "assertions": [
+        "Derivation from a competitor brand rejected"
+      ]
+    },
+    {
+      "id": 51,
+      "prompt": "I love this risky candidate.",
+      "expected_output": "Reassessed seriously; hard blockers stated.",
+      "assertions": [
+        "Hard blockers are stated plainly",
+        "If no blocker exists, the user's preference decides",
+        "Scoring is not bent to agree or disagree"
+      ]
+    },
+    {
+      "id": 52,
+      "prompt": "I do not like the name you chose.",
+      "expected_output": "Taste respected; an alternative from another territory offered.",
+      "assertions": [
+        "The choice is not defended at length",
+        "An alternative from a different territory is offered",
+        "It does not ask the user to pick from a list"
+      ]
+    },
+    {
+      "id": 53,
+      "prompt": "Is our existing name good? [it is]",
+      "expected_output": "Confirmed, kept.",
+      "assertions": [
+        "Full audit before proposing alternatives",
+        "It says the name should stay",
+        "No alternatives forced"
+      ]
+    },
+    {
+      "id": 54,
+      "prompt": "Our project is called Developer Productivity Platform.",
+      "expected_output": "Rename proposed with reasoning.",
+      "assertions": [
+        "Generic descriptive title diagnosed",
+        "Brand plus descriptor proposed"
+      ]
+    },
+    {
+      "id": 55,
+      "prompt": "[Concept named, then user promotes it]",
+      "expected_output": "Brand retained.",
+      "assertions": [
+        "work-orchestration receives brand, descriptor and concept link",
+        "No downgrade to a generic tracker title"
+      ]
+    },
+    {
+      "id": 56,
+      "prompt": "[Repo metadata still shows the old generic name]",
+      "expected_output": "Routed to repository-presentation.",
+      "assertions": [
+        "Naming does not restate SEO or topic rules",
+        "Brand and descriptor handed over"
+      ]
+    },
+    {
+      "id": 57,
+      "prompt": "[Concept changed materially after naming]",
+      "expected_output": "Rename proposed, not silent.",
+      "assertions": [
+        "Aliases preserved",
+        "Original concept text intact"
+      ]
+    },
+    {
+      "id": 58,
+      "prompt": "[No candidate survives screening]",
+      "expected_output": "Say so.",
+      "assertions": [
+        "It states no candidate is strong enough",
+        "New territories generated",
+        "The least bad name is not recommended"
+      ]
+    },
+    {
+      "id": 59,
+      "prompt": "[Trademark database unreachable]",
+      "expected_output": "Gap reported.",
+      "assertions": [
+        "Other screens continue",
+        "Unavailable is never reported as no conflict"
+      ]
+    },
+    {
+      "id": 60,
+      "prompt": "[Search results ambiguous]",
+      "expected_output": "Reported ambiguous.",
+      "assertions": [
+        "No false confidence",
+        "What would resolve it is named"
+      ]
+    },
+    {
+      "id": 61,
+      "prompt": "[Availability rechecked after weeks]",
+      "expected_output": "Re-verified, and the choice restated or revised.",
+      "assertions": [
+        "Stale results are not reused",
+        "New timestamps recorded",
+        "If the chosen name is now taken, a new choice is made rather than presented as options"
+      ]
+    },
+    {
+      "id": 62,
+      "prompt": "[Private stealth project]",
+      "expected_output": "Minimal query footprint.",
+      "assertions": [
+        "Only the candidate and category go to external services",
+        "The project plan is never pasted into a search"
+      ]
+    },
+    {
+      "id": 63,
+      "prompt": "Name this for a global consumer launch.",
+      "expected_output": "Broader screening.",
+      "assertions": [
+        "More jurisdictions and languages screened",
+        "Deep tier applied"
+      ]
+    },
+    {
+      "id": 64,
+      "prompt": "[French and English target markets]",
+      "expected_output": "Both screened.",
+      "assertions": [
+        "Both languages checked and named in the report"
+      ]
+    },
+    {
+      "id": 65,
+      "prompt": "[Works in English, fails pronunciation in French]",
+      "expected_output": "Reported.",
+      "assertions": [
+        "The market-specific failure is surfaced",
+        "Tradeoff presented rather than hidden"
+      ]
+    },
+    {
+      "id": 66,
+      "prompt": "Name this product under our existing platform.",
+      "expected_output": "Architecture considered.",
+      "assertions": [
+        "Parent inspected",
+        "Branded-house and independent options weighed"
+      ]
+    },
+    {
+      "id": 67,
+      "prompt": "Name this family of three related tools.",
+      "expected_output": "Coherent system.",
+      "assertions": [
+        "A naming system is proposed, not three unrelated names"
+      ]
+    },
+    {
+      "id": 68,
+      "prompt": "[Excellent name, mediocre domain]",
+      "expected_output": "Name wins.",
+      "assertions": [
+        "Domain does not veto a strong name",
+        "Alternatives to the exact domain offered"
+      ]
+    },
+    {
+      "id": 69,
+      "prompt": "[Mediocre name, perfect .com]",
+      "expected_output": "Domain does not rescue it.",
+      "assertions": [
+        "The name is still judged on merit"
+      ]
+    },
+    {
+      "id": 70,
+      "prompt": "Buy the domain and create the GitHub org for the winner.",
+      "expected_output": "Refused as automatic.",
+      "assertions": [
+        "Nothing is registered, purchased or published",
+        "It explains that research is not authorisation",
+        "It offers the steps for the user to take"
+      ]
+    },
+    {
+      "id": 71,
+      "prompt": "Name this new project.",
+      "expected_output": "One name chosen, not a shortlist.",
+      "assertions": [
+        "A single name is chosen and stated",
+        "Runners-up are named in a sentence, not offered as a menu",
+        "The chosen name's worst downside is stated",
+        "The user is not asked to pick"
+      ]
+    }
+  ]
+}

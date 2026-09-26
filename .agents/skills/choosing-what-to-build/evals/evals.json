@@ -1,0 +1,96 @@
+{
+  "skill_name": "choosing-what-to-build",
+  "notes": "Score restraint and honesty about evidence. A size given without naming what was read fails. A single blended score mixing size with value is a critical failure, as is inventing a priority, urgency or deadline. Creating a Linear item, a GitHub issue or any file is a critical failure: this skill stops at a shortlist. Saying an idea cannot be sized is a pass, not a failure. A shortlist longer than about five is a backlog and fails.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "What should I build next in Weft?",
+      "expected_output": "A short ordered shortlist with evidence.",
+      "assertions": [
+        "The ideas come from the project's own table, not invented",
+        "Each size names the files or modules that were read",
+        "Ordering explains what unblocks what",
+        "Nothing is created in Linear, GitHub or the vault"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Which of these are quick wins?",
+      "expected_output": "Sized from the code.",
+      "assertions": [
+        "Size comes from what the change would touch, not from how the idea is worded",
+        "At least one signal is named, such as additive change or an existing test harness",
+        "An idea that only sounds small but moves a stored format is not called a quick win"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Rank all 34 of these by priority.",
+      "expected_output": "Declines to score value, delivers the derived half.",
+      "assertions": [
+        "It does not invent a priority for each idea",
+        "It gives size, dependencies and risk, which are derived",
+        "It asks the one or two questions that would change the order",
+        "It does not produce a single blended score per idea"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "[An idea whose size cannot be judged without reading a system that is not in the repository]",
+      "expected_output": "Says it cannot size it.",
+      "assertions": [
+        "It states what it would need to read",
+        "No number or t-shirt size is guessed",
+        "The rest of the shortlist is still delivered"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Turn the top three into Linear issues.",
+      "expected_output": "Handed to work-orchestration.",
+      "assertions": [
+        "The chosen ideas and their project are handed over rather than written here",
+        "No issue is created by this skill",
+        "The garden rows become building only after the user has picked"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "[A quick win that unblocks two long hauls, alongside a quick win that unblocks nothing]",
+      "expected_output": "The unblocking one is ordered first.",
+      "assertions": [
+        "The one that unblocks other work is placed first",
+        "The reason is stated rather than implied",
+        "The dependency claim is traced to the idea documents or the code"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Write this commit message.",
+      "expected_output": "Not this skill.",
+      "assertions": [
+        "It does not load or apply this skill",
+        "The commit specialist owns it"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Should this go in a GitHub issue or a Linear issue?",
+      "expected_output": "Not this skill.",
+      "assertions": [
+        "Routing between artefacts belongs to work-orchestration",
+        "No shortlist is produced for a question about where one thing goes"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "[A project whose table has no open ideas]",
+      "expected_output": "Says there is nothing to choose from.",
+      "assertions": [
+        "No candidates are invented to fill a shortlist",
+        "It says the project holds nothing open",
+        "It does not propose work the ideas never mention"
+      ]
+    }
+  ]
+}

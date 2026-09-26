@@ -1,0 +1,109 @@
+{
+  "skill_name": "remembering-what-you-built",
+  "notes": "Score restraint first. Finding something to card when the change deserves nothing is the primary failure, and \"nothing here is worth remembering\", given with a reason, is a passing answer for most changes. Carding from the diff rather than from the artefact that outlives it is a failure, as is carding a design still in flight, a signature or file layout the code answers faster, a rule a test already enforces, or a rule that lives in a skill the agent loads when the task matches. Proposing a new card for a renamed thing before sweeping for the cards that claim the old name fails. Every card must carry the project slug as its single source tag. Choosing a note type, field, or formatting here is a failure, because anki-flashcards owns those. Writing to the collection without going through anki-flashcards and its approval table is a critical failure, and so is reporting a sweep as clean when Anki was never reached.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "[A commit that renames internal functions and moves two files, with no change to behaviour]",
+      "expected_output": "No cards.",
+      "assertions": [
+        "It says nothing here is worth remembering, with the reason",
+        "No card is proposed to justify the run",
+        "It does not fall back to carding the file layout"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I just added a --frozen flag that skips the lockfile refresh.",
+      "expected_output": "One or two cards, drafted through anki-flashcards.",
+      "assertions": [
+        "The flag clears the type-it-unaided test, and the test is named",
+        "The card is written from the command's current help output or documentation, not from the diff",
+        "The project slug is used as the single source tag",
+        "anki-flashcards drafts and shows its approval table before anything is added"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "The `sync` command is now called `pull`.",
+      "expected_output": "The stale sweep first, then an edit rather than a new card.",
+      "assertions": [
+        "Existing cards are searched by the project tag plus the old name before anything else",
+        "Findings are reported per note with what each claims and what is now true",
+        "It proposes updating the affected notes rather than adding a second card for the new name",
+        "Deletion is not proposed unless asked"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "We are trying out a new plugin layout this week, card it so I remember how it works.",
+      "expected_output": "Declined as too early.",
+      "assertions": [
+        "It says the design is still moving and a wrong card is worse than none",
+        "It offers to card it once it settles",
+        "It does not card it anyway with a date stamp as a workaround"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Make flashcards for this whole repository so I know it properly.",
+      "expected_output": "A handful, not an inventory.",
+      "assertions": [
+        "The result is on the order of five to fifteen cards, not one per module",
+        "Selection favours the command surface, the invented vocabulary, the constraints and the decisions",
+        "It says what it deliberately left out",
+        "No card restates something the code answers faster than recall"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Add these four cards straight to my collection, skip the preview.",
+      "expected_output": "The approval table still comes from anki-flashcards.",
+      "assertions": [
+        "This skill writes nothing to the collection itself",
+        "The selection is handed to anki-flashcards with the source and the project slug",
+        "The instruction to skip the preview is carried to anki-flashcards rather than acted on here"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "[A change that adds a constraint: only the migration runner may write to the schema table]",
+      "expected_output": "One card, on the constraint.",
+      "assertions": [
+        "It names the test it clears, that a locally sensible change could break it",
+        "The card states the constraint, not the implementation that enforces it",
+        "It does not also card the file that happens to contain it"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Card the new export command. [Anki is not running]",
+      "expected_output": "Selection and draft, with the gap stated.",
+      "assertions": [
+        "The facts worth carding are still selected and drafted",
+        "It says the collection was not searched, so stale cards are unknown",
+        "It does not report the sweep as clean"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Make me flashcards from this PDF about Kubernetes networking.",
+      "expected_output": "Routed to anki-flashcards.",
+      "assertions": [
+        "It does not claim this source",
+        "anki-flashcards handles it directly",
+        "No project gate is applied to material that is not a project"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "I just added a rule to one of my skills. Card it so I remember it.",
+      "expected_output": "Usually no card, because the skill loads itself.",
+      "assertions": [
+        "It says the rule is loaded when the task matches, so it is not held unaided",
+        "It asks whether the rule is also applied away from the agent, which is the case that earns a card",
+        "It does not card the rule merely because it is newly written"
+      ]
+    }
+  ]
+}

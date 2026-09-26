@@ -1,0 +1,74 @@
+[
+  {
+    "deckName": "Computer Science::Software Engineering::Python::uv",
+    "modelName": "Q&A (for a tool)",
+    "notes": [
+      {
+        "fields": {
+          "Tool": "uv",
+          "Front": "What does the <code>--frozen</code> option do when using <code>uv run</code>?",
+          "Back": "Run without updating the lockfile."
+        },
+        "tags": ["uv-docs"]
+      },
+      {
+        "fields": {
+          "Tool": "Vim",
+          "Front": "What is the difference between a temporary setting and a permanent setting in Vim?",
+          "Back": "A temporary setting (e.g., <code>:set number</code>) is lost when Vim closes. A permanent setting is written to vimrc and persists across sessions."
+        },
+        "tags": ["config"]
+      },
+      {
+        "fields": {
+          "Tool": "Dagster",
+          "Front": "Which tool is used to quickly scaffold a Python package containing a Dagster <code>Definitions</code> object?",
+          "Back": "The <code>create-dagster</code> CLI."
+        },
+        "tags": ["dagster-docs"]
+      }
+    ]
+  },
+  {
+    "deckName": "Computer Science::Data Science::Causal Inference",
+    "modelName": "Q&A by topic",
+    "notes": [
+      {
+        "fields": {
+          "Topic": "Causal Inference",
+          "Front": "Why can ML models not answer causal questions?",
+          "Back": "ML is about prediction and correlation, not causal structure. It cannot handle inverse causality, like low prices being associated with low hotel sales during off-season."
+        },
+        "tags": ["causal-inference"]
+      },
+      {
+        "fields": {
+          "Topic": "Bot Detection",
+          "Front": "Which tool uses the WebDriver protocol?",
+          "Back": "Selenium WebDriver."
+        },
+        "tags": ["webdriver-tools"]
+      }
+    ]
+  },
+  {
+    "deckName": "Computer Science::Software Engineering::Python::pytest",
+    "modelName": "Cloze by topic",
+    "notes": [
+      {
+        "fields": {
+          "Topic": "pytest",
+          "Text": "A <code>scope=\"module\"</code> fixture defined in {{c1::conftest.py}} is {{c1::shared by all test modules}} in that directory."
+        },
+        "tags": ["pytest-docs"]
+      },
+      {
+        "fields": {
+          "Topic": "Physics",
+          "Text": "In the metric system, the prefix {{c1::deci-}} means {{c2::1/10}}."
+        },
+        "tags": ["si-prefixes"]
+      }
+    ]
+  }
+]

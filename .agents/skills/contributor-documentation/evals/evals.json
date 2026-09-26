@@ -1,0 +1,61 @@
+{
+  "skill_name": "contributor-documentation",
+  "notes": "Score whether a newcomer could actually get a working environment, and whether content sits in the file GitHub surfaces it from.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Write CONTRIBUTING.md for this repository.",
+      "expected_output": "A short actionable file: prerequisites, setup, validation commands, where work is tracked, how to submit.",
+      "assertions": [
+        "Every command is verified against package.json rather than written from memory",
+        "A newcomer could get a working environment from the file alone",
+        "Detailed standards are linked rather than inlined",
+        "No agent-only instruction appears",
+        "Security reporting is not placed in this file"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Put our commit conventions, PR conventions, and ADR rules into CONTRIBUTING so contributors follow them.",
+      "expected_output": "The externally observable contract summarised in a few lines, with the operational detail left in the skills.",
+      "assertions": [
+        "It summarises the contract rather than reproducing the skill content",
+        "It does not paste message patterns, cohesion tests, or accuracy rules",
+        "It may reference .claude/skills once for contributors using Claude Code",
+        "A contributor not using Claude Code is not asked to learn agent machinery"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Add a section to CONTRIBUTING explaining how to report a security vulnerability.",
+      "expected_output": "Routed to SECURITY.md, which is where GitHub surfaces it.",
+      "assertions": [
+        "It proposes SECURITY.md rather than a CONTRIBUTING section",
+        "It explains that GitHub surfaces that file specifically",
+        "CONTRIBUTING may carry a one-line pointer at most"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Our CONTRIBUTING repeats the whole README, including the project description and quick start.",
+      "expected_output": "Duplication removed, with one authoritative copy of each fact.",
+      "assertions": [
+        "The duplicated project description and quick start are removed from CONTRIBUTING",
+        "It states which file is authoritative for each",
+        "The README keeps a one-line invitation and a link",
+        "Nothing unique to CONTRIBUTING is lost in the process"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "I maintain 14 public repositories and want consistent contribution and security docs across all of them.",
+      "expected_output": "The account-level .github repository, with the licence exception noted.",
+      "assertions": [
+        "It proposes a public .github repository at the account level",
+        "It lists which files can be defaulted",
+        "It notes that a licence cannot be defaulted and needs to exist per repository",
+        "It states that a repository's own file always wins over the default"
+      ]
+    }
+  ]
+}

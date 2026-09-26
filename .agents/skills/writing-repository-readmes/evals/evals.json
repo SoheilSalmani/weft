@@ -1,0 +1,142 @@
+{
+  "skill_name": "writing-repository-readmes",
+  "notes": "Score comprehension of the first screen and correctness of information authority, not prose polish. No run may edit repository settings. Cases 8 and 9 are the mandatory restraint tests.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Write a README for this library. It parses ISO 8601 durations in TypeScript.",
+      "expected_output": "A short README: one-liner naming the category, install, one example with input and output, licence. No invented sections.",
+      "assertions": [
+        "The first sentence names the category and the language",
+        "There is exactly one representative example",
+        "No section exists that a first-time visitor would skip",
+        "No table of contents is added",
+        "No superlative appears without evidence"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Improve the README. It opens with 400 words of project history and eight badges before saying what the tool does.",
+      "expected_output": "The first screen reordered to name, one-liner, quick start; history relocated; badges cut to the few that answer a question.",
+      "assertions": [
+        "The opening sentence states what the project is",
+        "Project history is moved rather than deleted, with a destination named",
+        "Badges are reduced, with a reason given for the cuts",
+        "The response says what moved where"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Our README has 2,000 lines of API reference in it. Clean it up.",
+      "expected_output": "Reference relocated to generated documentation or docs/, with a link and one example kept.",
+      "assertions": [
+        "The reference is not left inline",
+        "A destination is proposed before anything is removed",
+        "The README keeps one worked example and a descriptive link",
+        "Nothing unique is deleted without a home"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Add the install commands to the README.",
+      "expected_output": "Commands read from package.json and the actual scripts, not written from memory.",
+      "assertions": [
+        "It inspects package.json or the scripts before writing commands",
+        "Every command it writes exists in the repository",
+        "The package manager matches what the repository actually uses",
+        "It does not invent a command that would fail on first run"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "This is a private internal repository. Make the README great, add topics and a star call to action.",
+      "expected_output": "The mode is detected and the public-facing requests are declined with a reason.",
+      "assertions": [
+        "It detects that the repository is private",
+        "It declines the star call to action and explains why",
+        "It notes that topics do nothing for a private repository",
+        "It still improves comprehension for an internal reader",
+        "It offers the public-mode items as recommendations for publication"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Add a section asking people to star the repo and follow me so they get notified about new releases.",
+      "expected_output": "A single conditional star line, and a follow line that does not claim release notifications.",
+      "assertions": [
+        "It does not write that following provides release notifications",
+        "It names watching the repository as the actual mechanism for releases",
+        "The star invitation appears once, after the value is shown",
+        "The wording is conditional rather than guilt-based",
+        "The maintainer profile is resolved from the platform rather than guessed"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "The README says the project needs Node 20 but package.json pins Node 24. Also three doc links 404.",
+      "expected_output": "Both corrected against the repository, with the stale claim removed rather than preserved.",
+      "assertions": [
+        "The version claim is corrected from package.json",
+        "The broken links are identified by checking, not assumed",
+        "Broken links are repaired or removed, not left",
+        "It does not preserve the incorrect statement for historical reasons"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Improve this README. [A README with a clear one-liner, a working quick start, descriptive doc links, and no hype.]",
+      "expected_output": "Little or no change, and a statement that it is already good.",
+      "assertions": [
+        "No structural rewrite is performed",
+        "At most a few specific improvements are proposed",
+        "It says explicitly that the README is already effective",
+        "It does not add sections for completeness"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Make the README rank better on Google for 'best AI agent framework'.",
+      "expected_output": "A refusal to keyword-stuff, with an explanation of what is actually controllable.",
+      "assertions": [
+        "It does not repeat the phrase through the README",
+        "It notes that GitHub search does not read the README anyway",
+        "It distinguishes what is controllable from what is not",
+        "It declines to claim a ranking outcome",
+        "If the phrase misdescribes the project, it says so"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "This project is deprecated in favour of a successor. Update the README.",
+      "expected_output": "Deprecation and the migration path above everything else.",
+      "assertions": [
+        "The deprecation notice is the first thing in the file",
+        "The replacement is named and linked",
+        "Migration guidance is linked if it exists",
+        "The rest of the README is not deleted"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Our README is just the project name and a link to docs.example.com. That is intentional, the docs site has everything.",
+      "expected_output": "Enough local context restored to evaluate the project before clicking, without duplicating the docs site.",
+      "assertions": [
+        "It restores at least a one-line description of what the project is and who it is for",
+        "It explains that a visitor cannot decide whether the click is worth making",
+        "It does not copy the documentation site into the README",
+        "The docs link survives, with descriptive text"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "The README links to docs.oldproject.io for the API reference and that domain no longer exists.",
+      "expected_output": "A search for where it moved, then either restoration or removal, never a guessed URL.",
+      "assertions": [
+        "It checks whether the content moved before concluding it is gone",
+        "It does not invent a replacement URL",
+        "It either restores the necessary content locally or removes the link and the sentence depending on it",
+        "It does not leave the dead link in place"
+      ]
+    }
+  ]
+}

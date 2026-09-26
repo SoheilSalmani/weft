@@ -1,0 +1,123 @@
+{
+  "skill_name": "tracking-work-in-linear",
+  "notes": "Run with the skill and again without it, in fresh sessions, and compare. Runs must not write to Linear: 'proposes without writing' is an assertion in every case, not a side effect to tolerate.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "we should do something about onboarding, it's not great. can you get that into Linear?",
+      "expected_output": "No object created. Either a small number of clarifying questions, or one proposed outcome offered for confirmation with its unknowns named.",
+      "assertions": [
+        "Nothing is written to Linear",
+        "The response does not invent a scope, a target date, an owner, or a priority",
+        "It either asks what specifically is wrong with onboarding or proposes a single outcome and labels it as a proposal",
+        "If a title is proposed, it names an outcome rather than the topic 'onboarding'"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "File a bug: users with two identity providers get a blank page after the SSO redirect, the API returns 400. Two enterprise tenants hit it in production yesterday. Doesn't happen with one provider. Error is AuthError: ambiguous provider binding.",
+      "expected_output": "A previewed issue with a declarative title naming the wrong behaviour, a body of roughly four lines covering observed, expected, where it was seen, and the error line, and no invented priority or assignee.",
+      "assertions": [
+        "The title is declarative and names the observed failure, not a fix",
+        "The title contains no type prefix, priority, or component tag",
+        "The body states what was observed and what was expected",
+        "Yesterday is converted to an absolute date, or the response says the date was not established",
+        "Priority and assignee are left unset, or the response says explicitly why they were set",
+        "The body has no empty headings and no section that restates the title",
+        "A preview is shown and nothing is written to Linear without approval"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Here's a Linear issue description I wrote. Can you clean it up? [1,200 words containing file paths, a SQL snippet, a migration plan, a test plan, and a section on alternatives considered, describing a fix to search so it includes issues from archived projects]",
+      "expected_output": "A rewritten description of roughly 100 to 150 words covering the observable problem and the constraint, with everything removed relocated explicitly rather than dropped.",
+      "assertions": [
+        "The rewritten description states the observable problem before any implementation detail",
+        "SQL, the test plan, and the migration plan are removed from the Linear description",
+        "The response says where each removed piece should go, naming a pull request, a GitHub issue, an ADR, or a comment",
+        "Nothing factual in the original is silently discarded",
+        "The response does not write the change to Linear without approval"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "We keep going back and forth on whether the database schema is defined by Drizzle or by the hardcoded SQL constant. Can you create a Linear issue to sort this out?",
+      "expected_output": "An issue whose deliverable is an accepted ADR, with the analysis routed to the record rather than into the issue body.",
+      "assertions": [
+        "The response identifies this as an architectural decision that belongs in an ADR",
+        "It proposes a Linear issue whose outcome is an accepted decision record, rather than putting the analysis in the issue",
+        "It references the writing-adrs skill or docs/adr rather than drafting the decision itself",
+        "It does not assert which option is correct as though it were decided"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Create a project in Linear for the work to reduce failed SSO logins for enterprise customers. Aim for end of Q3.",
+      "expected_output": "A previewed project with a one-sentence summary, a short description covering why, success, and scope, a target date at quarter resolution, and unknowns named rather than filled.",
+      "assertions": [
+        "A project summary of one sentence is proposed, and it is distinct from the description",
+        "The description does not contain project status",
+        "The target date uses quarter resolution rather than an invented specific day",
+        "No baseline or target metric is stated as fact unless the user supplied one",
+        "Any milestones proposed are named as states that can become true, not as teams, layers, or phase numbers",
+        "The lead is left unset unless the user named one"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Can you add the Postgres connection pooling work to Linear? It's blocking the migration and Dana said it should be done by the 20th.",
+      "expected_output": "A previewed issue that carries the stated blocker and date, sets a blocked-by relation only if the blocking object can be identified, and asks rather than guessing what it cannot resolve.",
+      "assertions": [
+        "The date from the user is recorded, and the year is either resolved from context or queried rather than assumed silently",
+        "A blocking relationship is proposed only against an object that exists, otherwise the response says which object it could not find",
+        "Dana is not assigned as owner merely because she was mentioned",
+        "The title names the outcome rather than 'Postgres work'",
+        "Unknowns are listed explicitly in the preview"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Can you add a Linear issue for renaming the internal config key AGENT_TIMEOUT_MS to RUN_TIMEOUT_MS? It's used in three places.",
+      "expected_output": "A recommendation that this needs no Linear object, with the pull request offered as the record, and compliance if the user still wants it tracked.",
+      "assertions": [
+        "The response recommends creating no Linear object, or explicitly raises that option first",
+        "It gives the reason: the change is small, self-contained, and has no consequence anyone would ask about later",
+        "It offers the pull request as the place the change is recorded",
+        "It does not refuse outright, and would proceed if the user insisted"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Please improve this Linear issue. Title: 'Accept skill frontmatter that closes with more than three dashes'. Description: 'Skill files whose frontmatter closes with a longer dash run are rejected as malformed, so the skill silently does not load. Accept the longer fence, and cover the malformed case in a test.'",
+      "expected_output": "A statement that the issue is already accurate, current, and readable, and no rewrite.",
+      "assertions": [
+        "The response makes no substantive change to the title or description",
+        "It says explicitly that the object is fine as it stands",
+        "It does not add headings, acceptance criteria, or a context section",
+        "It does not propose a stylistic rephrasing as though it were an improvement"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "File an issue: the onboarding email is landing in spam. Dana thinks it probably affects around 30% of new signups but we haven't measured it.",
+      "expected_output": "An issue that keeps the 30% figure with its status as an unmeasured estimate and its attribution, rather than dropping it or stating it as fact.",
+      "assertions": [
+        "The 30% figure is preserved rather than dropped",
+        "It is marked as an estimate and attributed to Dana, not written as a measured fact",
+        "The response does not add a fabricated measurement method or source",
+        "The title states the observed problem rather than the estimated impact"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Create an issue to replace our custom Redis lock implementation with the standard locking abstraction.",
+      "expected_output": "An issue whose title names the technical change, without an invented user-facing benefit.",
+      "assertions": [
+        "The title names the replacement itself rather than a user outcome",
+        "No user-facing or reliability benefit is asserted unless the user supplied evidence for it",
+        "If a motivation is included, it is attributed or marked as inferred",
+        "The issue is not converted into a project"
+      ]
+    }
+  ]
+}
