@@ -97,7 +97,12 @@ pub fn resync(
             .name_to_id
             .get(name)
             .with_context(|| format!("unknown patch `{name}`"))?;
-        let patch = template.patches.iter().find(|p| p.id == id).unwrap();
+        let patch = template
+            .patches
+            .iter()
+            .find(|p| p.id == id)
+            .filter(|_| !template.is_inherited(name))
+            .with_context(|| format!("patch `{name}` is not one of this template's own patches"))?;
         if patch.meta.generator.is_none() {
             bail!("patch `{name}` has no generator command (it was not recorded with --exec)");
         }
@@ -107,6 +112,7 @@ pub fn resync(
         .iter()
         .filter(|p| p.meta.generator.is_some())
         .filter_map(|p| template.id_to_name.get(&p.id).cloned())
+        .filter(|n| !template.is_inherited(n))
         .filter(|n| opts.all || opts.names.contains(n))
         .collect();
 
@@ -169,19 +175,35 @@ pub fn resync(
             }
         }
 
-        // Base = the ancestor closure of the patch's recorded dependencies.
+        // Base = the ancestor closure of the patch's recorded dependencies,
+        // across frames (a dependency on `web/x` mounts that include).
         let base_ids: std::collections::BTreeSet<_> = patch
             .depends_on
             .iter()
             .flat_map(|dep| template.ancestor_closure(*dep))
+            .filter(|id| {
+                template
+                    .node(*id)
+                    .and_then(|n| template.node_patch(n))
+                    .is_some_and(|p| p.foreach.is_none())
+            })
             .collect();
         let base_patches: Vec<_> = template
             .patches
             .iter()
-            .filter(|p| base_ids.contains(&p.id) && p.foreach.is_none())
+            .filter(|p| base_ids.contains(&p.id))
             .cloned()
             .collect();
-        let base_tree = weft_core::render::render(&base_patches, &answers, &eval)
+        let mut parts = crate::compose::single_parts(
+            &template,
+            &answers,
+            &Default::default(),
+            &Default::default(),
+            &eval,
+            interaction,
+        )?;
+        crate::compose::filter_parts(&mut parts, &base_ids);
+        let base_tree = crate::compose::render_composed(&base_patches, &answers, &parts, &eval)
             .with_context(|| format!("rendering the base of `{name}`"))?;
 
         // Re-run the generator in a scratch worktree.
@@ -198,13 +220,34 @@ pub fn resync(
         )?;
         let keep: std::collections::BTreeSet<_> = base_tree.paths().cloned().collect();
         let work_tree = fsio::read_tree_ignoring(&worktree, &template.ignore, &keep)?;
-        commit::guard_mounts(&template, None, &base_tree, &work_tree)?;
+        commit::guard_instances(&template, None, &base_tree, &work_tree)?;
+        // The patch's dependencies are fixed: output that now lands under an
+        // include's mount the patch doesn't depend on needs re-recording.
+        let active = crate::compose::active_nodes(&base_patches, &answers, &parts, &eval)?;
+        let needed = commit::include_deps(
+            &template, &parts, None, &base_tree, &work_tree, &active, &eval,
+        )?;
+        let missing: Vec<_> = needed
+            .into_iter()
+            .filter(|n| !base_ids.contains(&template.name_to_id[n]))
+            .collect();
+        if !missing.is_empty() {
+            skip(
+                &mut report,
+                format!(
+                    "the command now writes under an include's mount without depending on \
+                     {}; re-record it in a session so the dependency is inferred",
+                    missing.join(", ")
+                ),
+            );
+            continue;
+        }
 
         // Up to date? The existing patch replayed over the base must equal
         // the fresh output byte-for-byte.
         let mut with_existing = base_patches.clone();
         with_existing.push(patch.clone());
-        let existing = weft_core::render::render(&with_existing, &answers, &eval)
+        let existing = crate::compose::render_composed(&with_existing, &answers, &parts, &eval)
             .with_context(|| format!("replaying the current `{name}`"))?;
         if existing.hash() == work_tree.hash() {
             report.entries.push(ResyncEntry {
@@ -252,7 +295,7 @@ pub fn resync(
             weft_core::Patch::new(patch.depends_on.clone(), patch.when.clone(), ops.clone());
         let mut with_new = base_patches.clone();
         with_new.push(candidate);
-        let replayed = weft_core::render::render(&with_new, &answers, &eval)
+        let replayed = crate::compose::render_composed(&with_new, &answers, &parts, &eval)
             .with_context(|| format!("replaying the resynced `{name}`"))?;
         if replayed.hash() != work_tree.hash() {
             skip(
@@ -293,21 +336,31 @@ pub fn resync(
     }
 
     // Post-pass: dependents of a rewritten patch may anchor on content that
-    // changed shape. A full render surfaces exactly which patch broke.
+    // changed shape. A full composed render surfaces exactly which patch
+    // broke.
     if !opts.dry_run {
         let template = Template::load_with(&opts.template, resolver)?;
-        let non_foreach: Vec<_> = template
+        let pinned = crate::start::pin_base(&template, "latest")?;
+        let root: Vec<_> = template
             .patches
             .iter()
-            .filter(|p| p.foreach.is_none())
+            .filter(|p| pinned.contains(&p.id))
             .cloned()
             .collect();
         for (name, answers) in &rewritten {
-            if let Err(e) = weft_core::render::render(&non_foreach, answers, &eval) {
+            let parts = crate::compose::single_parts(
+                &template,
+                answers,
+                &Default::default(),
+                &Default::default(),
+                &eval,
+                interaction,
+            )?;
+            if let Err(e) = crate::compose::render_composed(&root, answers, &parts, &eval) {
                 report.issues.push(format!(
                     "after resyncing `{name}`, the template no longer renders: {e} — a \
                      dependent patch's context anchors moved with the regenerated \
-                     content; re-record that patch (`weft record --base <its name>`)"
+                     content; re-record that patch (`weft session new N --base <its name>`)"
                 ));
             }
         }

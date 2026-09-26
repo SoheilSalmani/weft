@@ -64,6 +64,73 @@ fn identifier_at(line: &str, character: usize) -> Option<(String, usize, usize)>
     Some((line[start..end].to_owned(), start, end))
 }
 
+/// The graph node name around a position: an identifier that may span
+/// `/`-separated include segments (`web/next-config`).
+fn node_name_at(line: &str, character: usize) -> Option<String> {
+    let bytes = line.as_bytes();
+    let is_node = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'/';
+    let pos = character.min(bytes.len());
+    let mut start = pos;
+    while start > 0 && is_node(bytes[start - 1]) {
+        start -= 1;
+    }
+    let mut end = pos;
+    while end < bytes.len() && is_node(bytes[end]) {
+        end += 1;
+    }
+    (start != end).then(|| line[start..end].to_owned())
+}
+
+/// The node under the cursor, by its full name first (`web/x`), then the
+/// bare identifier (`x`): a name and the node it resolves to.
+fn node_at<'t>(
+    template: &'t Template,
+    line: &str,
+    character: usize,
+) -> Option<(String, &'t weft_engine::template::Node)> {
+    let candidates = [
+        node_name_at(line, character),
+        identifier_at(line, character).map(|(w, _, _)| w),
+    ];
+    candidates.into_iter().flatten().find_map(|name| {
+        let id = *template.name_to_id.get(&name)?;
+        Some((name, template.node(id)?))
+    })
+}
+
+/// The on-disk file of a node: `patches/<name>.json` in the template that
+/// owns it — the extended template for an inherited patch, the child
+/// template (through the include chain) for an include node.
+fn node_file(template: &Template, node: &weft_engine::template::Node) -> Option<Utf8PathBuf> {
+    use weft_engine::template::NodeKind;
+    match &node.kind {
+        NodeKind::Root(_) => match &template.extends {
+            // Inherited: owned by the base (which may inherit it in turn).
+            Some(ext) if ext.patches.contains(&node.name) => {
+                let base = Template::load(&ext.root).ok()?;
+                let id = *base.name_to_id.get(&node.name)?;
+                node_file(&base, base.node(id)?)
+            }
+            _ => Some(
+                template
+                    .root
+                    .join("patches")
+                    .join(format!("{}.json", node.name)),
+            ),
+        },
+        NodeKind::Child { path, .. } => {
+            let mut owner = template;
+            for include in path {
+                owner = &owner.include(include)?.template;
+            }
+            let stem = node.name.rsplit('/').next()?;
+            let child = owner.name_to_id.get(stem).and_then(|id| owner.node(*id))?;
+            node_file(owner, child)
+        }
+        NodeKind::Instances { .. } => None,
+    }
+}
+
 /// First line in `text` containing `needle`, as an LSP range over the match.
 fn find_range(text: &str, needle: &str) -> Option<Range> {
     for (i, line) in text.lines().enumerate() {
@@ -435,17 +502,42 @@ impl LanguageServer for Backend {
             }));
         }
 
-        // Patch hover (dependency references, or anywhere the name appears).
-        if let Some(id) = template.name_to_id.get(&word) {
-            let patch = template.patches.iter().find(|p| p.id == *id).unwrap();
-            let mut md = format!("**{}** · patch `{}`", word, id.short());
-            if let Some(desc) = &patch.meta.description {
-                md.push_str(&format!("\n\n{desc}"));
+        // Node hover (dependency references, or anywhere the name appears):
+        // a root patch, an include node (`web/x`), or a repeat include.
+        if let Some((name, node)) = node_at(&template, &line, position.character as usize) {
+            use weft_engine::template::NodeKind;
+            let mut md = format!("**{}** · patch `{}`", name, node.id.short());
+            match &node.kind {
+                NodeKind::Root(_) => {
+                    if let Some(ext) = template
+                        .extends
+                        .as_ref()
+                        .filter(|e| e.patches.contains(&name))
+                    {
+                        md.push_str(&format!("\n\ninherited from `{}`", ext.root));
+                    }
+                }
+                NodeKind::Child { path, mount, .. } => {
+                    md.push_str(&format!("\n\nvia include `{}`", path.join("/")));
+                    if !mount.as_str().is_empty() {
+                        md.push_str(&format!(", mounted at `{mount}`"));
+                    }
+                }
+                NodeKind::Instances { include } => {
+                    md.push_str(&format!(
+                        "\n\nevery instance of repeat include `{include}` (reach it with `foreach`)"
+                    ));
+                }
             }
-            if let Some(when) = &patch.when {
-                md.push_str(&format!("\n\napplies when: `{}`", when.as_str()));
+            if let Some(patch) = template.node_patch(node) {
+                if let Some(desc) = &patch.meta.description {
+                    md.push_str(&format!("\n\n{desc}"));
+                }
+                if let Some(when) = &patch.when {
+                    md.push_str(&format!("\n\napplies when: `{}`", when.as_str()));
+                }
+                md.push_str(&format!("\n\n{} op(s)", patch.ops.len()));
             }
-            md.push_str(&format!("\n\n{} op(s)", patch.ops.len()));
             return Ok(Some(Hover {
                 contents: HoverContents::Markup(MarkupContent {
                     kind: MarkupKind::Markdown,
@@ -491,10 +583,9 @@ impl LanguageServer for Backend {
             }
         }
 
-        // Patch name -> its file.
-        if template.name_to_id.contains_key(&word) {
-            let patch_path = root.join("patches").join(format!("{word}.json"));
-            if let Some(url) = path_to_url(&patch_path) {
+        // Node name -> the patch file that defines it (in the owning template).
+        if let Some((_, node)) = node_at(&template, &line, position.character as usize) {
+            if let Some(url) = node_file(&template, node).and_then(|p| path_to_url(&p)) {
                 return Ok(Some(GotoDefinitionResponse::Scalar(Location {
                     uri: url,
                     range: Range::default(),
@@ -610,4 +701,39 @@ pub fn serve() -> anyhow::Result<()> {
         Server::new(stdin, stdout, socket).serve(service).await;
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn workspace() -> Template {
+        let root = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/templates/workspace");
+        Template::load(&root).unwrap()
+    }
+
+    #[test]
+    fn include_node_resolves_to_the_child_patch_file() {
+        let template = workspace();
+        let line = r#"  "depends_on": ["svc/docker"],"#;
+        let col = line.find("docker").unwrap();
+        let (name, node) = node_at(&template, line, col).unwrap();
+        assert_eq!(name, "svc/docker");
+        let file = node_file(&template, node).unwrap();
+        assert!(file.ends_with("hello/patches/docker.json"), "{file}");
+        assert!(file.is_file());
+    }
+
+    #[test]
+    fn bare_name_and_opaque_node() {
+        let template = workspace();
+        let (name, node) = node_at(&template, r#"["base"]"#, 3).unwrap();
+        assert_eq!(name, "base");
+        assert!(node_file(&template, node)
+            .unwrap()
+            .ends_with("workspace/patches/base.json"));
+        let (_, connector) = node_at(&template, "connector", 2).unwrap();
+        assert!(node_file(&template, connector).is_none());
+    }
 }

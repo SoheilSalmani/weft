@@ -105,7 +105,10 @@ pub fn run(
         worktree_root,
     } = session_trees(&template, &opts.session, interaction)?;
     let eval = StarlarkEval;
-    guard_mounts(&template, sess.foreach.as_ref(), &base_tree, &full_work)?;
+    // Edits under a repeat include's instances are only recordable against
+    // the foreach sample; everything else under a mount is legal and becomes
+    // a dependency on the child nodes that own the files (below).
+    guard_instances(&template, sess.foreach.as_ref(), &base_tree, &full_work)?;
     // Refuse impossible options before writing anything: the sibling
     // transition reverts committed paths in the worktree, which on an adopted
     // project would delete the author's own files.
@@ -138,7 +141,7 @@ pub fn run(
     // abstractor must see the sample instance's values under those names.
     // `key` is canonical: instance answers that merely echo the key (e.g. a
     // `service_name = "key"` bind) are dropped so abstraction prefers `key`.
-    let abstractor = match parts.first() {
+    let abstractor = match sess.foreach.as_ref().and_then(|f| sample_of(&parts, f)) {
         Some(part) => {
             let scope = crate::compose::foreach_scope(&answers, &part.instance);
             let key_value = weft_core::Value::String(part.instance.key.clone());
@@ -210,9 +213,11 @@ pub fn run(
             &opts.session,
             &target,
             &base_patches,
+            &parts,
             &answers,
             &work_tree,
             ops,
+            interaction,
         );
     }
 
@@ -221,20 +226,35 @@ pub fn run(
         None => format!("patch-{:03}", template.patches.len() + 1),
     };
     let when = opts.when.clone().map(StarlarkExpr);
-    // Depend only on the *active* leaves of the base: a patch gated off
-    // under the session answers contributed nothing to the recorded state,
-    // and depending on it would gate the new patch off with it.
-    let active_base = active_ids(&base_patches, &answers, &eval)?;
-    let depends_on = match &opts.depends_on {
-        Some(declared) => declared_deps(&template, declared, &active_base)?,
-        None => base_leaves(&template, &active_base),
+    // Depend only on the *active* nodes of the base: a patch gated off under
+    // the session answers contributed nothing to the recorded state, and
+    // depending on it would gate the new patch off with it. Root-frame
+    // leaves by default (or what `--depends-on` names), plus the child nodes
+    // owning any file edited under an include's mount.
+    let active = crate::compose::active_nodes(&base_patches, &answers, &parts, &eval)?;
+    let inferred = include_deps(
+        &template,
+        &parts,
+        sess.foreach.as_ref(),
+        &base_tree,
+        &work_tree,
+        &active,
+        &eval,
+    )?;
+    let mut depends_on = match &opts.depends_on {
+        Some(declared) => declared_deps(&template, declared, &active)?,
+        None => base_leaves(&template, &active),
     };
+    for dep in &inferred {
+        if !depends_on.contains(dep) {
+            depends_on.push(dep.clone());
+        }
+    }
 
     // Validation before writing: the new patch applied to the base must
     // reproduce the worktree byte-for-byte (this also catches ambiguous
     // hunk contexts). Skipped when a `when` gate is false under the
     // session answers.
-    //
     let foreach_include = sess.foreach.as_ref().map(|f| f.include.clone());
     let candidate = weft_core::Patch::new_foreach(
         depends_on.iter().map(|n| template.name_to_id[n]).collect(),
@@ -248,11 +268,12 @@ pub fn run(
     let replayed = crate::compose::render_composed(&with_new, &answers, &parts, &eval)
         .context("replaying the recorded patch against the base state")?;
 
-    // Declared dependencies are a claim of independence from everything else
-    // in the base, so prove it: the patch must also apply against its own
-    // dependency closure alone. A hunk that only anchors because of a sibling
-    // fails here instead of at `weft check` (or in someone's scaffold).
-    if let Some(declared) = &opts.depends_on {
+    // Declared or inferred dependencies are a claim of independence from
+    // everything else in the base, so prove it: the patch must also apply
+    // against its own dependency closure alone. A hunk that only anchors
+    // because of a sibling fails here instead of at `weft check` (or in
+    // someone's scaffold).
+    if opts.depends_on.is_some() || !inferred.is_empty() {
         let closure: BTreeSet<_> = depends_on
             .iter()
             .flat_map(|n| template.ancestor_closure(template.name_to_id[n]))
@@ -263,15 +284,23 @@ pub fn run(
             .cloned()
             .collect();
         alone.push(candidate);
-        if let Err(e) = crate::compose::render_composed(&alone, &answers, &parts, &eval) {
+        let mut alone_parts = parts.clone();
+        crate::compose::filter_parts(&mut alone_parts, &closure);
+        if let Err(e) = crate::compose::render_composed(&alone, &answers, &alone_parts, &eval) {
             bail!(
                 "this patch does not apply with only `{}` in the base: {e}\n\
                  its content anchors on something else in the session's base — \
-                 declare that patch too, or drop --depends-on/--after to depend on \
-                 the base's leaves",
-                declared.join(", ")
+                 declare that patch too with --depends-on, or drop --depends-on/--after \
+                 to depend on the base's leaves",
+                depends_on.join(", ")
             );
         }
+    }
+    if !inferred.is_empty() {
+        eprintln!(
+            "edits under an include's mount: depending on {}",
+            inferred.join(", ")
+        );
     }
     let gate_open = match &when {
         None => true,
@@ -371,6 +400,7 @@ pub fn run(
                 },
                 answers: sess.answers.clone(),
                 secrets: sess.secrets.clone(),
+                instances: sess.instances.clone(),
                 foreach: None,
                 generator: None,
                 amend: None,
@@ -397,40 +427,13 @@ pub fn run(
     Ok(())
 }
 
-/// The subset of ordered patches that actually apply under `answers`
-/// (gates evaluated, skips propagated to dependents) — mirrors render.
-fn active_ids(
-    patches: &[weft_core::Patch],
-    answers: &AnswerSet,
-    eval: &dyn weft_core::render::ExprEval,
-) -> Result<Vec<weft_core::PatchId>> {
-    let mut skipped = std::collections::BTreeSet::new();
-    let mut active = Vec::new();
-    for patch in patches {
-        if patch.depends_on.iter().any(|d| skipped.contains(d)) {
-            skipped.insert(patch.id);
-            continue;
-        }
-        let open = match &patch.when {
-            None => true,
-            Some(expr) => eval.eval_bool(expr, answers)?,
-        };
-        if open {
-            active.push(patch.id);
-        } else {
-            skipped.insert(patch.id);
-        }
-    }
-    Ok(active)
-}
-
-/// Validate `--depends-on` / `--after` names: each must be a patch in the
-/// session's *active* base, since the recorded content was diffed against
-/// exactly that state.
+/// Validate `--depends-on` / `--after` names: each must be a node in the
+/// session's *active* base (a root patch or `<include>/<patch>`), since the
+/// recorded content was diffed against exactly that state.
 fn declared_deps(
     template: &Template,
     declared: &[String],
-    active_base: &[weft_core::PatchId],
+    active_base: &BTreeSet<weft_core::PatchId>,
 ) -> Result<Vec<String>> {
     let mut out = Vec::new();
     for name in declared {
@@ -460,8 +463,9 @@ fn eval_gate(expr: &StarlarkExpr, answers: &AnswerSet) -> Result<bool> {
 }
 
 /// The reconstructed state of the active record session: resolved answers,
-/// the (foreach-filtered) pinned base, the composed base tree, and the
-/// current worktree. Shared by `commit` and `weft diff`.
+/// the pinned base (root patches + mounted single includes, plus the foreach
+/// sample), the composed base tree, and the current worktree. Shared by
+/// `commit` and `weft diff`.
 pub struct SessionTrees<'t> {
     pub sess: Session,
     pub answers: weft_core::AnswerSet,
@@ -480,33 +484,12 @@ pub fn session_trees<'t>(
 ) -> Result<SessionTrees<'t>> {
     let sess = Session::load(&template.root, name)?;
     let eval = StarlarkEval;
-
-    // The base must still be reconstructible from the template.
-    for id in &sess.session.base {
-        if !template.id_to_name.contains_key(id) {
-            bail!(
-                "pinned base patch {} no longer exists in the template; \
-                 the template changed since the session started — start a new one",
-                id.short()
-            );
-        }
-    }
-
     let answers = resolve_session_answers(template, &sess, interaction)?;
-    // Foreach patches never participate in the base (see record.rs) — and
-    // the new patch must not depend on one (graph-leaf rule).
-    let base_patches: Vec<_> = template
-        .patches
-        .iter()
-        .filter(|p| sess.session.base.contains(&p.id) && p.foreach.is_none())
-        .cloned()
-        .collect();
+    let (base_patches, mut parts) = session_base(template, &sess, &answers, interaction)?;
     // A foreach session's base includes the mounted sample instance.
-    let sample = match &sess.foreach {
-        Some(f) => Some(crate::start::sample_part(template, f, &eval, interaction)?),
-        None => None,
-    };
-    let parts: Vec<_> = sample.into_iter().collect();
+    if let Some(f) = &sess.foreach {
+        parts.push(crate::start::sample_part(template, f, &eval, interaction)?);
+    }
     let full_base = crate::compose::render_composed(&base_patches, &answers, &parts, &eval)
         .context("re-rendering base state")?;
     if full_base.hash() != sess.session.tree_hash {
@@ -539,6 +522,80 @@ pub fn session_trees<'t>(
         work_tree,
         worktree_root,
     })
+}
+
+/// A session's pinned base as (root patches, single-include parts): every
+/// pinned node must still exist in the template; the mounted includes are
+/// rebuilt from the stored child answers (secrets re-resolved from their
+/// references) and cut down to the pinned nodes. Shared by commit, refresh,
+/// and amend.
+pub(crate) fn session_base<'t>(
+    template: &'t Template,
+    sess: &Session,
+    answers: &AnswerSet,
+    interaction: &mut dyn Interaction,
+) -> Result<(Vec<weft_core::Patch>, Vec<crate::compose::ComposedPart<'t>>)> {
+    for id in &sess.session.base {
+        if template.node(*id).is_none() {
+            bail!(
+                "pinned base patch {} no longer exists in the template; \
+                 the template changed since the session started — start a new one",
+                id.short()
+            );
+        }
+    }
+    let pinned: BTreeSet<_> = sess.session.base.iter().copied().collect();
+    // Foreach patches never participate in a base — the new patch must not
+    // depend on one (graph-leaf rule).
+    let base_patches: Vec<_> = template
+        .patches
+        .iter()
+        .filter(|p| pinned.contains(&p.id) && p.foreach.is_none())
+        .cloned()
+        .collect();
+    for inc in template.includes.iter().filter(|i| !i.decl.repeat) {
+        if !sess.instances.iter().any(|i| i.include == inc.decl.name) {
+            bail!(
+                "include `{}` was added to the template after this session started; \
+                 start a new one",
+                inc.decl.name
+            );
+        }
+    }
+    let mut provided = std::collections::BTreeMap::new();
+    let mut presolved = std::collections::BTreeMap::new();
+    for inst in &sess.instances {
+        let inc = template.include(&inst.include).with_context(|| {
+            format!(
+                "include `{}` no longer exists in the template; start a new session",
+                inst.include
+            )
+        })?;
+        let mut secrets = AnswerSet::new();
+        resolve_secret_refs(&inc.template, &inst.secrets, &mut secrets, interaction)?;
+        provided.insert(inst.include.clone(), inst.answers.clone());
+        presolved.insert(inst.include.clone(), secrets);
+    }
+    let mut parts = crate::compose::single_parts(
+        template,
+        answers,
+        &provided,
+        &presolved,
+        &StarlarkEval,
+        interaction,
+    )?;
+    crate::compose::filter_parts(&mut parts, &pinned);
+    Ok((base_patches, parts))
+}
+
+/// The foreach sample part of a session, if mounted.
+fn sample_of<'p, 't>(
+    parts: &'p [crate::compose::ComposedPart<'t>],
+    f: &crate::session::ForeachSession,
+) -> Option<&'p crate::compose::ComposedPart<'t>> {
+    parts
+        .iter()
+        .find(|p| p.instance.repeat && p.instance.include == f.include && p.instance.key == f.key)
 }
 
 /// One changed file in a session preview.
@@ -648,65 +705,181 @@ pub fn preview_target(
     })
 }
 
-/// Recording captures *this* template's patches only. Reject edits that
-/// land under an include's mount: those files belong to the child template
-/// (for foreach sessions, the sample instance's mount; otherwise every
-/// include's static mount prefix — the declared path up to `{key}`).
-/// Shared with `weft patch resync` (which never has a foreach session).
-pub(crate) fn guard_mounts(
+/// The paths that differ between two trees (content or mode).
+fn changed_between<'a>(
+    base_tree: &'a weft_core::Tree,
+    work_tree: &'a weft_core::Tree,
+) -> Vec<&'a camino::Utf8PathBuf> {
+    let mut paths: std::collections::BTreeSet<&camino::Utf8PathBuf> = Default::default();
+    paths.extend(base_tree.paths());
+    paths.extend(work_tree.paths());
+    paths
+        .into_iter()
+        .filter(|path| match (base_tree.get(path), work_tree.get(path)) {
+            (Some(b), Some(w)) => b.content != w.content || b.mode != w.mode,
+            (None, None) => false,
+            _ => true,
+        })
+        .collect()
+}
+
+/// Is `path` at or under `mount`? (An empty mount is the root.)
+fn under_mount(path: &camino::Utf8Path, mount: &camino::Utf8Path) -> bool {
+    mount.as_str().is_empty() || path.starts_with(mount)
+}
+
+/// A repeat include's instances are project-time: no template patch can
+/// name one, so edits under their static prefix (the declared path up to
+/// `{key}`) are only recordable in a `--foreach` session for that include —
+/// against the sample mount, where the key abstracts back out. Shared with
+/// `weft patch resync` (which never has a foreach session).
+pub(crate) fn guard_instances(
     template: &Template,
     foreach: Option<&crate::session::ForeachSession>,
     base_tree: &weft_core::Tree,
     work_tree: &weft_core::Tree,
 ) -> Result<()> {
-    if template.includes.is_empty() {
-        return Ok(());
-    }
-    let mut prefixes: Vec<(String, camino::Utf8PathBuf)> = Vec::new();
-    match foreach {
-        Some(f) => {
-            let inc = template.include(&f.include).context("include vanished")?;
-            prefixes.push((
-                f.include.clone(),
-                crate::compose::mount_path(&inc.decl.path, &f.key)?,
-            ));
-        }
-        None => {
-            for inc in &template.includes {
-                let static_prefix = match inc.decl.path.split_once("{key}") {
-                    Some((head, _)) => head.trim_end_matches('/').to_owned(),
-                    None => inc.decl.path.clone(),
-                };
-                if !static_prefix.is_empty() {
-                    prefixes.push((inc.decl.name.clone(), static_prefix.into()));
-                }
-            }
-        }
-    }
-    let changed = |path: &camino::Utf8PathBuf| -> bool {
-        match (base_tree.get(path), work_tree.get(path)) {
-            (Some(b), Some(w)) => b.content != w.content || b.mode != w.mode,
-            (None, None) => false,
-            _ => true,
-        }
-    };
-    let mut paths: std::collections::BTreeSet<&camino::Utf8PathBuf> = Default::default();
-    paths.extend(base_tree.paths());
-    paths.extend(work_tree.paths());
-    for path in paths {
-        if !changed(path) {
-            continue;
-        }
+    let prefixes: Vec<(&str, camino::Utf8PathBuf)> = template
+        .includes
+        .iter()
+        .filter(|inc| inc.decl.repeat && foreach.is_none_or(|f| f.include != inc.decl.name))
+        .filter_map(|inc| {
+            let head = inc.decl.path.split_once("{key}")?.0.trim_end_matches('/');
+            (!head.is_empty()).then(|| (inc.decl.name.as_str(), head.into()))
+        })
+        .collect();
+    for path in changed_between(base_tree, work_tree) {
         for (include, prefix) in &prefixes {
             if path.starts_with(prefix) {
                 bail!(
-                    "`{path}` is inside include `{include}`'s mount ({prefix}/…); \
-                     files there belong to the child template — record against it directly"
+                    "`{path}` is inside the instances of repeat include `{include}` \
+                     ({prefix}/…); record it in a `weft session new --foreach {include}=<key>` \
+                     session, where the sample key abstracts to `{{key}}`"
                 );
             }
         }
     }
     Ok(())
+}
+
+/// Edits under a single include's mount are legal iff the patch depends on
+/// the child nodes that own those files — infer them. For each changed path
+/// under a mounted part: the *owners* are the part's active nodes whose ops
+/// touch that path; the leaves among them (owners no other owner depends
+/// on) become dependencies. A path no node owns (a new file under the
+/// mount) depends on the part's root nodes, so it inherits the include's
+/// existence and nothing narrower. Edits under the foreach sample mount
+/// abstract through `key` and need no dependency.
+pub(crate) fn include_deps(
+    template: &Template,
+    parts: &[crate::compose::ComposedPart<'_>],
+    foreach: Option<&crate::session::ForeachSession>,
+    base_tree: &weft_core::Tree,
+    work_tree: &weft_core::Tree,
+    active: &BTreeSet<weft_core::PatchId>,
+    eval: &dyn weft_core::render::ExprEval,
+) -> Result<Vec<String>> {
+    let empty = AnswerSet::new();
+    let nodes = crate::compose::graph_nodes(&[], &empty, parts);
+    // Rendered path → owning (active, single-include) node ids.
+    let mut owners: std::collections::BTreeMap<Utf8PathBuf, Vec<weft_core::PatchId>> =
+        Default::default();
+    for node in nodes.iter().filter(|n| {
+        active.contains(&n.id) && template.id_to_name.contains_key(&n.id) && !n.frame.is_empty()
+    }) {
+        for op in &node.patch.ops {
+            let paths = match op {
+                weft_core::Op::CreateFile { path, .. }
+                | weft_core::Op::CreateBinaryFile { path, .. }
+                | weft_core::Op::ModifyFile { path, .. }
+                | weft_core::Op::SetMode { path, .. } => vec![path],
+                weft_core::Op::DeleteFile { .. } => vec![],
+                weft_core::Op::RenamePath { to, .. } => vec![to],
+            };
+            for path in paths {
+                let Ok(rendered) = weft_core::render::render_path(path, node.answers, eval) else {
+                    continue;
+                };
+                owners
+                    .entry(node.mount.join(rendered))
+                    .or_default()
+                    .push(node.id);
+            }
+        }
+    }
+    let sample_mount = foreach
+        .and_then(|f| sample_of(parts, f))
+        .map(|p| p.instance.mount.clone());
+    // Single-include frames that rendered something: (frame, mount, root
+    // nodes), deepest first so a nested include claims its files before the
+    // enclosing one.
+    type Frame = (Vec<(String, String)>, Utf8PathBuf, Vec<weft_core::PatchId>);
+    let mut frames: Vec<Frame> = Vec::new();
+    for node in nodes
+        .iter()
+        .filter(|n| template.id_to_name.contains_key(&n.id))
+    {
+        let entry = match frames.iter_mut().find(|(f, _, _)| *f == node.frame) {
+            Some(entry) => entry,
+            None => {
+                frames.push((node.frame.clone(), node.mount.clone(), Vec::new()));
+                frames.last_mut().expect("just pushed")
+            }
+        };
+        if active.contains(&node.id) && node.depends_on.is_empty() {
+            entry.2.push(node.id);
+        }
+    }
+    frames.sort_by_key(|(f, _, _)| std::cmp::Reverse(f.len()));
+
+    let mut deps: BTreeSet<String> = BTreeSet::new();
+    for path in changed_between(base_tree, work_tree) {
+        if sample_mount
+            .as_deref()
+            .is_some_and(|m| under_mount(path, m))
+        {
+            continue;
+        }
+        let chosen: Vec<weft_core::PatchId> = match owners.get(path) {
+            Some(ids) => {
+                // Owned: the deepest owning frame, then the leaves among its
+                // owners.
+                let frame = frames
+                    .iter()
+                    .find(|(f, _, _)| nodes.iter().any(|n| ids.contains(&n.id) && n.frame == *f))
+                    .map(|(f, _, _)| f.clone())
+                    .expect("owners have a frame");
+                let in_frame: Vec<_> = ids
+                    .iter()
+                    .copied()
+                    .filter(|id| nodes.iter().any(|n| n.id == *id && n.frame == frame))
+                    .collect();
+                in_frame
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        !in_frame
+                            .iter()
+                            .any(|o| o != id && template.ancestor_closure(*o).contains(id))
+                    })
+                    .collect()
+            }
+            // Unowned: a new file under a (non-root) mount depends on that
+            // frame's roots; a root-mounted include claims nothing it did
+            // not create.
+            None => frames
+                .iter()
+                .find(|(_, mount, _)| !mount.as_str().is_empty() && path.starts_with(mount))
+                .map(|(_, _, roots)| roots.clone())
+                .unwrap_or_default(),
+        };
+        for id in chosen {
+            if let Some(name) = template.id_to_name.get(&id) {
+                deps.insert(name.clone());
+            }
+        }
+    }
+    Ok(deps.into_iter().collect())
 }
 
 /// Rebuild the full answer set for the session: stored plain answers plus

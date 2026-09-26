@@ -72,32 +72,62 @@ pub fn run(
         &opts.answers,
         opts.answers_json.as_deref(),
     )?;
+    // Namespaced answers seed the single includes mounted into the base;
+    // repeat instances are project-time and only enter a session as the one
+    // `--foreach` sample.
+    let (parent_provided, child_provided) = crate::compose::split_provided(&template, &provided)?;
+    let mut include_provided: BTreeMap<String, weft_core::AnswerSet> = BTreeMap::new();
+    for ((include, key), set) in child_provided {
+        if template.include(&include).is_some_and(|i| i.decl.repeat) {
+            bail!(
+                "answers for instance `{key}` of repeat include `{include}` cannot seed a \
+                 session; mount one sample with `--foreach {include}={key}` instead"
+            );
+        }
+        include_provided.insert(include, set);
+    }
     let resolved = answers::gather(
         &template,
-        &provided,
+        &parent_provided,
         &weft_core::AnswerSet::new(),
         &eval,
         interaction,
     )?;
 
+    // The base is a set of composed-graph nodes: root patches plus the single
+    // includes' patches (their files are what a parent hunk anchors on).
+    // Foreach patches are excluded — nothing may depend on them, and a foreach
+    // session's worktree must not contain other foreach patches' output.
     let pinned = pin_base(&template, &opts.base)?;
-    // Foreach patches are excluded from the base: nothing may depend on
-    // them (graph-leaf rule), and a foreach session's worktree must not
-    // contain other foreach patches' output — recorded hunk contexts would
-    // otherwise anchor on lines that only exist for the sample instance.
     let base_patches: Vec<_> = template
         .patches
         .iter()
-        .filter(|p| pinned.contains(&p.id) && p.foreach.is_none())
+        .filter(|p| pinned.contains(&p.id))
         .cloned()
+        .collect();
+    let mut parts = crate::compose::single_parts(
+        &template,
+        &resolved,
+        &include_provided,
+        &BTreeMap::new(),
+        &eval,
+        interaction,
+    )?;
+    crate::compose::filter_parts(&mut parts, &pinned);
+    let instances: Vec<session::SessionInstance> = parts
+        .iter()
+        .map(|p| session::SessionInstance {
+            include: p.instance.include.clone(),
+            answers: strip_secrets(&p.instance.answers),
+            secrets: crate::new::secret_specs(&p.template.manifest.questions, &p.instance.answers),
+        })
         .collect();
 
     // A `--foreach include=key` session mounts one *sample* instance of the
     // include into the base, so the author edits parent files against a
     // concrete example (e.g. adds `use ./services/payments` to go.work).
     // Commit later abstracts the sample key/answers into `key` /
-    // `instance_<id>` references. Otherwise, a template with includes
-    // renders its own patches only (children belong to their template).
+    // `instance_<id>` references.
     let foreach = match &opts.foreach {
         Some(spec) => {
             let (include, key) = spec
@@ -126,15 +156,11 @@ pub fn run(
         }
         None => None,
     };
-    let tree = match &foreach {
-        Some(f) => {
-            let parts = vec![sample_part(&template, f, &eval, interaction)?];
-            crate::compose::render_composed(&base_patches, &resolved, &parts, &eval)
-                .context("rendering base state with the sample instance")?
-        }
-        None => weft_core::render::render(&base_patches, &resolved, &eval)
-            .context("rendering base state")?,
-    };
+    if let Some(f) = &foreach {
+        parts.push(sample_part(&template, f, &eval, interaction)?);
+    }
+    let tree = crate::compose::render_composed(&base_patches, &resolved, &parts, &eval)
+        .context("rendering base state")?;
 
     let worktree = match &opts.path {
         Some(path) => {
@@ -216,7 +242,7 @@ pub fn run(
         .collect();
     let sess = Session {
         session: SessionMeta {
-            base: base_patches.iter().map(|p| p.id).collect(),
+            base: pinned.into_iter().collect(),
             tree_hash: tree.hash(),
             // Only record a path when it isn't the default location, so the
             // session file stays portable with the template.
@@ -226,6 +252,7 @@ pub fn run(
         },
         answers: strip_secrets(&resolved),
         secrets: secret_specs,
+        instances,
         foreach,
         generator,
         amend: None,
@@ -261,6 +288,7 @@ pub fn sample_part<'t>(
             key: foreach.key.clone(),
             mount: crate::compose::mount_path(&inc.decl.path, &foreach.key)?,
             answers: foreach.answers.clone(),
+            repeat: inc.decl.repeat,
         },
         template: &inc.template,
         patches: inc.template.patches.clone(),
@@ -278,10 +306,23 @@ pub(crate) fn strip_secrets(answers: &weft_core::AnswerSet) -> weft_core::Answer
         .collect()
 }
 
-/// Resolve a `--base` ref to a set of patch ids.
+/// Resolve a `--base` ref to a set of composed-graph node ids: `latest` is
+/// every node, a name is that node plus its ancestors. Foreach patches and
+/// repeat includes' opaque nodes are never part of a base.
 pub fn pin_base(template: &Template, base: &str) -> Result<BTreeSet<PatchId>> {
+    let pinnable = |id: &PatchId| {
+        template
+            .node(*id)
+            .and_then(|n| template.node_patch(n))
+            .is_some_and(|p| p.foreach.is_none())
+    };
     if base == "latest" {
-        return Ok(template.patches.iter().map(|p| p.id).collect());
+        return Ok(template
+            .nodes
+            .iter()
+            .map(|n| n.id)
+            .filter(pinnable)
+            .collect());
     }
     let root = *template.name_to_id.get(base).with_context(|| {
         format!(
@@ -294,23 +335,32 @@ pub fn pin_base(template: &Template, base: &str) -> Result<BTreeSet<PatchId>> {
                 .join(", ")
         )
     })?;
-    Ok(template.ancestor_closure(root))
+    if !pinnable(&root) {
+        bail!("`{base}` cannot be a base: foreach patches and repeat includes are not pinnable");
+    }
+    Ok(template
+        .ancestor_closure(root)
+        .into_iter()
+        .filter(pinnable)
+        .collect())
 }
 
-/// Leaves of the pinned base: patches no *other pinned* patch depends on.
-/// These become the recorded patch's dependencies.
-pub fn base_leaves(template: &Template, pinned: &[PatchId]) -> Vec<String> {
-    let pinned_set: BTreeSet<_> = pinned.iter().copied().collect();
+/// Root-frame leaves of an active node set: root patches no *other active
+/// root* patch depends on. These become a recorded patch's default
+/// dependencies; edits under an include's mount add that include's nodes
+/// (see `commit::include_deps`).
+pub fn base_leaves(template: &Template, active: &BTreeSet<PatchId>) -> Vec<String> {
     let mut depended_upon: BTreeSet<PatchId> = BTreeSet::new();
     for p in &template.patches {
-        if pinned_set.contains(&p.id) {
+        if active.contains(&p.id) {
             depended_upon.extend(p.depends_on.iter().copied());
         }
     }
-    pinned
+    template
+        .patches
         .iter()
-        .filter(|id| !depended_upon.contains(id))
-        .filter_map(|id| template.id_to_name.get(id).cloned())
+        .filter(|p| active.contains(&p.id) && !depended_upon.contains(&p.id))
+        .filter_map(|p| template.id_to_name.get(&p.id).cloned())
         .collect()
 }
 

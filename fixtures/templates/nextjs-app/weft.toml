@@ -1,0 +1,16 @@
+[template]
+name = "nextjs-app"
+weft-version = "0.1"
+description = "A Next.js application meant to be mounted: it owns no repository scaffolding."
+
+[[question]]
+id = "app_name"
+kind = "string"
+prompt = "App package name"
+example = "web"
+
+[[question]]
+id = "use_tailwind"
+kind = "bool"
+prompt = "Add Tailwind?"
+default = "True"

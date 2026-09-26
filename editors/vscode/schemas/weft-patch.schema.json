@@ -4,6 +4,14 @@
   "description": "A weft patch file (`patches/<name>.json`): one recorded unit of template\nbehavior. The file name (stem) is the patch's name; its content id is\ncomputed on load and never stored.",
   "type": "object",
   "properties": {
+    "title": {
+      "description": "Display title, e.g. \"Add Prisma support\" — metadata, never hashed.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
     "description": {
       "description": "What this patch does — metadata, never part of the content hash.",
       "type": [
@@ -21,7 +29,7 @@
       "default": []
     },
     "depends_on": {
-      "description": "Names (file stems) of patches this one depends on. Patches with no\ndependency path between them must commute.",
+      "description": "Names of the graph nodes this patch depends on: another patch's file\nstem (own or inherited through `[template] extends`), or a single\ninclude's patch as `<include>/<patch>` (nested: `<include>/<include>/\n<patch>`). Depending on an include's node is what allows this patch\nto edit files under that include's mount. A repeat include has no\nnameable nodes — use `foreach`. Patches with no dependency path\nbetween them must commute.",
       "type": "array",
       "items": {
         "type": "string"
@@ -36,18 +44,41 @@
       ],
       "default": null
     },
+    "foreach": {
+      "description": "Integration patch: render once per instance of the named include.\n`key` and `instance_<child-question>` are in scope for segments and\nexpressions. Behavioral — part of the content hash. Foreach patches\nmust be graph leaves.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
     "ops": {
-      "description": "Operations, applied in order.",
+      "description": "Operations, applied in order. May be omitted for **action patches**\nthat exist only to carry hooks (e.g. a gated deploy).",
       "type": "array",
       "items": {
         "$ref": "#/$defs/Op"
       }
+    },
+    "hooks": {
+      "description": "Pre/post-render side-effects owned by this patch. Metadata: never part\nof the content hash, so adding/editing a hook never changes patch ids.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Hook"
+      }
+    },
+    "generator": {
+      "description": "Present when this patch was recorded from a command's output\n(`weft record --exec`). Metadata: never part of the content hash.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Generator"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "additionalProperties": false,
-  "required": [
-    "ops"
-  ],
   "$defs": {
     "Op": {
       "description": "A single tree operation, applied in order.",
@@ -86,6 +117,39 @@
             "op",
             "path",
             "content"
+          ]
+        },
+        {
+          "description": "Create an opaque binary file (errors if it already exists). The\ncontent is never abstracted or hunk-modified — replacing a binary is\n`delete_file` + a new `create_binary_file` in the same patch.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/TemplatePath"
+            },
+            "data": {
+              "description": "Raw bytes, standard-alphabet base64.",
+              "type": "string"
+            },
+            "mode": {
+              "description": "Unix mode as decimal (420 = 0o644, 493 = 0o755). Default 420.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0,
+              "default": null
+            },
+            "op": {
+              "type": "string",
+              "const": "create_binary_file"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "path",
+            "data"
           ]
         },
         {
@@ -275,6 +339,136 @@
         }
       },
       "additionalProperties": false
+    },
+    "Hook": {
+      "description": "A patch-scoped side-effect that runs before (`pre`) or after (`post`) the\nrender.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Unique slug across the template (referenced by `after`/`inputs`).",
+          "type": "string"
+        },
+        "phase": {
+          "description": "`pre` runs before any file is written (a non-zero exit aborts);\n`post` runs after the tree is written.",
+          "$ref": "#/$defs/HookPhase"
+        },
+        "effect": {
+          "description": "`check` = read-only verification (safe to auto-run); `setup` =\nidempotent local mutation; `deploy` = external/irreversible side-effect.",
+          "$ref": "#/$defs/HookEffect"
+        },
+        "label": {
+          "description": "Short human/agent label, e.g. \"Verify uv is installed\".",
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "action": {
+          "description": "Shell command: a plain string when literal, or an array of segments to\ninterpolate answers/exprs (e.g. `[\"shadcn add \", {\"expr\": \"...\"}]`).",
+          "$ref": "#/$defs/Command"
+        },
+        "when": {
+          "description": "Starlark gate.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "after": {
+          "description": "Other hooks this one must run after (ordering edges).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "inputs": {
+          "description": "Post-only: `glob:PATTERN`, `answer:ID`, or `hook:ID` — on `weft update`\nthis hook re-fires only when one changed.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "phase",
+        "effect",
+        "label",
+        "action"
+      ]
+    },
+    "HookPhase": {
+      "type": "string",
+      "enum": [
+        "pre",
+        "post"
+      ]
+    },
+    "HookEffect": {
+      "type": "string",
+      "enum": [
+        "check",
+        "setup",
+        "deploy"
+      ]
+    },
+    "Command": {
+      "description": "A shell command: a plain string, or an array of segments.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Segment"
+          }
+        }
+      ]
+    },
+    "Generator": {
+      "description": "The command a generated patch was recorded from, plus what\n`weft patch resync` needs to re-run it deterministically.",
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "Shell command run in the recording worktree: a plain string when\nliteral, or an array of segments to interpolate answers/exprs.",
+          "$ref": "#/$defs/Command"
+        },
+        "answers": {
+          "description": "Record-time answers the base was rendered with (secrets excluded).",
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        },
+        "secrets": {
+          "description": "Secret answers as source references (`env:…`, `cmd:…`, `prompt`),\nre-resolved at resync time — values never appear here.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "keep_literal": {
+          "description": "Occurrences kept literal at commit (`ANSWER@PATH:LINE[:NTH]`),\nreplayed on resync.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "command"
+      ]
     }
   }
 }

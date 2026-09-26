@@ -1,0 +1,17 @@
+{
+  "description": "Linear issue-tracking skill.",
+  "depends_on": ["skills"],
+  "when": "use_linear",
+  "ops": [
+    {
+      "op": "modify_file",
+      "path": "AGENTS.md",
+      "hunks": [
+        {
+          "context_before": ["- git: commit small, describe why."],
+          "added": ["- linear: link the issue in every PR."]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+[template]
+name = "monorepo"
+weft-version = "0.1"
+description = "A pnpm workspace built on the shared base, mounting the Next.js app under apps/web."
+extends = "../base"
+
+[[question]]
+id = "workspace"
+kind = "string"
+prompt = "Workspace name"
+example = "acme"
+
+[[include]]
+name = "web"
+template = "../nextjs-app"
+path = "apps/web"
+
+[include.bind]
+app_name = "workspace + '-web'"

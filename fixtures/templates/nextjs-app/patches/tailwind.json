@@ -1,0 +1,22 @@
+{
+  "description": "Tailwind CSS.",
+  "depends_on": ["app"],
+  "when": "use_tailwind",
+  "ops": [
+    {
+      "op": "create_file",
+      "path": "tailwind.config.ts",
+      "content": ["export default { content: [\"./app/**/*.tsx\"] };"]
+    },
+    {
+      "op": "modify_file",
+      "path": "next.config.ts",
+      "hunks": [
+        {
+          "context_before": ["  reactStrictMode: true,"],
+          "added": ["  // tailwind: see tailwind.config.ts"]
+        }
+      ]
+    }
+  ]
+}

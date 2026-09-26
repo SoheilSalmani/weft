@@ -1,0 +1,28 @@
+{
+  "description": "pnpm workspace manifest.",
+  "depends_on": ["gitignore"],
+  "ops": [
+    {
+      "op": "create_file",
+      "path": "pnpm-workspace.yaml",
+      "content": ["packages:", "  - apps/*"]
+    },
+    {
+      "op": "modify_file",
+      "path": ".gitignore",
+      "hunks": [
+        { "context_before": ["node_modules/"], "added": [".next/"] }
+      ]
+    }
+  ],
+  "hooks": [
+    {
+      "id": "finalize",
+      "phase": "post",
+      "effect": "setup",
+      "label": "Record hook order after the app installed",
+      "action": "cat apps/web/installed.txt >> order.txt && echo parent >> order.txt",
+      "after": ["web/install"]
+    }
+  ]
+}

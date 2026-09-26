@@ -218,13 +218,18 @@ pub fn patch_set(root: &Utf8Path, opts: &PatchSetOptions) -> Result<()> {
     Ok(())
 }
 
-/// `weft patch ls`: one line per patch, in dependency order.
+/// `weft patch ls`: one line per root-frame patch, in dependency order.
+/// Include nodes are not listed (they are the child template's patches —
+/// `weft graph` shows the composed graph).
 pub fn patch_ls(root: &Utf8Path) -> Result<()> {
     let template = Template::load(root)?;
     for patch in &template.patches {
         let name = &template.id_to_name[&patch.id];
         let title = patch.meta.title.as_deref().unwrap_or("");
         let mut flags = Vec::new();
+        if template.is_inherited(name) {
+            flags.push("inherited".to_owned());
+        }
         if let Some(w) = &patch.when {
             flags.push(format!("when={}", w.as_str()));
         }
@@ -252,11 +257,15 @@ fn require_generator<'t>(template: &'t Template, name: &str) -> Result<&'t weft_
         .name_to_id
         .get(name)
         .with_context(|| format!("no patch `{name}` in this template"))?;
-    let patch = template
-        .patches
-        .iter()
-        .find(|p| p.id == *id)
-        .expect("name_to_id points at a loaded patch");
+    let node = template.node(*id).expect("name_to_id points at a node");
+    let patch = match &node.kind {
+        crate::template::NodeKind::Root(i) => &template.patches[*i],
+        _ => bail!(
+            "`{name}` is an include node — edit the patch in the child template \
+             (`{}`)",
+            node.include().unwrap_or_default()
+        ),
+    };
     if patch.meta.generator.is_none() {
         bail!(
             "patch `{name}` is not a generator patch (it was not recorded with \

@@ -48,12 +48,52 @@
             "null"
           ],
           "default": null
+        },
+        "extends": {
+          "description": "The base template this one builds on (see `ExtendsDecl`).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExtendsDecl"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
       "required": [
         "name",
         "weft-version"
+      ]
+    },
+    "ExtendsDecl": {
+      "description": "The base template a template extends: a directory path relative to this\ntemplate root (`../base`), or a `hub:` ref with a version requirement.\nIts questions, includes, and patches are imported as-is (same names, same\nids, no mount); this template's patches may depend on them by name but\nmay not redeclare them.",
+      "anyOf": [
+        {
+          "description": "Relative directory path (`../base`) or `hub:owner/name`.",
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "template": {
+              "description": "Relative directory path or `hub:owner/name`.",
+              "type": "string"
+            },
+            "version": {
+              "description": "Semver requirement for a `hub:` template (e.g. `^1.0`).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "template"
+          ]
+        }
       ]
     },
     "Question": {
@@ -256,8 +296,9 @@
           "default": null
         },
         "path": {
-          "description": "Mount prefix in the rendered tree; `{key}` substitutes the instance\nkey (required when `repeat = true`).",
-          "type": "string"
+          "description": "Mount prefix in the rendered tree; `{key}` substitutes the instance\nkey (required when `repeat = true`). Omitted or empty mounts the\nchild at the root: its files merge with the parent's, and a path both\ncreate is a render error.",
+          "type": "string",
+          "default": ""
         },
         "repeat": {
           "description": "Whether the project may instantiate this include 0..N times.",
@@ -276,8 +317,7 @@
       "additionalProperties": false,
       "required": [
         "name",
-        "template",
-        "path"
+        "template"
       ]
     }
   }

@@ -5,6 +5,8 @@ use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
 use weft_core::{AnswerId, AnswerSet, Op, Patch, PatchId, StarlarkExpr, Value};
 
+use crate::compose::ComposedPart;
+
 pub const STATE_DIR: &str = ".weft";
 pub const STATE_FILE: &str = "state.toml";
 /// The project's self-contained base snapshot (`.weft/base.json`): the patch
@@ -45,29 +47,82 @@ impl StoredPatch {
     }
 }
 
-/// The project's pinned base bodies. Parent patches are the load-bearing
-/// part; instance bodies are reserved for composed projects (not yet
-/// reconstructed from here — instances still resolve against the template).
+/// One include instance's pinned bodies: the child patches it rendered from
+/// and, recursively, its own nested instances.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstanceSnapshot {
+    pub include: String,
+    pub key: String,
+    #[serde(default)]
+    pub patches: Vec<StoredPatch>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<InstanceSnapshot>,
+}
+
+impl InstanceSnapshot {
+    fn from_part(part: &ComposedPart<'_>) -> Self {
+        Self {
+            include: part.instance.include.clone(),
+            key: part.instance.key.clone(),
+            patches: part.patches.iter().map(StoredPatch::from_patch).collect(),
+            children: part.children.iter().map(Self::from_part).collect(),
+        }
+    }
+
+    /// The reconstructed child patches (ids recomputed).
+    pub fn patches(&self) -> Vec<Patch> {
+        self.patches
+            .iter()
+            .cloned()
+            .map(StoredPatch::into_patch)
+            .collect()
+    }
+
+    /// The nested instance snapshot for `(include, key)`, if stored.
+    pub fn child(&self, include: &str, key: &str) -> Option<&InstanceSnapshot> {
+        self.children
+            .iter()
+            .find(|c| c.include == include && c.key == key)
+    }
+}
+
+/// The project's pinned base bodies: the root-frame patches and, per
+/// include instance, the child bodies it rendered from (recursively). This
+/// is the whole composed render's input, so `weft update` reconstructs the
+/// merge base without consulting any template's *current* patch ids.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct BaseSnapshot {
     #[serde(default)]
     pub parent: Vec<StoredPatch>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instances: Vec<InstanceSnapshot>,
 }
 
 impl BaseSnapshot {
-    pub fn from_patches(patches: &[Patch]) -> Self {
+    /// Snapshot a composed render's inputs: the root-frame patches and every
+    /// part's bodies, recursively.
+    pub fn from_render(parent_patches: &[Patch], parts: &[ComposedPart<'_>]) -> Self {
         Self {
-            parent: patches.iter().map(StoredPatch::from_patch).collect(),
+            parent: parent_patches.iter().map(StoredPatch::from_patch).collect(),
+            instances: parts.iter().map(InstanceSnapshot::from_part).collect(),
         }
     }
 
-    /// The reconstructed base patches (ids recomputed).
+    /// The reconstructed root-frame patches (ids recomputed).
     pub fn parent_patches(&self) -> Vec<Patch> {
         self.parent
             .iter()
             .cloned()
             .map(StoredPatch::into_patch)
             .collect()
+    }
+
+    /// The stored instance snapshot for `(include, key)`, if any (absent for
+    /// instances added since the snapshot, or pre-feature projects).
+    pub fn instance(&self, include: &str, key: &str) -> Option<&InstanceSnapshot> {
+        self.instances
+            .iter()
+            .find(|i| i.include == include && i.key == key)
     }
 
     pub fn save(&self, dest: &Utf8Path) -> Result<()> {

@@ -54,8 +54,10 @@ pub fn run(
 
     // The self-contained base: if the project stored its base patch bodies,
     // reconstruct the merge base from those (robust to template history
-    // rewrites). Older projects have no snapshot and fall back to matching
-    // pinned ids against the current template (which bails on a rewrite).
+    // rewrites) — the root frame and every instance the snapshot holds.
+    // Older projects have no snapshot and fall back to matching pinned ids
+    // against the current template (which bails on a rewrite); so does an
+    // instance the snapshot has no entry for (added since it was written).
     let snapshot = crate::state::BaseSnapshot::load(&opts.dest)?.filter(|s| !s.parent.is_empty());
     if snapshot.is_none() {
         for id in &state.state.base {
@@ -78,6 +80,12 @@ pub fn run(
                 inst.key, inst.include
             )
         })?;
+        if snapshot
+            .as_ref()
+            .is_some_and(|s| s.instance(&inst.include, &inst.key).is_some())
+        {
+            continue;
+        }
         for id in &inst.base {
             if !inc.template.id_to_name.contains_key(id) {
                 bail!(
@@ -114,18 +122,7 @@ pub fn run(
     let base_patches: Vec<_> = match &snapshot {
         // Self-contained: the base is exactly what the project stored,
         // independent of the template's current patch ids.
-        Some(snap) => {
-            let patches = snap.parent_patches();
-            if let Ok(t) = weft_core::render::render(&patches, &old_answers, &eval) {
-                if t.hash() != state.state.tree_hash {
-                    eprintln!(
-                        "warning: `.weft/base.json` no longer matches the recorded tree hash; \
-                         it may have been edited"
-                    );
-                }
-            }
-            patches
-        }
+        Some(snap) => snap.parent_patches(),
         None => template
             .patches
             .iter()
@@ -139,32 +136,44 @@ pub fn run(
     for inst in &state.instances {
         let inc = template.include(&inst.include).expect("checked above");
         // Old side: stored answers + re-resolved stored child secrets.
-        // Nested (grandchild) parts re-derive from binds/defaults on both
-        // sides — nested instance state is not pinned yet.
+        // Nested (grandchild) instances re-derive their answers from
+        // binds/defaults on both sides (nested answers are not pinned yet);
+        // their patches come from the snapshot where it has them.
         let child_secrets = resolve_instance_secrets(&inc.template, inst, interaction)?;
         let mut old_child_answers = inst.answers.clone();
         old_child_answers.overlay(&child_secrets);
-        let old_children = compose::resolve_child_parts(
+        let mut old_children = compose::resolve_child_parts(
             &inc.template,
             &old_child_answers,
             compose::SecretMode::Resolve,
             &eval,
             interaction,
         )?;
-        old_parts.push(compose::ComposedPart {
-            template: &inc.template,
-            patches: inc
+        let old_patches = match snapshot
+            .as_ref()
+            .and_then(|s| s.instance(&inst.include, &inst.key))
+        {
+            Some(stored) => {
+                pin_stored_children(&mut old_children, stored);
+                stored.patches()
+            }
+            None => inc
                 .template
                 .patches
                 .iter()
                 .filter(|p| inst.base.contains(&p.id))
                 .cloned()
                 .collect(),
+        };
+        old_parts.push(compose::ComposedPart {
+            template: &inc.template,
+            patches: old_patches,
             instance: compose::ResolvedInstance {
                 include: inst.include.clone(),
                 key: inst.key.clone(),
                 mount: Utf8PathBuf::from(&inst.mount),
                 answers: old_child_answers,
+                repeat: inc.decl.repeat,
             },
             children: old_children,
         });
@@ -202,6 +211,7 @@ pub fn run(
                 key: inst.key.clone(),
                 mount: compose::mount_path(&inc.decl.path, &inst.key)?,
                 answers: new_child_answers,
+                repeat: inc.decl.repeat,
             },
             children: new_children,
         });
@@ -209,6 +219,12 @@ pub fn run(
 
     let old_render = compose::render_composed(&base_patches, &old_answers, &old_parts, &eval)
         .context("re-rendering pinned inputs")?;
+    if snapshot.is_some() && old_render.hash() != state.state.tree_hash {
+        eprintln!(
+            "warning: `.weft/base.json` no longer matches the recorded tree hash; it may \
+             have been edited"
+        );
+    }
     let new_render = compose::render_composed(&template.patches, &new_answers, &new_parts, &eval)
         .context("rendering new template state")?;
 
@@ -242,46 +258,22 @@ pub fn run(
         }
     }
 
-    // Task planning happens against what changed between the two renders.
+    // Task planning happens against what changed between the two renders:
+    // root-relative paths, plus the changed answers of every frame (the
+    // root's, and each instance's child answers; nested frames re-derive
+    // from binds on both sides and report no answer changes).
     let changed_paths: BTreeSet<Utf8PathBuf> = old_render
         .paths()
         .chain(new_render.paths())
         .filter(|p| old_render.get(p) != new_render.get(p))
         .cloned()
         .collect();
-    let changed_answers: BTreeSet<AnswerId> = old_answers
-        .iter()
-        .map(|(id, _)| id)
-        .chain(new_answers.iter().map(|(id, _)| id))
-        .filter(|id| {
-            // Secret values are opaque; only presence changes count.
-            match (old_answers.get(id), new_answers.get(id)) {
-                (Some(Value::Secret(_)), Some(Value::Secret(_))) => false,
-                (a, b) => a != b,
-            }
-        })
-        .cloned()
-        .collect();
     let changes = ChangeSet {
         paths: changed_paths,
-        answers: changed_answers,
+        answers: changed_answers(&old_answers, &new_answers),
     };
-    // Pre-hooks always run on update (they're guards); post-hooks re-fire only
-    // when one of their inputs changed.
-    let collected = hooks::collect(&template, &new_answers, &eval)?;
-    let post_plan = hooks::fire_on_update(&collected.post, Some(&changes), &eval, &new_answers)?;
-
-    // Child hook plans, one per instance: inputs are evaluated against the
-    // child-relative change set (paths under the mount, stripped; the child
-    // answers that changed).
-    struct ChildPlan<'t> {
-        mount: Utf8PathBuf,
-        answers: AnswerSet,
-        pre: Vec<&'t weft_core::Hook>,
-        post: Vec<&'t weft_core::Hook>,
-        include: String,
-    }
-    let mut child_plans: Vec<ChildPlan> = Vec::new();
+    let mut changed_by_frame: BTreeMap<Vec<(String, String)>, BTreeSet<AnswerId>> = BTreeMap::new();
+    changed_by_frame.insert(Vec::new(), changes.answers.clone());
     for new in &new_parts {
         // Dropped instances make the two sides diverge, so match by identity.
         let old = old_parts
@@ -290,37 +282,15 @@ pub fn run(
                 o.instance.include == new.instance.include && o.instance.key == new.instance.key
             })
             .expect("every new part has an old counterpart");
-        let child_collected = hooks::collect(new.template, &new.instance.answers, &eval)?;
-        let changed_child_answers: BTreeSet<AnswerId> = old
-            .instance
-            .answers
-            .iter()
-            .map(|(id, _)| id)
-            .chain(new.instance.answers.iter().map(|(id, _)| id))
-            .filter(
-                |id| match (old.instance.answers.get(id), new.instance.answers.get(id)) {
-                    (Some(Value::Secret(_)), Some(Value::Secret(_))) => false,
-                    (a, b) => a != b,
-                },
-            )
-            .cloned()
-            .collect();
-        let child_changes =
-            compose::child_changes(&changes, &new.instance.mount, changed_child_answers);
-        let post = hooks::fire_on_update(
-            &child_collected.post,
-            Some(&child_changes),
-            &eval,
-            &new.instance.answers,
-        )?;
-        child_plans.push(ChildPlan {
-            mount: new.instance.mount.clone(),
-            answers: new.instance.answers.clone(),
-            pre: child_collected.pre,
-            post,
-            include: new.instance.include.clone(),
-        });
+        changed_by_frame.insert(
+            vec![(new.instance.include.clone(), new.instance.key.clone())],
+            changed_answers(&old.instance.answers, &new.instance.answers),
+        );
     }
+    // Pre-hooks always run on update (they're guards); post-hooks re-fire only
+    // when one of their inputs changed.
+    let plan = hooks::plan(&template, &new_answers, &new_parts, &eval)?;
+    let post_plan = hooks::fire_on_update_planned(&plan.post, &changes, &changed_by_frame, &eval)?;
 
     if opts.dry_run {
         if actions.is_empty() {
@@ -329,27 +299,20 @@ pub fn run(
         for (path, action) in &actions {
             eprintln!("dry run: {} {path}", action.verb());
         }
-        for hook in &collected.pre {
-            eprintln!("dry run: would run pre-hook `{}` ({})", hook.id, hook.label);
-        }
-        for plan in &child_plans {
-            for hook in &plan.pre {
-                eprintln!(
-                    "dry run: would run pre-hook `{}` ({}) [include {}]",
-                    hook.id, hook.label, plan.include
-                );
-            }
-            for hook in &plan.post {
-                eprintln!(
-                    "dry run: would run post-hook `{}` ({}) [include {}]",
-                    hook.id, hook.label, plan.include
-                );
-            }
+        for hook in &plan.pre {
+            eprintln!(
+                "dry run: would run pre-hook `{}` ({}){}",
+                hook.hook.id,
+                hook.hook.label,
+                frame_suffix(hook)
+            );
         }
         for hook in &post_plan {
             eprintln!(
-                "dry run: would run post-hook `{}` ({})",
-                hook.id, hook.label
+                "dry run: would run post-hook `{}` ({}){}",
+                hook.hook.id,
+                hook.hook.label,
+                frame_suffix(hook)
             );
         }
         return Ok(report);
@@ -357,13 +320,7 @@ pub fn run(
 
     // Pre-hooks run before touching files.
     if !opts.skip_tasks {
-        hooks::run(&collected.pre, &opts.dest, &new_answers, &eval)
-            .context("a pre-render hook failed")?;
-        for plan in &child_plans {
-            hooks::run(&plan.pre, &opts.dest, &plan.answers, &eval).with_context(|| {
-                format!("a pre-render hook of include `{}` failed", plan.include)
-            })?;
-        }
+        hooks::run_planned(&plan.pre, &opts.dest, &eval).context("a pre-render hook failed")?;
     }
 
     for (path, action) in actions {
@@ -412,25 +369,58 @@ pub fn run(
     )
     .with_instances(instance_states)
     .save(&opts.dest)?;
-    // Re-pin the self-contained base to the new template state.
-    crate::state::BaseSnapshot::from_patches(&template.patches).save(&opts.dest)?;
+    // Re-pin the self-contained base (root frame and every instance) to the
+    // new template state.
+    crate::state::BaseSnapshot::from_render(&template.patches, &new_parts).save(&opts.dest)?;
 
-    let skipped_child_posts: usize = child_plans.iter().map(|p| p.post.len()).sum();
     if !opts.skip_tasks && report.conflicts.is_empty() {
-        // Child post-hooks first (inside their mounts), then the parent's.
-        for plan in &child_plans {
-            let cwd = opts.dest.join(&plan.mount);
-            hooks::run(&plan.post, &cwd, &plan.answers, &eval)?;
-        }
-        hooks::run(&post_plan, &opts.dest, &new_answers, &eval)?;
-    } else if (!post_plan.is_empty() || skipped_child_posts > 0) && !report.conflicts.is_empty() {
+        hooks::run_planned(post_plan.iter().copied(), &opts.dest, &eval)?;
+    } else if !post_plan.is_empty() && !report.conflicts.is_empty() {
         report.notes.push(format!(
             "skipped {} post-hook(s) because of conflicts; re-run them after resolving",
-            post_plan.len() + skipped_child_posts
+            post_plan.len()
         ));
     }
 
     Ok(report)
+}
+
+/// Replace nested parts' patches with the bodies the snapshot stored for
+/// them, recursively. A nested instance the snapshot doesn't know keeps the
+/// child template's current patches (pre-feature projects).
+fn pin_stored_children(
+    parts: &mut [compose::ComposedPart<'_>],
+    stored: &crate::state::InstanceSnapshot,
+) {
+    for part in parts {
+        if let Some(child) = stored.child(&part.instance.include, &part.instance.key) {
+            part.patches = child.patches();
+            pin_stored_children(&mut part.children, child);
+        }
+    }
+}
+
+/// The answer ids whose value differs between two answer sets. Secret
+/// values are opaque; only presence changes count.
+fn changed_answers(old: &AnswerSet, new: &AnswerSet) -> BTreeSet<AnswerId> {
+    old.iter()
+        .map(|(id, _)| id)
+        .chain(new.iter().map(|(id, _)| id))
+        .filter(|id| match (old.get(id), new.get(id)) {
+            (Some(Value::Secret(_)), Some(Value::Secret(_))) => false,
+            (a, b) => a != b,
+        })
+        .cloned()
+        .collect()
+}
+
+/// ` [include web]` for a hook of an include's frame; nothing at the root.
+fn frame_suffix(hook: &hooks::PlannedHook<'_>) -> String {
+    if hook.frame.is_empty() {
+        String::new()
+    } else {
+        format!(" [include {}]", hook.frame_prefix())
+    }
 }
 
 enum Action {

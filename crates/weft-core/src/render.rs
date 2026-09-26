@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::id::{AnswerId, PatchId};
 use crate::patch::{Hunk, Op, Patch};
@@ -280,23 +280,66 @@ pub fn unanswered<'q>(
     Ok(missing)
 }
 
+/// A patch placed in a frame of a composed graph: it renders against
+/// `answers` and its paths land under `mount`. `id`/`depends_on` are the
+/// node's identity *in the graph* — for a child template's patch mounted
+/// through an include they are keyed ids ([`PatchId::keyed`]), so the same
+/// patch mounted twice is two nodes.
+#[derive(Clone, Copy)]
+pub struct Framed<'a> {
+    pub id: PatchId,
+    pub depends_on: &'a [PatchId],
+    pub patch: &'a Patch,
+    pub answers: &'a AnswerSet,
+    pub mount: &'a Utf8Path,
+}
+
+impl<'a> Framed<'a> {
+    /// A patch in the root frame: its own id and dependencies, no mount.
+    pub fn root(patch: &'a Patch, answers: &'a AnswerSet) -> Self {
+        Framed {
+            id: patch.id,
+            depends_on: &patch.depends_on,
+            patch,
+            answers,
+            mount: Utf8Path::new(""),
+        }
+    }
+}
+
 /// Deterministic application order for `patches`: topological by dependency,
 /// ties broken by patch id. Errors on unknown deps or cycles.
 pub fn patch_order(patches: &[Patch]) -> Result<Vec<&Patch>, RenderError> {
     let by_id: BTreeMap<PatchId, &Patch> = patches.iter().map(|p| (p.id, p)).collect();
+    let order = topological(patches.iter().map(|p| (p.id, p.depends_on.as_slice())))?;
+    Ok(order.into_iter().map(|id| by_id[&id]).collect())
+}
+
+/// [`patch_order`] over framed nodes (same tie-breaking, by node id).
+pub fn framed_order<'n, 'a>(nodes: &'n [Framed<'a>]) -> Result<Vec<&'n Framed<'a>>, RenderError> {
+    let by_id: BTreeMap<PatchId, &Framed<'a>> = nodes.iter().map(|n| (n.id, n)).collect();
+    let order = topological(nodes.iter().map(|n| (n.id, n.depends_on)))?;
+    Ok(order.into_iter().map(|id| by_id[&id]).collect())
+}
+
+fn topological<'d>(
+    graph: impl Iterator<Item = (PatchId, &'d [PatchId])>,
+) -> Result<Vec<PatchId>, RenderError> {
+    let edges: Vec<(PatchId, &[PatchId])> = graph.collect();
+    let known: BTreeSet<PatchId> = edges.iter().map(|(id, _)| *id).collect();
     let mut indegree: BTreeMap<PatchId, usize> = BTreeMap::new();
     let mut dependents: BTreeMap<PatchId, Vec<PatchId>> = BTreeMap::new();
-    for p in patches {
-        indegree.entry(p.id).or_insert(0);
-        for dep in &p.depends_on {
-            if !by_id.contains_key(dep) {
+    for (id, deps) in &edges {
+        indegree.entry(*id).or_insert(0);
+        for dep in *deps {
+            if !known.contains(dep) {
                 return Err(RenderError::UnknownDep {
-                    patch: p.id,
+                    patch: *id,
                     dep: *dep,
                 });
             }
-            *indegree.entry(p.id).or_insert(0) += 1;
-            dependents.entry(*dep).or_default().push(p.id);
+            *indegree.entry(*id).or_insert(0) += 1;
+            dependents.entry(*dep).or_default().push(*id);
         }
     }
     let mut ready: BTreeSet<PatchId> = indegree
@@ -304,10 +347,10 @@ pub fn patch_order(patches: &[Patch]) -> Result<Vec<&Patch>, RenderError> {
         .filter(|(_, &d)| d == 0)
         .map(|(id, _)| *id)
         .collect();
-    let mut order = Vec::with_capacity(patches.len());
+    let mut order = Vec::with_capacity(edges.len());
     while let Some(id) = ready.iter().next().copied() {
         ready.remove(&id);
-        order.push(by_id[&id]);
+        order.push(id);
         for dep in dependents.get(&id).cloned().unwrap_or_default() {
             let d = indegree.get_mut(&dep).expect("dependent tracked");
             *d -= 1;
@@ -316,7 +359,7 @@ pub fn patch_order(patches: &[Patch]) -> Result<Vec<&Patch>, RenderError> {
             }
         }
     }
-    if order.len() != by_id.len() {
+    if order.len() != known.len() {
         let stuck = indegree
             .iter()
             .find(|(_, &d)| d > 0)
@@ -348,36 +391,67 @@ pub fn render_ordered(
     answers: &AnswerSet,
     eval: &dyn ExprEval,
 ) -> Result<Tree, RenderError> {
+    let framed: Vec<Framed> = order.iter().map(|p| Framed::root(p, answers)).collect();
+    let refs: Vec<&Framed> = framed.iter().collect();
+    Ok(render_framed(&refs, eval)?.0)
+}
+
+/// Render framed nodes in the given order (a linear extension of the
+/// composed DAG). A node whose `when` is false — evaluated against *its
+/// frame's* answers — is skipped along with everything that depends on it,
+/// across frames: a parent hunk depending on a gated-off child patch is off
+/// too. Returns the tree and the skipped node ids.
+///
+/// Foreach (integration) nodes are skipped here: they apply once per include
+/// instance in the engine's composed rendering, after this pass.
+pub fn render_framed(
+    order: &[&Framed<'_>],
+    eval: &dyn ExprEval,
+) -> Result<(Tree, BTreeSet<PatchId>), RenderError> {
     let mut skipped: BTreeSet<PatchId> = BTreeSet::new();
     let mut tree = Tree::new();
-    for &patch in order {
-        if patch.depends_on.iter().any(|d| skipped.contains(d)) {
-            skipped.insert(patch.id);
-            continue;
+    for &node in order {
+        if framed_active(node, &skipped, eval)? {
+            apply_patch(&mut tree, node.patch, node.answers, eval, node.mount)?;
+        } else {
+            skipped.insert(node.id);
         }
-        // Foreach (integration) patches only apply in composed rendering,
-        // once per include instance — a plain render skips them (and any
-        // dependents, though `weft check` forbids depending on them).
-        if patch.foreach.is_some() {
-            skipped.insert(patch.id);
-            continue;
-        }
-        if let Some(when) = &patch.when {
-            let active = eval
-                .eval_bool(when, answers)
-                .map_err(|e| RenderError::Eval {
-                    expr: when.0.clone(),
-                    context: format!("when of patch {}", patch.id.short()),
-                    source: e,
-                })?;
-            if !active {
-                skipped.insert(patch.id);
-                continue;
-            }
-        }
-        apply_patch(&mut tree, patch, answers, eval)?;
     }
-    Ok(tree)
+    Ok((tree, skipped))
+}
+
+/// The skip set [`render_framed`] would produce, without applying any ops.
+pub fn framed_skipped(
+    order: &[&Framed<'_>],
+    eval: &dyn ExprEval,
+) -> Result<BTreeSet<PatchId>, RenderError> {
+    let mut skipped: BTreeSet<PatchId> = BTreeSet::new();
+    for &node in order {
+        if !framed_active(node, &skipped, eval)? {
+            skipped.insert(node.id);
+        }
+    }
+    Ok(skipped)
+}
+
+fn framed_active(
+    node: &Framed<'_>,
+    skipped: &BTreeSet<PatchId>,
+    eval: &dyn ExprEval,
+) -> Result<bool, RenderError> {
+    if node.depends_on.iter().any(|d| skipped.contains(d)) || node.patch.foreach.is_some() {
+        return Ok(false);
+    }
+    match &node.patch.when {
+        None => Ok(true),
+        Some(when) => eval
+            .eval_bool(when, node.answers)
+            .map_err(|e| RenderError::Eval {
+                expr: when.0.clone(),
+                context: format!("when of patch {}", node.patch.id.short()),
+                source: e,
+            }),
+    }
 }
 
 /// Apply one patch's ops to an existing tree. Used by the engine's composed
@@ -390,7 +464,18 @@ pub fn apply_ops(
     answers: &AnswerSet,
     eval: &dyn ExprEval,
 ) -> Result<(), RenderError> {
-    apply_patch(tree, patch, answers, eval)
+    apply_patch(tree, patch, answers, eval, Utf8Path::new(""))
+}
+
+/// [`apply_ops`] with every op path placed under `mount`.
+pub fn apply_ops_in(
+    tree: &mut Tree,
+    patch: &Patch,
+    answers: &AnswerSet,
+    eval: &dyn ExprEval,
+    mount: &Utf8Path,
+) -> Result<(), RenderError> {
+    apply_patch(tree, patch, answers, eval, mount)
 }
 
 fn apply_patch(
@@ -398,7 +483,16 @@ fn apply_patch(
     patch: &Patch,
     answers: &AnswerSet,
     eval: &dyn ExprEval,
+    mount: &Utf8Path,
 ) -> Result<(), RenderError> {
+    let render_path = |path: &TemplatePath| -> Result<Utf8PathBuf, RenderError> {
+        let path = render_path(path, answers, eval)?;
+        Ok(if mount.as_str().is_empty() {
+            path
+        } else {
+            mount.join(path)
+        })
+    };
     for op in &patch.ops {
         match op {
             Op::CreateFile {
@@ -406,7 +500,7 @@ fn apply_patch(
                 content,
                 mode,
             } => {
-                let path = render_path(path, answers, eval)?;
+                let path = render_path(path)?;
                 if tree.get(&path).is_some() {
                     return Err(RenderError::CreateExists {
                         patch: patch.id,
@@ -423,7 +517,7 @@ fn apply_patch(
                 );
             }
             Op::CreateBinaryFile { path, data, mode } => {
-                let path = render_path(path, answers, eval)?;
+                let path = render_path(path)?;
                 if tree.get(&path).is_some() {
                     return Err(RenderError::CreateExists {
                         patch: patch.id,
@@ -446,7 +540,7 @@ fn apply_patch(
                 );
             }
             Op::ModifyFile { path, hunks } => {
-                let path = render_path(path, answers, eval)?;
+                let path = render_path(path)?;
                 let entry = tree.get(&path).ok_or_else(|| RenderError::MissingFile {
                     patch: patch.id,
                     path: path.clone(),
@@ -484,7 +578,7 @@ fn apply_patch(
                 );
             }
             Op::DeleteFile { path } => {
-                let path = render_path(path, answers, eval)?;
+                let path = render_path(path)?;
                 if tree.remove(&path).is_none() {
                     return Err(RenderError::MissingFile {
                         patch: patch.id,
@@ -493,8 +587,8 @@ fn apply_patch(
                 }
             }
             Op::RenamePath { from, to } => {
-                let from = render_path(from, answers, eval)?;
-                let to = render_path(to, answers, eval)?;
+                let from = render_path(from)?;
+                let to = render_path(to)?;
                 let entry = tree.remove(&from).ok_or_else(|| RenderError::MissingFile {
                     patch: patch.id,
                     path: from.clone(),
@@ -508,7 +602,7 @@ fn apply_patch(
                 tree.insert(to, entry);
             }
             Op::SetMode { path, mode } => {
-                let path = render_path(path, answers, eval)?;
+                let path = render_path(path)?;
                 let entry = tree.get(&path).ok_or_else(|| RenderError::MissingFile {
                     patch: patch.id,
                     path: path.clone(),

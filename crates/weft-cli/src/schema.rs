@@ -126,8 +126,13 @@ pub struct PatchFile {
     /// Free-form labels — metadata, never part of the content hash.
     #[serde(default)]
     pub tags: Vec<String>,
-    /// Names (file stems) of patches this one depends on. Patches with no
-    /// dependency path between them must commute.
+    /// Names of the graph nodes this patch depends on: another patch's file
+    /// stem (own or inherited through `[template] extends`), or a single
+    /// include's patch as `<include>/<patch>` (nested: `<include>/<include>/
+    /// <patch>`). Depending on an include's node is what allows this patch
+    /// to edit files under that include's mount. A repeat include has no
+    /// nameable nodes — use `foreach`. Patches with no dependency path
+    /// between them must commute.
     #[serde(default)]
     pub depends_on: Vec<String>,
     /// Starlark gate: apply this patch (and its dependents) only if truthy.
@@ -231,6 +236,25 @@ pub enum Command {
 
 // ---- manifest (weft.toml) ----------------------------------------------
 
+/// The base template a template extends: a directory path relative to this
+/// template root (`../base`), or a `hub:` ref with a version requirement.
+/// Its questions, includes, and patches are imported as-is (same names, same
+/// ids, no mount); this template's patches may depend on them by name but
+/// may not redeclare them.
+#[derive(JsonSchema, Deserialize)]
+#[serde(untagged)]
+pub enum ExtendsDecl {
+    /// Relative directory path (`../base`) or `hub:owner/name`.
+    Path(String),
+    Full {
+        /// Relative directory path or `hub:owner/name`.
+        template: String,
+        /// Semver requirement for a `hub:` template (e.g. `^1.0`).
+        #[serde(default)]
+        version: Option<String>,
+    },
+}
+
 /// `[template]` metadata.
 #[derive(JsonSchema, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -242,6 +266,9 @@ pub struct TemplateMeta {
     /// What this template scaffolds — the first thing agents read.
     #[serde(default)]
     pub description: Option<String>,
+    /// The base template this one builds on (see `ExtendsDecl`).
+    #[serde(default)]
+    pub extends: Option<ExtendsDecl>,
 }
 
 /// Question kind plus its kind-specific fields.
@@ -326,7 +353,10 @@ pub struct IncludeDecl {
     #[serde(default)]
     pub version: Option<String>,
     /// Mount prefix in the rendered tree; `{key}` substitutes the instance
-    /// key (required when `repeat = true`).
+    /// key (required when `repeat = true`). Omitted or empty mounts the
+    /// child at the root: its files merge with the parent's, and a path both
+    /// create is a render error.
+    #[serde(default)]
     pub path: String,
     /// Whether the project may instantiate this include 0..N times.
     #[serde(default)]

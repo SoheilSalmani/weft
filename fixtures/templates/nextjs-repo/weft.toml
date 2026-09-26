@@ -1,0 +1,13 @@
+[template]
+name = "nextjs-repo"
+weft-version = "0.1"
+description = "A single Next.js app repository: the shared base plus the app mounted at the root."
+extends = "../base"
+
+[[include]]
+name = "app"
+template = "../nextjs-app"
+path = ""
+
+[include.bind]
+app_name = "'site'"

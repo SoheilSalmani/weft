@@ -34,6 +34,11 @@ pub struct Session {
     /// Secret answers as source references, re-resolved at commit time.
     #[serde(default)]
     pub secrets: BTreeMap<AnswerId, String>,
+    /// The single (non-repeat) includes mounted into the base, with the
+    /// child answers they were rendered with. Their pinned nodes are part of
+    /// `session.base` (keyed ids); nested includes re-derive from binds.
+    #[serde(default, rename = "instance", skip_serializing_if = "Vec::is_empty")]
+    pub instances: Vec<SessionInstance>,
     /// Present when recording a `foreach` integration patch: the sample
     /// instance mounted into the base so the author edits against a
     /// concrete example.
@@ -68,6 +73,19 @@ pub struct ForeachSession {
     pub key: String,
     /// The sample instance's resolved child answers.
     pub answers: AnswerSet,
+}
+
+/// One single include mounted into a session's base (its instance key is
+/// the include name).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionInstance {
+    pub include: String,
+    /// Child answers (secrets excluded — see `secrets`).
+    #[serde(default)]
+    pub answers: AnswerSet,
+    /// Child secret references (answer id → source spec string).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub secrets: BTreeMap<AnswerId, String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -283,6 +301,7 @@ mod tests {
             },
             answers: Default::default(),
             secrets: Default::default(),
+            instances: Vec::new(),
             foreach: None,
             generator: None,
             amend: None,

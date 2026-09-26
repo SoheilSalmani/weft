@@ -228,24 +228,14 @@ fn record_foreach_authors_an_integration_patch() {
         "sample instance must be mounted in the worktree"
     );
 
-    // Edits under the sample mount are rejected — child files belong to the
-    // child template.
-    std::fs::write(worktree.join("connectors/stripe/HACK.md"), "nope\n").unwrap();
-    weft()
-        .arg("commit")
-        .arg("--template")
-        .arg(&parent)
-        .arg("--name")
-        .arg("bad")
-        .arg("--yes")
-        .assert()
-        .failure()
-        .stderr(predicates::str::contains(
-            "inside include `connector`'s mount",
-        ));
-    std::fs::remove_file(worktree.join("connectors/stripe/HACK.md")).unwrap();
-
-    // Register the sample in a parent file, referencing the sample key.
+    // A foreach patch may reach inside the instance: the sample mount
+    // abstracts to a `key` path segment, and a parent file references the
+    // sample key too.
+    std::fs::write(
+        worktree.join("connectors/stripe/CONNECTOR.md"),
+        "Registered in the workspace.\n",
+    )
+    .unwrap();
     let readme = worktree.join("README.md");
     let mut content = std::fs::read_to_string(&readme).unwrap();
     content.push_str("Connector directory: connectors/stripe\n");
@@ -262,10 +252,15 @@ fn record_foreach_authors_an_integration_patch() {
         .assert()
         .success();
 
-    // The sample key was abstracted to `key`…
+    // The sample key was abstracted to `key` — in content and in the path
+    // under the mount…
     let patch = std::fs::read_to_string(parent.join("patches/directory.json")).unwrap();
     assert!(patch.contains("\"foreach\": \"connector\""), "{patch}");
     assert!(patch.contains("\"answer\": \"key\""), "{patch}");
+    assert!(
+        patch.contains("\"connectors/\""),
+        "path must be split around the key: {patch}"
+    );
     assert!(
         !patch.contains("stripe"),
         "sample key must not leak: {patch}"
@@ -291,6 +286,36 @@ fn record_foreach_authors_an_integration_patch() {
     let rendered = read(&out, "README.md");
     assert!(rendered.contains("Connector directory: connectors/github"));
     assert!(rendered.contains("Connector directory: connectors/jira"));
+    assert!(out.join("connectors/github/CONNECTOR.md").is_file());
+    assert!(out.join("connectors/jira/CONNECTOR.md").is_file());
+
+    // Outside a foreach session, an edit under a repeat include's instances
+    // has nothing to abstract the key out of — refused with directions.
+    weft()
+        .args(["session", "new", "plain"])
+        .arg("--template")
+        .arg(&parent)
+        .arg("--answer")
+        .arg("workspace_name=Acme")
+        .assert()
+        .success();
+    let plain = parent.join(".weft-sessions/plain/worktree");
+    std::fs::create_dir_all(plain.join("connectors/stripe")).unwrap();
+    std::fs::write(plain.join("connectors/stripe/HACK.md"), "nope\n").unwrap();
+    weft()
+        .arg("commit")
+        .arg("--template")
+        .arg(&parent)
+        .arg("--session")
+        .arg("plain")
+        .arg("--name")
+        .arg("bad")
+        .arg("--yes")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "inside the instances of repeat include `connector`",
+        ));
 }
 
 #[test]

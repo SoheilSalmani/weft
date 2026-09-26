@@ -77,6 +77,62 @@ deviations from the plan.
 - Follow-ups: semver over tags (`@^1.0`), `weft cache gc`, SSH default for
   `gh:` (`WEFT_GH_PROTOCOL`), `weft check`/`graph` accepting sources, MCP
   scaffold from git refs, nested instance bases in `base.json`.
+## Post-MVP — Composed graph: `extends` and include nodes
+
+Templates compose as one patch graph. Two relationships, one engine concept
+(a **frame**: mount prefix + answer namespace each node renders in):
+
+- **`[template] extends`** is an import, not a mount: the base template's
+  questions, includes, and patches load into the extender's graph as-is
+  (same names, same ids — projects scaffolded from the base see no rewrite).
+  Name/question-id collisions are load errors; inherited patches are not
+  files of the extender (`patch_file` refuses; amend/squash/resync send you
+  to the base). Path or `hub:` refs (`{ template, version }`) through the
+  same `IncludeResolver`.
+- **Single includes are not opaque**: every child patch is a node
+  `<include>/<name>` (nested `web/svc/base`) keyed by the include
+  (`PatchId::keyed`), so the same child mounted twice is two nodes and the
+  hash of a parent patch depending on `web/next-config` embeds the keyed id.
+  Gate inheritance holds across frames (`render_framed` skips dependents of
+  a gated-off child node). Root mounts (`path = ""`) are legal; a collision
+  is a `create_file`-exists render error.
+- **Repeat includes stay opaque**: one `Instances` node per include (id =
+  hash of child node ids + mount + binds), reachable only through `foreach`;
+  a `depends_on` naming it is a load error. Foreach patches may now reach
+  inside an instance (`["connectors/", {"answer": "key"}, "/x"]`).
+- **Render** (`compose::render_composed`): one topological pass over
+  `graph_nodes` (root + every part's patches, keyed through the include
+  chain) via `weft_core::render::{framed_order, render_framed}`, then the
+  foreach phase per level, deepest first. Parent-first is the no-edges
+  special case. A foreach patch with a skipped dependency is now off (was a
+  latent bug).
+- **Sessions render the composed base**: `Session.instances` pins the
+  single includes' answers; `SessionMeta.base` holds composed node ids
+  (`--base web/next-config` works; `latest` = every pinnable node).
+- **`guard_mounts` inverted** (`commit::include_deps`): edits under a single
+  include's mount are legal and become dependencies on the child nodes that
+  own those files (leaves among owners; unowned new files → the frame's
+  roots; root-mounted includes claim nothing they didn't create), proven by
+  the existing closure replay. Edits under a repeat include's instances
+  outside a `--foreach` session are still refused (`guard_instances`).
+- **`check`**: static rule "op path under a mount ⇒ dependency on that
+  include" (closes the smuggled `create_file` gap), full composed render +
+  commutation over the combined graph (via `preview_parts`), `extends`
+  recursion.
+- **`.weft/base.json` pins instance bodies** (`BaseSnapshot.instances`,
+  recursive), so `update` reconstructs an amended child's old render instead
+  of silently dropping it — the prerequisite the design named.
+- **Hooks follow the node's frame**: one `hooks::plan` over the composed
+  graph (namespaced ids `web/pnpm-install`, `after` crosses the boundary,
+  post-hooks run in the mount, per-frame changed answers on update),
+  replacing the fixed children-then-parent order.
+- `graph`/`describe` list composed nodes (`include`, `mount`, `opaque`,
+  `inherited`, `extends`); LSP hover/goto resolve child and inherited
+  names; schemas regenerated. New fixtures `base`, `nextjs-app`,
+  `monorepo`, `nextjs-repo`; e2e `nodes.rs`.
+- Known limits: nested (grandchild) instance answers still re-derive from
+  binds; `patch amend`/`squash`/`resync` only target own root patches;
+  parent hunks on child files can only reference parent answers.
 
 ## Post-MVP — Git-like recording session (staging index, many patches, sibling/stack)
 

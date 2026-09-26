@@ -39,14 +39,9 @@ pub struct AmendOptions {
     pub force: bool,
 }
 
-/// Patches that directly depend on `id` (by name).
+/// Patches that directly depend on `id` (by name), anywhere in the graph.
 pub(crate) fn direct_dependents(template: &Template, id: PatchId) -> Vec<String> {
-    template
-        .patches
-        .iter()
-        .filter(|p| p.depends_on.contains(&id))
-        .filter_map(|p| template.id_to_name.get(&p.id).cloned())
-        .collect()
+    template.direct_dependents(id)
 }
 
 /// Start an amend session: render the target's ancestors, seed the worktree
@@ -74,11 +69,22 @@ pub fn start(
         .name_to_id
         .get(&opts.name)
         .with_context(|| format!("no patch `{}` in this template", opts.name))?;
-    let target = template
-        .patches
-        .iter()
-        .find(|p| p.id == id)
-        .expect("name points at a loaded patch");
+    let target = match template.node(id).map(|n| &n.kind) {
+        Some(crate::template::NodeKind::Root(i)) if !template.is_inherited(&opts.name) => {
+            &template.patches[*i]
+        }
+        Some(crate::template::NodeKind::Root(_)) => bail!(
+            "patch `{}` is inherited from `{}` — amend it there",
+            opts.name,
+            template.extends.as_ref().expect("inherited").root
+        ),
+        Some(crate::template::NodeKind::Child { path, .. }) => bail!(
+            "patch `{}` belongs to include `{}` — amend it in that template",
+            opts.name,
+            path.join("/")
+        ),
+        _ => bail!("`{}` is not a patch that can be amended", opts.name),
+    };
     if target.meta.generator.is_some() {
         bail!(
             "patch `{}` is a generator patch; its content is owned by its command — \
@@ -115,25 +121,56 @@ pub fn start(
         &opts.answers,
         opts.answers_json.as_deref(),
     )?;
+    let (parent_provided, child_provided) = crate::compose::split_provided(&template, &provided)?;
+    let include_provided: BTreeMap<String, weft_core::AnswerSet> = child_provided
+        .into_iter()
+        .filter(|((inc, _), _)| template.include(inc).is_some_and(|i| !i.decl.repeat))
+        .map(|((inc, _), set)| (inc, set))
+        .collect();
     let resolved = answers::gather(
         &template,
-        &provided,
+        &parent_provided,
         &weft_core::AnswerSet::new(),
         &eval,
         interaction,
     )?;
 
     // Base = the target's strict ancestors (its dependency closure minus
-    // itself). The worktree is that base with the target applied on top, so
-    // the author edits the target's own contribution.
-    let ancestors = template.ancestor_closure(id);
+    // itself), across frames: a target depending on `web/next-config` needs
+    // that include mounted. The worktree is that base with the target
+    // applied on top, so the author edits the target's own contribution.
+    let mut pinned = template.ancestor_closure(id);
+    pinned.remove(&id);
+    pinned.retain(|n| {
+        template
+            .node(*n)
+            .and_then(|n| template.node_patch(n))
+            .is_some_and(|p| p.foreach.is_none())
+    });
     let base_patches: Vec<_> = template
         .patches
         .iter()
-        .filter(|p| p.id != id && ancestors.contains(&p.id) && p.foreach.is_none())
+        .filter(|p| pinned.contains(&p.id))
         .cloned()
         .collect();
-    let base_tree = weft_core::render::render(&base_patches, &resolved, &eval)
+    let mut parts = crate::compose::single_parts(
+        &template,
+        &resolved,
+        &include_provided,
+        &BTreeMap::new(),
+        &eval,
+        interaction,
+    )?;
+    crate::compose::filter_parts(&mut parts, &pinned);
+    let instances: Vec<crate::session::SessionInstance> = parts
+        .iter()
+        .map(|p| crate::session::SessionInstance {
+            include: p.instance.include.clone(),
+            answers: crate::start::strip_secrets(&p.instance.answers),
+            secrets: crate::new::secret_specs(&p.template.manifest.questions, &p.instance.answers),
+        })
+        .collect();
+    let base_tree = crate::compose::render_composed(&base_patches, &resolved, &parts, &eval)
         .context("rendering the patch's ancestors")?;
     let mut seed = base_tree.clone();
     // Force the target on regardless of its gate (we're editing it).
@@ -162,7 +199,7 @@ pub fn start(
         .collect();
     let sess = Session {
         session: SessionMeta {
-            base: base_patches.iter().map(|p| p.id).collect(),
+            base: pinned.into_iter().collect(),
             // The diff target is the base *without* the patch, so commit
             // re-derives the patch's full contribution from the worktree.
             tree_hash: base_tree.hash(),
@@ -172,6 +209,7 @@ pub fn start(
         },
         answers: crate::start::strip_secrets(&resolved),
         secrets: secret_specs,
+        instances,
         foreach: None,
         generator: None,
         amend: Some(opts.name.clone()),
@@ -191,9 +229,11 @@ pub(crate) fn finish(
     session_name: &str,
     target: &str,
     base_patches: &[weft_core::Patch],
+    parts: &[crate::compose::ComposedPart<'_>],
     answers: &weft_core::AnswerSet,
     work_tree: &weft_core::Tree,
     ops: Vec<weft_core::Op>,
+    interaction: &mut dyn Interaction,
 ) -> Result<()> {
     let eval = StarlarkEval;
     let has_dependents = template
@@ -226,7 +266,7 @@ pub(crate) fn finish(
     );
     let mut with_new = base_patches.to_vec();
     with_new.push(candidate);
-    let replayed = weft_core::render::render(&with_new, answers, &eval)
+    let replayed = crate::compose::render_composed(&with_new, answers, parts, &eval)
         .context("replaying the amended patch against its base")?;
     let gate_open = match &file.when {
         None => true,
@@ -247,16 +287,29 @@ pub(crate) fn finish(
 
     // Rebase check: if anything depends on the amended patch, its
     // context-anchored hunks may have moved with the new content. A full
-    // render under the amend answers surfaces a dependent that broke.
+    // composed render under the amend answers surfaces a dependent that
+    // broke.
     if has_dependents {
         let reloaded = Template::load(template_root)?;
-        let non_foreach: Vec<_> = reloaded
-            .patches
-            .iter()
-            .filter(|p| p.foreach.is_none())
-            .cloned()
-            .collect();
-        if let Err(e) = weft_core::render::render(&non_foreach, answers, &eval) {
+        let full = crate::session::Session {
+            session: SessionMeta {
+                base: crate::start::pin_base(&reloaded, "latest")?
+                    .into_iter()
+                    .collect(),
+                tree_hash: String::new(),
+                worktree: None,
+                scope: Vec::new(),
+                adopted: false,
+            },
+            answers: session.answers.clone(),
+            secrets: session.secrets.clone(),
+            instances: session.instances.clone(),
+            foreach: None,
+            generator: None,
+            amend: None,
+        };
+        let (root, parts) = crate::commit::session_base(&reloaded, &full, answers, interaction)?;
+        if let Err(e) = crate::compose::render_composed(&root, answers, &parts, &eval) {
             bail!(
                 "a dependent patch no longer applies after the amend: {e}\n\
                  its context anchored on content that moved — re-record it \

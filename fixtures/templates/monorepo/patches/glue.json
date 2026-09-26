@@ -1,0 +1,16 @@
+{
+  "description": "Integration: tell the app it lives in a workspace (anchors on the Tailwind line, so it is off without Tailwind).",
+  "depends_on": ["workspace", "web/tailwind"],
+  "ops": [
+    {
+      "op": "modify_file",
+      "path": "apps/web/next.config.ts",
+      "hunks": [
+        {
+          "context_before": ["  // tailwind: see tailwind.config.ts"],
+          "added": [["  // workspace: ", { "answer": "workspace" }]]
+        }
+      ]
+    }
+  ]
+}

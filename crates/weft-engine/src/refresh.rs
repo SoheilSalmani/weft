@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{bail, Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use weft_core::merge::merge3;
-use weft_core::{render::render, AnswerKind, AnswerSet, FileEntry};
+use weft_core::{AnswerKind, AnswerSet, FileEntry};
 use weft_lang::StarlarkEval;
 
 use crate::interact::Interaction;
@@ -56,26 +56,13 @@ pub fn run(
     }
     let eval = StarlarkEval;
 
-    for id in &sess.session.base {
-        if !template.id_to_name.contains_key(id) {
-            bail!(
-                "pinned base patch {} no longer exists in the template; \
-                 a patch changed since the session started — start a new one",
-                id.short()
-            );
-        }
-    }
-    let base_patches: Vec<_> = template
-        .patches
-        .iter()
-        .filter(|p| sess.session.base.contains(&p.id) && p.foreach.is_none())
-        .cloned()
-        .collect();
-
     // Old base: what the worktree was rendered from.
     let mut old_answers = sess.answers.clone();
     crate::commit::resolve_secret_refs(&template, &sess.secrets, &mut old_answers, interaction)?;
-    let old_base = render(&base_patches, &old_answers, &eval).context("re-rendering old base")?;
+    let (base_patches, old_parts) =
+        crate::commit::session_base(&template, &sess, &old_answers, interaction)?;
+    let old_base = crate::compose::render_composed(&base_patches, &old_answers, &old_parts, &eval)
+        .context("re-rendering old base")?;
     if old_base.hash() != sess.session.tree_hash {
         bail!(
             "base state hash changed since the session started (a base patch or \
@@ -85,6 +72,7 @@ pub fn run(
 
     // New answers: the session's answers, overlaid with anything passed now,
     // then re-gathered so new questions resolve and computed values recompute.
+    // Namespaced answers do the same for the mounted includes.
     let new_layered = answers::layered_with_json(
         &template,
         &opts.presets,
@@ -92,14 +80,45 @@ pub fn run(
         &opts.answers,
         opts.answers_json.as_deref(),
     )?;
+    let (parent_layered, child_layered) = crate::compose::split_provided(&template, &new_layered)?;
     let mut provided = sess.answers.clone();
-    for (k, v) in new_layered.iter() {
+    for (k, v) in parent_layered.iter() {
         provided.insert(k.clone(), v.clone());
     }
     let mut presolved = AnswerSet::new();
     crate::commit::resolve_secret_refs(&template, &sess.secrets, &mut presolved, interaction)?;
     let new_answers = answers::gather(&template, &provided, &presolved, &eval, interaction)?;
-    let new_base = render(&base_patches, &new_answers, &eval).context("re-rendering new base")?;
+    let mut include_provided: BTreeMap<String, AnswerSet> = BTreeMap::new();
+    let mut include_presolved: BTreeMap<String, AnswerSet> = BTreeMap::new();
+    for part in &old_parts {
+        let name = part.instance.include.clone();
+        let mut stored = AnswerSet::new();
+        let mut secrets = AnswerSet::new();
+        for (id, value) in part.instance.answers.iter() {
+            if matches!(value, weft_core::Value::Secret(_)) {
+                secrets.insert(id.clone(), value.clone());
+            } else {
+                stored.insert(id.clone(), value.clone());
+            }
+        }
+        if let Some(overlay) = child_layered.get(&(name.clone(), name.clone())) {
+            stored.overlay(overlay);
+        }
+        include_provided.insert(name.clone(), stored);
+        include_presolved.insert(name, secrets);
+    }
+    let pinned: BTreeSet<_> = sess.session.base.iter().copied().collect();
+    let mut new_parts = crate::compose::single_parts(
+        &template,
+        &new_answers,
+        &include_provided,
+        &include_presolved,
+        &eval,
+        interaction,
+    )?;
+    crate::compose::filter_parts(&mut new_parts, &pinned);
+    let new_base = crate::compose::render_composed(&base_patches, &new_answers, &new_parts, &eval)
+        .context("re-rendering new base")?;
 
     // Current worktree (your edits on top of the old base).
     let worktree = sess.worktree(&template.root, name);
@@ -184,6 +203,14 @@ pub fn run(
             _ => None,
         })
         .collect();
+    let instances = new_parts
+        .iter()
+        .map(|p| crate::session::SessionInstance {
+            include: p.instance.include.clone(),
+            answers: strip_secrets(&p.instance.answers),
+            secrets: crate::new::secret_specs(&p.template.manifest.questions, &p.instance.answers),
+        })
+        .collect();
     let refreshed = Session {
         session: SessionMeta {
             base: sess.session.base.clone(),
@@ -194,6 +221,7 @@ pub fn run(
         },
         answers: strip_secrets(&new_answers),
         secrets,
+        instances,
         foreach: None,
         generator: None,
         amend: None,

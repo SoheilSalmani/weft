@@ -8,20 +8,28 @@
 
 use std::collections::BTreeSet;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use camino::Utf8PathBuf;
 use serde::Serialize;
 use similar::TextDiff;
-use weft_core::render::ExprEval;
+use weft_core::render::{ExprEval, Framed};
 use weft_core::{AnswerSet, Op, Patch, PatchId, Question, Segment, TemplatePath};
 
-use crate::template::Template;
+use crate::compose;
+use crate::template::{Node, NodeKind, Template};
 
 #[derive(Debug, Serialize)]
 pub struct GraphDoc {
     pub template: TemplateInfo,
+    /// The base template this one extends, as declared (`[template] extends`).
+    /// Its patches are root nodes here, like the template's own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extends: Option<String>,
     pub questions: Vec<Question>,
     pub presets: Vec<String>,
+    /// The composed graph: root-frame patches, every single include's
+    /// patches (`<include>/<name>`, rendered under the include's mount), and
+    /// one opaque node per repeat include.
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
     /// Included child templates as nested (structural) graphs — the feed for
@@ -54,9 +62,11 @@ pub struct TemplateInfo {
 
 #[derive(Debug, Serialize)]
 pub struct GraphNode {
-    /// Content id (blake3 hex).
+    /// Node id in the composed graph: the content id (blake3 hex) for a
+    /// root patch, keyed by the include for an include node.
     pub id: PatchId,
-    /// Human name (the patch's file stem).
+    /// Human name: the patch's file stem, `<include>/<stem>` for an include
+    /// node, the include name for an opaque repeat node.
     pub name: String,
     /// Display title (metadata) — UIs prefer this over `name`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -71,11 +81,23 @@ pub struct GraphNode {
     /// Integration patch: renders once per instance of this include.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub foreach: Option<String>,
+    /// The top-level include this node renders through (include nodes and
+    /// opaque repeat nodes).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include: Option<String>,
+    /// Static mount prefix of an include node (`""` for a root mount).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mount: Option<String>,
+    /// A repeat include's instances, as one node: no ops, no gate; only
+    /// `foreach` patches reach it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub opaque: bool,
     /// This patch's hooks (declaration order), for the UI's pre/post panels.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hooks: Vec<HookSummary>,
     /// Whether the patch applies under the supplied answers; `None` when the
-    /// graph was built without answers.
+    /// graph was built without answers, for opaque nodes, and for include
+    /// nodes whose instance answers could not be resolved.
     pub active: Option<bool>,
 }
 
@@ -143,31 +165,55 @@ pub fn graph_doc(
     answers: Option<&AnswerSet>,
     eval: &dyn ExprEval,
 ) -> Result<GraphDoc> {
-    let skipped = match answers {
-        Some(answers) => Some(skipped_patches(&template.patches, answers, eval)?),
+    let activity = match answers {
+        Some(answers) => Some(Activity::compute(template, answers, eval)?),
         None => None,
     };
 
-    let mut nodes = Vec::with_capacity(template.patches.len());
+    let mut nodes = Vec::with_capacity(template.nodes.len());
     let mut edges = Vec::new();
-    for patch in &template.patches {
-        let name = template.id_to_name[&patch.id].clone();
+    for node in &template.nodes {
+        let patch = template.node_patch(node);
+        let active = activity.as_ref().and_then(|a| a.of(node, patch));
+        let (mount, opaque) = match &node.kind {
+            NodeKind::Root(_) => (None, false),
+            NodeKind::Child { mount, .. } => (Some(mount.to_string()), false),
+            NodeKind::Instances { .. } => (None, true),
+        };
         nodes.push(GraphNode {
-            id: patch.id,
-            name,
-            title: patch.meta.title.clone(),
-            when: patch.when.as_ref().map(|w| w.as_str().to_owned()),
-            description: patch.meta.description.clone(),
-            tags: patch.meta.tags.clone(),
-            ops: patch.ops.iter().map(op_summary).collect(),
-            foreach: patch.foreach.clone(),
-            hooks: patch.meta.hooks.iter().map(hook_summary).collect(),
-            active: skipped.as_ref().map(|s| !s.contains(&patch.id)),
+            id: node.id,
+            name: node.name.clone(),
+            title: patch.and_then(|p| p.meta.title.clone()),
+            when: patch.and_then(|p| p.when.as_ref().map(|w| w.as_str().to_owned())),
+            description: patch.and_then(|p| p.meta.description.clone()),
+            tags: patch.map(|p| p.meta.tags.clone()).unwrap_or_default(),
+            ops: patch
+                .map(|p| p.ops.iter().map(op_summary).collect())
+                .unwrap_or_default(),
+            foreach: patch.and_then(|p| p.foreach.clone()),
+            include: node.include().map(str::to_owned),
+            mount,
+            opaque,
+            hooks: patch
+                .map(|p| p.meta.hooks.iter().map(hook_summary).collect())
+                .unwrap_or_default(),
+            active,
         });
-        for dep in &patch.depends_on {
+        for dep in &node.depends_on {
             edges.push(GraphEdge {
                 source: *dep,
-                target: patch.id,
+                target: node.id,
+            });
+        }
+        // A foreach patch reads every instance of its include: an edge from
+        // the include's opaque node. A single include has no such node.
+        if let Some(source) = patch
+            .and_then(|p| p.foreach.as_deref())
+            .and_then(|inc| foreach_source(template, node, inc))
+        {
+            edges.push(GraphEdge {
+                source,
+                target: node.id,
             });
         }
     }
@@ -201,6 +247,10 @@ pub fn graph_doc(
             name: template.manifest.template.name.clone(),
             weft_version: template.manifest.template.weft_version.clone(),
         },
+        extends: template
+            .extends
+            .as_ref()
+            .map(|e| e.decl.template().to_string()),
         questions: template.manifest.questions.clone(),
         presets: template
             .manifest
@@ -214,36 +264,94 @@ pub fn graph_doc(
     })
 }
 
-/// Mirror of the skip logic in `weft_core::render::render`: a patch is
-/// skipped when its `when` gate is false or any dependency is skipped.
-fn skipped_patches(
-    patches: &[Patch],
-    answers: &AnswerSet,
-    eval: &dyn ExprEval,
-) -> Result<BTreeSet<PatchId>> {
-    let order = weft_core::render::patch_order(patches)?;
-    let mut skipped = BTreeSet::new();
-    for patch in order {
-        if patch.depends_on.iter().any(|d| skipped.contains(d)) {
-            skipped.insert(patch.id);
-            continue;
+/// The opaque node a foreach patch iterates: the repeat include `inc` of the
+/// frame `node` renders in (`web/conn` for a child node under `web`).
+fn foreach_source(template: &Template, node: &Node, inc: &str) -> Option<PatchId> {
+    let name = match &node.kind {
+        NodeKind::Child { path, .. } => format!("{}/{inc}", path.join("/")),
+        _ => inc.to_owned(),
+    };
+    let id = *template.name_to_id.get(&name)?;
+    matches!(template.node(id)?.kind, NodeKind::Instances { .. }).then_some(id)
+}
+
+/// Node activity under one answer set, over the composed graph — the skip
+/// logic of `weft_core::render::render_framed` without rendering.
+struct Activity {
+    /// Gate open and no skipped dependency. Foreach patches and opaque
+    /// nodes are never here.
+    active: BTreeSet<PatchId>,
+    /// Nodes whose state cannot be decided: opaque repeat nodes, include
+    /// nodes whose instance answers did not resolve, and whatever depends on
+    /// those.
+    unknown: BTreeSet<PatchId>,
+}
+
+impl Activity {
+    fn compute(template: &Template, answers: &AnswerSet, eval: &dyn ExprEval) -> Result<Self> {
+        let mut unknown: BTreeSet<PatchId> = template
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.kind, NodeKind::Instances { .. }))
+            .map(|n| n.id)
+            .collect();
+        // Include nodes need their instance's answers (binds, child
+        // defaults, placeholder secrets). When those cannot be resolved
+        // non-interactively, the child frames are unknown and the root frame
+        // is computed alone.
+        if let Ok(parts) = compose::preview_parts(
+            template,
+            answers,
+            &Default::default(),
+            &Default::default(),
+            eval,
+        ) {
+            let active = compose::active_nodes(&template.patches, answers, &parts, eval)?;
+            return Ok(Activity { active, unknown });
         }
-        // Foreach patches gate per instance (`key`/`instance_*` in scope) —
-        // their activity isn't answerable from parent answers alone, so they
-        // are shown as active whenever their dependencies are.
-        if patch.foreach.is_some() {
-            continue;
-        }
-        if let Some(when) = &patch.when {
-            let active = eval
-                .eval_bool(when, answers)
-                .with_context(|| format!("evaluating when of patch {}", patch.id.short()))?;
-            if !active {
-                skipped.insert(patch.id);
+        unknown.extend(
+            template
+                .nodes
+                .iter()
+                .filter(|n| matches!(n.kind, NodeKind::Child { .. }))
+                .map(|n| n.id),
+        );
+        let mut active = BTreeSet::new();
+        // `patches` is topological: dependencies are decided first.
+        for patch in &template.patches {
+            if patch.depends_on.iter().any(|d| unknown.contains(d)) {
+                unknown.insert(patch.id);
+                continue;
+            }
+            if patch.foreach.is_some() || !patch.depends_on.iter().all(|d| active.contains(d)) {
+                continue;
+            }
+            let open = match &patch.when {
+                None => true,
+                Some(when) => eval
+                    .eval_bool(when, answers)
+                    .with_context(|| format!("evaluating when of patch {}", patch.id.short()))?,
+            };
+            if open {
+                active.insert(patch.id);
             }
         }
+        Ok(Activity { active, unknown })
     }
-    Ok(skipped)
+
+    /// `Some(state)` for a decidable node. Foreach patches gate per instance
+    /// (`key`/`instance_*` in scope) — not answerable from parent answers
+    /// alone, so they show as active whenever their dependencies are.
+    fn of(&self, node: &Node, patch: Option<&Patch>) -> Option<bool> {
+        let patch = patch?;
+        if patch.foreach.is_some() {
+            if node.depends_on.iter().any(|d| self.unknown.contains(d)) {
+                return None;
+            }
+            return Some(node.depends_on.iter().all(|d| self.active.contains(d)));
+        }
+        (!self.unknown.contains(&node.id)).then(|| self.active.contains(&node.id))
+    }
 }
 
 pub(crate) fn op_summary(op: &Op) -> OpSummary {
@@ -315,18 +423,20 @@ pub struct FileDiff {
     pub binary: bool,
 }
 
-/// What `patch_name` contributes under `answers`: render its ancestor
-/// closure without and with the patch and diff the trees. Requires a
-/// complete answer set (same requirement as rendering).
+/// What node `name` contributes under `answers`: render its ancestor
+/// closure (over the composed graph, each node in its frame) without and
+/// with the node and diff the trees. Requires a complete answer set (same
+/// requirement as rendering); include nodes also need their instance's
+/// answers to resolve non-interactively.
 pub fn node_diff(
     template: &Template,
-    patch_name: &str,
+    name: &str,
     answers: &AnswerSet,
     eval: &dyn ExprEval,
 ) -> Result<NodeDiff> {
-    let id = *template.name_to_id.get(patch_name).with_context(|| {
+    let id = *template.name_to_id.get(name).with_context(|| {
         format!(
-            "unknown patch `{patch_name}` (known: {})",
+            "unknown patch `{name}` (known: {})",
             template
                 .name_to_id
                 .keys()
@@ -335,33 +445,53 @@ pub fn node_diff(
                 .join(", ")
         )
     })?;
+    let node = template.node(id).expect("every name is a node");
+    let Some(patch) = template.node_patch(node) else {
+        bail!(
+            "`{name}` is a repeat include: its instances are opaque to this graph \
+             (diff a `foreach = \"{name}\"` patch instead)"
+        );
+    };
+    let parts = compose::preview_parts(
+        template,
+        answers,
+        &Default::default(),
+        &Default::default(),
+        eval,
+    )
+    .context("resolving the template's includes")?;
+    let graph = compose::graph_nodes(&template.patches, answers, &parts);
     let closure = template.ancestor_closure(id);
-    let with: Vec<Patch> = template
-        .patches
-        .iter()
-        .filter(|p| closure.contains(&p.id))
-        .cloned()
-        .collect();
-    let without: Vec<Patch> = with.iter().filter(|p| p.id != id).cloned().collect();
 
     // Force the node's own gate open so the diff shows what it *would* do;
     // report the real gate state separately.
-    let skipped = skipped_patches(&template.patches, answers, eval)?;
-    let active = !skipped.contains(&id);
-    let with: Vec<Patch> = with
-        .into_iter()
-        .map(|mut p| {
-            if p.id == id {
-                p.when = None;
-            }
-            p
+    let mut forced = patch.clone();
+    forced.when = None;
+    let active = Activity::compute(template, answers, eval)?
+        .of(node, Some(patch))
+        .unwrap_or(false);
+    let with: Vec<Framed> = graph
+        .iter()
+        .filter(|n| closure.contains(&n.id))
+        .map(|n| Framed {
+            id: n.id,
+            depends_on: &n.depends_on,
+            patch: if n.id == id { &forced } else { n.patch },
+            answers: n.answers,
+            mount: &n.mount,
         })
         .collect();
+    let without: Vec<Framed> = with.iter().filter(|n| n.id != id).copied().collect();
 
-    let before = weft_core::render::render(&without, answers, eval)
-        .context("rendering the patch's base (ancestors only)")?;
-    let after = weft_core::render::render(&with, answers, eval)
-        .context("rendering the patch's base plus the patch")?;
+    let render = |nodes: &[Framed], what: &str| -> Result<weft_core::Tree> {
+        let order =
+            weft_core::render::framed_order(nodes).with_context(|| format!("ordering {what}"))?;
+        let (tree, _) = weft_core::render::render_framed(&order, eval)
+            .with_context(|| format!("rendering {what}"))?;
+        Ok(tree)
+    };
+    let before = render(&without, "the node's base (ancestors only)")?;
+    let after = render(&with, "the node's base plus the node")?;
 
     let mut files = Vec::new();
     let mut paths: BTreeSet<&Utf8PathBuf> = BTreeSet::new();
@@ -412,7 +542,7 @@ pub fn node_diff(
 
     Ok(NodeDiff {
         id,
-        name: patch_name.to_owned(),
+        name: name.to_owned(),
         active,
         files,
     })
@@ -468,6 +598,79 @@ mod tests {
         let base = off.nodes.iter().find(|n| n.name == "base").unwrap();
         assert_eq!(docker.active, Some(false));
         assert_eq!(base.active, Some(true));
+    }
+
+    fn workspace_template() -> Template {
+        let root = camino::Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/templates/workspace");
+        Template::load(&root).unwrap()
+    }
+
+    #[test]
+    fn composed_graph_lists_include_nodes_and_opaque_repeat() {
+        let template = workspace_template();
+        let answers: AnswerSet = [(
+            AnswerId::from("workspace_name"),
+            Value::String("Acme".into()),
+        )]
+        .into_iter()
+        .collect();
+        let doc = graph_doc(&template, Some(&answers), &StarlarkEval).unwrap();
+        let names: Vec<&str> = doc.nodes.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "base",
+                "connector",
+                "registry",
+                "svc/base",
+                "svc/deploy",
+                "svc/docker"
+            ]
+        );
+
+        let by_name = |n: &str| doc.nodes.iter().find(|x| x.name == n).unwrap();
+        let svc_docker = by_name("svc/docker");
+        assert_eq!(svc_docker.include.as_deref(), Some("svc"));
+        assert_eq!(svc_docker.mount.as_deref(), Some("services/hello"));
+        assert_eq!(svc_docker.id, template.name_to_id["svc/docker"]);
+        // Instance answers resolve through the bind (`use_docker` defaults on).
+        assert_eq!(svc_docker.active, Some(true));
+
+        let connector = by_name("connector");
+        assert!(connector.opaque);
+        assert!(connector.ops.is_empty());
+        assert_eq!(connector.active, None);
+
+        // Child dependencies stay inside the include; the foreach patch is
+        // fed by the opaque node.
+        let edge = |s: &str, t: &str| {
+            doc.edges
+                .iter()
+                .any(|e| e.source == by_name(s).id && e.target == by_name(t).id)
+        };
+        assert!(edge("svc/base", "svc/docker"));
+        assert!(edge("connector", "registry"));
+        assert!(edge("base", "registry"));
+        assert_eq!(doc.edges.len(), 4);
+    }
+
+    #[test]
+    fn node_diff_of_include_node_renders_under_its_mount() {
+        let template = workspace_template();
+        let answers: AnswerSet = [(
+            AnswerId::from("workspace_name"),
+            Value::String("Acme".into()),
+        )]
+        .into_iter()
+        .collect();
+        let diff = node_diff(&template, "svc/docker", &answers, &StarlarkEval).unwrap();
+        assert!(diff.active);
+        assert!(diff
+            .files
+            .iter()
+            .any(|f| f.path == "services/hello/Dockerfile" && f.change == "created"));
+        assert!(node_diff(&template, "connector", &answers, &StarlarkEval).is_err());
     }
 
     #[test]

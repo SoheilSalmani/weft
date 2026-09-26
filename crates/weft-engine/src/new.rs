@@ -98,30 +98,16 @@ pub fn run(
     let tree = compose::render_composed(&template.patches, &resolved, &parts, &eval)
         .context("rendering template")?;
 
-    // Collect hooks: the parent's, plus each instance's child hooks. Pre-hooks
+    // Plan the hooks of every active node, in composed order. Pre-hooks
     // (guards) run before writing anything — a failure aborts with nothing
-    // but an empty dest dir. Child pre-hooks run at the dest root (their
-    // mount doesn't exist yet); child post-hooks run inside their mount.
-    let collected = hooks::collect(&template, &resolved, &eval)?;
-    let child_collected: Vec<_> = parts
-        .iter()
-        .map(|p| hooks::collect(p.template, &p.instance.answers, &eval))
-        .collect::<Result<_>>()?;
+    // but an empty dest dir. They run at the dest root (mounts don't exist
+    // yet); post-hooks run inside their frame's mount.
+    let plan = hooks::plan(&template, &resolved, &parts, &eval)?;
 
     fsio::ensure_empty_dest(&opts.dest)?;
     if !opts.skip_tasks {
-        hooks::run(&collected.pre, &opts.dest, &resolved, &eval)
+        hooks::run_planned(&plan.pre, &opts.dest, &eval)
             .context("a pre-render hook failed; no files were written")?;
-        for (part, child) in parts.iter().zip(&child_collected) {
-            hooks::run(&child.pre, &opts.dest, &part.instance.answers, &eval).with_context(
-                || {
-                    format!(
-                        "a pre-render hook of include `{}` failed; no files were written",
-                        part.instance.include
-                    )
-                },
-            )?;
-        }
     }
     fsio::write_tree(&opts.dest, &tree)?;
 
@@ -152,18 +138,13 @@ pub fn run(
     .with_instances(instance_states);
     state.save(&opts.dest)?;
     // The self-contained base: store the patch bodies this tree was rendered
-    // from, so `weft update` can reconstruct the merge base even after the
-    // template rewrites patch ids (amend/squash/resync).
-    crate::state::BaseSnapshot::from_patches(&template.patches).save(&opts.dest)?;
+    // from — root frame and every instance — so `weft update` can
+    // reconstruct the merge base even after a template rewrites patch ids
+    // (amend/squash/resync).
+    crate::state::BaseSnapshot::from_render(&template.patches, &parts).save(&opts.dest)?;
 
     if !opts.skip_tasks {
-        // Child post-hooks first (inside their mounts), then the parent's —
-        // so parent finalize hooks (format, git commit) run last.
-        for (part, child) in parts.iter().zip(&child_collected) {
-            let cwd = opts.dest.join(&part.instance.mount);
-            hooks::run(&child.post, &cwd, &part.instance.answers, &eval)?;
-        }
-        hooks::run(&collected.post, &opts.dest, &resolved, &eval)?;
+        hooks::run_planned(&plan.post, &opts.dest, &eval)?;
     }
 
     eprintln!(

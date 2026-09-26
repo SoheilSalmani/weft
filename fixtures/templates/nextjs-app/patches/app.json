@@ -1,0 +1,34 @@
+{
+  "description": "The application: package manifest and Next config.",
+  "ops": [
+    {
+      "op": "create_file",
+      "path": "package.json",
+      "content": [
+        "{",
+        ["  \"name\": \"", { "answer": "app_name" }, "\","],
+        "  \"private\": true",
+        "}"
+      ]
+    },
+    {
+      "op": "create_file",
+      "path": "next.config.ts",
+      "content": [
+        "const config = {",
+        "  reactStrictMode: true,",
+        "};",
+        "export default config;"
+      ]
+    }
+  ],
+  "hooks": [
+    {
+      "id": "install",
+      "phase": "post",
+      "effect": "setup",
+      "label": "Install app dependencies",
+      "action": "echo child > installed.txt"
+    }
+  ]
+}

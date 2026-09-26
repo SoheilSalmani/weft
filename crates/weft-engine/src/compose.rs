@@ -12,10 +12,9 @@ use std::collections::BTreeMap;
 use anyhow::{bail, Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use weft_core::render::ExprEval;
-use weft_core::{AnswerId, AnswerSet, Patch, Question, Tree, Value};
+use weft_core::{AnswerId, AnswerSet, Patch, PatchId, Question, Tree, Value};
 
 use crate::answers;
-use crate::hooks::ChangeSet;
 use crate::interact::Interaction;
 use crate::template::{LoadedInclude, Template};
 
@@ -26,11 +25,15 @@ pub struct ResolvedInstance {
     pub key: String,
     pub mount: Utf8PathBuf,
     pub answers: AnswerSet,
+    /// Instance of a `repeat` include (project-time; its nodes are opaque
+    /// to the parent graph) rather than the single instance of a plain one.
+    pub repeat: bool,
 }
 
 /// An instance paired with the child template and the (possibly pinned-base
 /// filtered) patches to render it from. `children` are the child template's
 /// own includes, resolved recursively (nested composition).
+#[derive(Clone)]
 pub struct ComposedPart<'t> {
     pub instance: ResolvedInstance,
     pub template: &'t Template,
@@ -39,11 +42,14 @@ pub struct ComposedPart<'t> {
 }
 
 /// Render an include's mount prefix for an instance key. `{key}` in the
-/// declared path substitutes the key; the result must be tree-relative.
+/// declared path substitutes the key; the result must be tree-relative. An
+/// empty path (or `.`) mounts at the root.
 pub fn mount_path(decl_path: &str, key: &str) -> Result<Utf8PathBuf> {
     let rendered = decl_path.replace("{key}", key);
-    let invalid = rendered.is_empty()
-        || rendered.starts_with('/')
+    if rendered.is_empty() || rendered == "." {
+        return Ok(Utf8PathBuf::new());
+    }
+    let invalid = rendered.starts_with('/')
         || rendered.ends_with('/')
         || rendered
             .split('/')
@@ -220,6 +226,7 @@ pub fn resolve_instances(
                 key: key.clone(),
                 mount: mount_path(&inc.decl.path, &key)?,
                 answers,
+                repeat: inc.decl.repeat,
             });
         }
     }
@@ -315,6 +322,7 @@ pub fn resolve_child_parts<'t>(
                 key: key.clone(),
                 mount: mount_path(&inc.decl.path, &key)?,
                 answers: child_answers,
+                repeat: false,
             },
             template: &inc.template,
             patches: inc.template.patches.clone(),
@@ -354,6 +362,56 @@ pub fn full_parts<'t>(
             })
         })
         .collect()
+}
+
+/// The parts of a base state: every single (non-repeat) include resolved
+/// with its full patch set — binds over the parent answers, `provided`
+/// answers per include winning over them, `presolved` child secrets passed
+/// through — nested includes re-derived from binds/defaults. Repeat includes
+/// have no instances here (a session mounts one sample via `--foreach`).
+/// Callers project a pinned node set onto the result with [`filter_parts`].
+pub fn single_parts<'t>(
+    template: &'t Template,
+    parent_answers: &AnswerSet,
+    provided: &BTreeMap<String, AnswerSet>,
+    presolved: &BTreeMap<String, AnswerSet>,
+    eval: &dyn ExprEval,
+    interaction: &mut dyn Interaction,
+) -> Result<Vec<ComposedPart<'t>>> {
+    let empty = AnswerSet::new();
+    let mut parts = Vec::new();
+    for inc in template.includes.iter().filter(|i| !i.decl.repeat) {
+        let name = inc.decl.name.clone();
+        let answers = resolve_instance_answers(
+            inc,
+            &name,
+            parent_answers,
+            provided.get(&name).unwrap_or(&empty),
+            presolved.get(&name).unwrap_or(&empty),
+            eval,
+            interaction,
+        )?;
+        let children = resolve_child_parts(
+            &inc.template,
+            &answers,
+            SecretMode::Resolve,
+            eval,
+            interaction,
+        )?;
+        parts.push(ComposedPart {
+            instance: ResolvedInstance {
+                include: name.clone(),
+                key: name,
+                mount: mount_path(&inc.decl.path, &inc.decl.name)?,
+                answers,
+                repeat: false,
+            },
+            template: &inc.template,
+            patches: inc.template.patches.clone(),
+            children,
+        });
+    }
+    Ok(parts)
 }
 
 /// Preview-oriented parts for a whole template: every include (single
@@ -421,6 +479,7 @@ pub fn preview_parts<'t>(
                     key: key.clone(),
                     mount: mount_path(&inc.decl.path, &key)?,
                     answers,
+                    repeat: inc.decl.repeat,
                 },
                 template: &inc.template,
                 patches: inc.template.patches.clone(),
@@ -431,53 +490,199 @@ pub fn preview_parts<'t>(
     Ok(parts)
 }
 
-/// Render the composed tree: this level's patches at the root, each part's
-/// child tree (recursively composed) mounted under its instance prefix, then
-/// this level's `foreach` integration patches applied once per matching
-/// instance. Path collisions are errors.
+/// One node of a composed render: a patch in the frame it renders in,
+/// identified by its id in the composed graph (keyed through the include
+/// chain, so the same child patch mounted twice is two nodes).
+pub struct GraphNode<'a> {
+    pub id: PatchId,
+    pub depends_on: Vec<PatchId>,
+    pub patch: &'a Patch,
+    pub answers: &'a AnswerSet,
+    pub mount: Utf8PathBuf,
+    /// The instance chain from the root: `(include, key)` per level; empty
+    /// for root-frame patches.
+    pub frame: Vec<(String, String)>,
+}
+
+/// The scope a part's nodes are keyed under: the include name for a single
+/// include (what static node ids use), `<include>:<key>` for a repeat
+/// instance (unique per instance, never referenced by name).
+pub fn part_scope(instance: &ResolvedInstance) -> String {
+    if instance.repeat {
+        format!("{}:{}", instance.include, instance.key)
+    } else {
+        instance.include.clone()
+    }
+}
+
+fn keyed_through(scopes: &[String], id: PatchId) -> PatchId {
+    scopes
+        .iter()
+        .rev()
+        .fold(id, |acc, scope| PatchId::keyed(scope, acc))
+}
+
+/// Flatten a composed render into its graph nodes: this level's patches in
+/// the root frame, then every part's patches (recursively) in the part's
+/// frame, keyed through the include chain.
+pub fn graph_nodes<'a>(
+    parent_patches: &'a [Patch],
+    parent_answers: &'a AnswerSet,
+    parts: &'a [ComposedPart<'a>],
+) -> Vec<GraphNode<'a>> {
+    let mut out = Vec::new();
+    collect_nodes(
+        &mut out,
+        &[],
+        &[],
+        parent_patches,
+        parent_answers,
+        Utf8Path::new(""),
+        parts,
+    );
+    out
+}
+
+fn collect_nodes<'a>(
+    out: &mut Vec<GraphNode<'a>>,
+    scopes: &[String],
+    frame: &[(String, String)],
+    patches: &'a [Patch],
+    answers: &'a AnswerSet,
+    mount: &Utf8Path,
+    parts: &'a [ComposedPart<'a>],
+) {
+    for patch in patches {
+        out.push(GraphNode {
+            id: keyed_through(scopes, patch.id),
+            depends_on: patch
+                .depends_on
+                .iter()
+                .map(|d| keyed_through(scopes, *d))
+                .collect(),
+            patch,
+            answers,
+            mount: mount.to_owned(),
+            frame: frame.to_vec(),
+        });
+    }
+    for part in parts {
+        let mut scopes = scopes.to_vec();
+        scopes.push(part_scope(&part.instance));
+        let mut frame = frame.to_vec();
+        frame.push((part.instance.include.clone(), part.instance.key.clone()));
+        collect_nodes(
+            out,
+            &scopes,
+            &frame,
+            &part.patches,
+            &part.instance.answers,
+            &mount.join(&part.instance.mount),
+            &part.children,
+        );
+    }
+}
+
+fn framed<'n, 'a>(nodes: &'n [GraphNode<'a>]) -> Vec<weft_core::render::Framed<'n>> {
+    nodes
+        .iter()
+        .map(|n| weft_core::render::Framed {
+            id: n.id,
+            depends_on: &n.depends_on,
+            patch: n.patch,
+            answers: n.answers,
+            mount: &n.mount,
+        })
+        .collect()
+}
+
+/// Render the composed tree: one topological pass over the combined graph
+/// (parent and child patches interleaved by dependency, each applied in its
+/// frame; a gated-off node skips its dependents across frames), then the
+/// `foreach` integration patches of every level, deepest first, once per
+/// matching instance. Two nodes creating the same path is a render error.
 pub fn render_composed(
     parent_patches: &[Patch],
     parent_answers: &AnswerSet,
     parts: &[ComposedPart<'_>],
     eval: &dyn ExprEval,
 ) -> Result<Tree> {
-    // Plain render skips foreach patches (they only apply here, per
-    // instance, after the children are mounted).
-    let mut tree = weft_core::render::render(parent_patches, parent_answers, eval)
-        .context("rendering parent template")?;
-    for part in parts {
-        // Recurse: a child may itself be composed (nested includes).
-        let child = render_composed(&part.patches, &part.instance.answers, &part.children, eval)
-            .with_context(|| {
-                format!(
-                    "rendering include `{}` (instance `{}`)",
-                    part.instance.include, part.instance.key
-                )
-            })?;
-        for (path, entry) in child.iter() {
-            let mounted = part.instance.mount.join(path);
-            if tree.get(&mounted).is_some() {
-                bail!(
-                    "include `{}` (instance `{}`): mounted path `{mounted}` collides with an \
-                     existing file",
-                    part.instance.include,
-                    part.instance.key
-                );
-            }
-            tree.insert(mounted, entry.clone());
-        }
-    }
+    let nodes = graph_nodes(parent_patches, parent_answers, parts);
+    let framed = framed(&nodes);
+    let order = weft_core::render::framed_order(&framed).context("ordering the composed graph")?;
+    let (mut tree, skipped) =
+        weft_core::render::render_framed(&order, eval).context("rendering the composed graph")?;
+    apply_foreach(
+        &mut tree,
+        &skipped,
+        &[],
+        parent_patches,
+        parent_answers,
+        Utf8Path::new(""),
+        parts,
+        eval,
+    )?;
+    Ok(tree)
+}
 
-    // Foreach integration patches: graph leaves, applied deterministically —
-    // patches in id order, instances in (include, key) order. Scope = parent
-    // answers + `key` + the instance's child answers flattened under
-    // `instance.<id>`.
-    let mut foreach_patches: Vec<&Patch> = parent_patches
+/// Which nodes of a composed render are active (gate open, no skipped
+/// dependency), without rendering. Foreach patches are never in this set.
+pub fn active_nodes(
+    parent_patches: &[Patch],
+    parent_answers: &AnswerSet,
+    parts: &[ComposedPart<'_>],
+    eval: &dyn ExprEval,
+) -> Result<std::collections::BTreeSet<PatchId>> {
+    let nodes = graph_nodes(parent_patches, parent_answers, parts);
+    let framed = framed(&nodes);
+    let order = weft_core::render::framed_order(&framed).context("ordering the composed graph")?;
+    let skipped = weft_core::render::framed_skipped(&order, eval)?;
+    Ok(nodes
         .iter()
-        .filter(|p| p.foreach.is_some())
-        .collect();
+        .map(|n| n.id)
+        .filter(|id| !skipped.contains(id))
+        .collect())
+}
+
+/// Foreach integration patches of one level: deeper levels first (a child's
+/// integration lines exist before the parent's), then this level's, in id
+/// order, once per instance in (include, key) order. A foreach patch with a
+/// skipped dependency is off, like any other patch.
+#[allow(clippy::too_many_arguments)]
+fn apply_foreach(
+    tree: &mut Tree,
+    skipped: &std::collections::BTreeSet<PatchId>,
+    scopes: &[String],
+    patches: &[Patch],
+    answers: &AnswerSet,
+    mount: &Utf8Path,
+    parts: &[ComposedPart<'_>],
+    eval: &dyn ExprEval,
+) -> Result<()> {
+    for part in parts {
+        let mut scopes = scopes.to_vec();
+        scopes.push(part_scope(&part.instance));
+        apply_foreach(
+            tree,
+            skipped,
+            &scopes,
+            &part.patches,
+            &part.instance.answers,
+            &mount.join(&part.instance.mount),
+            &part.children,
+            eval,
+        )?;
+    }
+    let mut foreach_patches: Vec<&Patch> = patches.iter().filter(|p| p.foreach.is_some()).collect();
     foreach_patches.sort_by_key(|p| p.id);
     for patch in foreach_patches {
+        if patch
+            .depends_on
+            .iter()
+            .any(|d| skipped.contains(&keyed_through(scopes, *d)))
+        {
+            continue;
+        }
         let include = patch.foreach.as_deref().expect("filtered");
         // A part with an empty patch set is an instance that doesn't exist on
         // this side yet (`weft instance add` pins base = [] before the update
@@ -486,7 +691,7 @@ pub fn render_composed(
             .iter()
             .filter(|p| p.instance.include == include && !p.patches.is_empty())
         {
-            let scope = foreach_scope(parent_answers, &part.instance);
+            let scope = foreach_scope(answers, &part.instance);
             if let Some(when) = &patch.when {
                 let on = eval.eval_bool(when, &scope).with_context(|| {
                     format!(
@@ -499,16 +704,42 @@ pub fn render_composed(
                     continue;
                 }
             }
-            weft_core::render::apply_ops(&mut tree, patch, &scope, eval).with_context(|| {
-                format!(
-                    "applying foreach patch {} for instance `{}` of include `{include}`",
-                    patch.id.short(),
-                    part.instance.key
-                )
-            })?;
+            weft_core::render::apply_ops_in(tree, patch, &scope, eval, mount).with_context(
+                || {
+                    format!(
+                        "applying foreach patch {} for instance `{}` of include `{include}`",
+                        patch.id.short(),
+                        part.instance.key
+                    )
+                },
+            )?;
         }
     }
-    Ok(tree)
+    Ok(())
+}
+
+/// Restrict every single-include part's patches (recursively) to the nodes
+/// in `pinned` (composed-graph ids). What a session or project pins is a set
+/// of nodes; this projects it back onto the parts that render them. Repeat
+/// instances are opaque and stay whole.
+pub fn filter_parts(parts: &mut [ComposedPart<'_>], pinned: &std::collections::BTreeSet<PatchId>) {
+    fn walk(
+        parts: &mut [ComposedPart<'_>],
+        scopes: &[String],
+        pinned: &std::collections::BTreeSet<PatchId>,
+    ) {
+        for part in parts {
+            if part.instance.repeat {
+                continue;
+            }
+            let mut scopes = scopes.to_vec();
+            scopes.push(part_scope(&part.instance));
+            part.patches
+                .retain(|p| pinned.contains(&keyed_through(&scopes, p.id)));
+            walk(&mut part.children, &scopes, pinned);
+        }
+    }
+    walk(parts, &[], pinned);
 }
 
 /// The answer scope a foreach patch sees for one instance: the parent's
@@ -526,25 +757,6 @@ pub fn foreach_scope(parent_answers: &AnswerSet, instance: &ResolvedInstance) ->
     scope
 }
 
-/// The child-relative view of a change set: paths under `mount` with the
-/// prefix stripped, plus the child answer ids that changed. Drives post-hook
-/// re-fire for one instance on `weft update`.
-pub fn child_changes(
-    changes: &ChangeSet,
-    mount: &Utf8Path,
-    changed_answers: std::collections::BTreeSet<AnswerId>,
-) -> ChangeSet {
-    let paths = changes
-        .paths
-        .iter()
-        .filter_map(|p| p.strip_prefix(mount).ok().map(|s| s.to_owned()))
-        .collect();
-    ChangeSet {
-        paths,
-        answers: changed_answers,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -559,7 +771,8 @@ mod tests {
             mount_path("apps/api", "api").unwrap(),
             Utf8PathBuf::from("apps/api")
         );
-        assert!(mount_path("", "x").is_err());
+        assert_eq!(mount_path("", "x").unwrap(), Utf8PathBuf::new());
+        assert_eq!(mount_path(".", "x").unwrap(), Utf8PathBuf::new());
         assert!(mount_path("/abs", "x").is_err());
         assert!(mount_path("a/../b", "x").is_err());
         assert!(mount_path("a/{key}", "..").is_err());

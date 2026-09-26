@@ -1,0 +1,23 @@
+{
+  "description": "Integration: ignore Next's build output and note the repo layout in the app config.",
+  "depends_on": ["gitignore", "app/app"],
+  "ops": [
+    {
+      "op": "modify_file",
+      "path": ".gitignore",
+      "hunks": [
+        { "context_before": ["node_modules/"], "added": [".next/"] }
+      ]
+    },
+    {
+      "op": "modify_file",
+      "path": "next.config.ts",
+      "hunks": [
+        {
+          "context_before": ["const config = {"],
+          "added": ["  // single-app repository"]
+        }
+      ]
+    }
+  ]
+}

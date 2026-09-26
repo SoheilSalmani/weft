@@ -50,6 +50,15 @@ pub fn squash(root: &Utf8Path, opts: &SquashOptions) -> Result<()> {
             .name_to_id
             .get(name)
             .with_context(|| format!("no patch `{name}` in this template"))?;
+        if template.is_inherited(name) {
+            bail!(
+                "patch `{name}` is inherited from `{}` — squash it there",
+                template.extends.as_ref().expect("inherited").root
+            );
+        }
+        if !template.patches.iter().any(|p| p.id == id) {
+            bail!("patch `{name}` belongs to an include — squash it in that template");
+        }
         member_ids.insert(id);
     }
     let members: Vec<&weft_core::Patch> = template

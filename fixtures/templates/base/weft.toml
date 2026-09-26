@@ -1,0 +1,10 @@
+[template]
+name = "base"
+weft-version = "0.1"
+description = "Repository scaffolding shared by every stack template: agent skills and a .gitignore."
+
+[[question]]
+id = "use_linear"
+kind = "bool"
+prompt = "Wire the Linear skill?"
+default = "False"

@@ -1,0 +1,14 @@
+{
+  "description": "Agent skills entry point.",
+  "ops": [
+    {
+      "op": "create_file",
+      "path": "AGENTS.md",
+      "content": [
+        "# Agent skills",
+        "",
+        "- git: commit small, describe why."
+      ]
+    }
+  ]
+}

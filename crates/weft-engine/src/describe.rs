@@ -12,7 +12,7 @@ use weft_core::render::ExprEval;
 use weft_core::{AnswerKind, AnswerSet, Value};
 
 use crate::graph;
-use crate::template::Template;
+use crate::template::{NodeKind, Template};
 
 #[derive(Serialize)]
 pub struct DescribeDoc {
@@ -56,6 +56,10 @@ pub struct TemplateDescription {
     pub weft_version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// The base template this one extends, as declared. Its questions and
+    /// patches are part of this template's contract.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extends: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -115,6 +119,9 @@ pub struct PresetConstraintDescription {
     pub blocked: Vec<String>,
 }
 
+/// One node of the composed graph: a root-frame patch (own or inherited),
+/// a single include's patch (`<include>/<name>`), or a repeat include's
+/// opaque instances node.
 #[derive(Serialize)]
 pub struct PatchDescription {
     pub name: String,
@@ -130,6 +137,15 @@ pub struct PatchDescription {
     /// Integration patch: renders once per instance of this include.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub foreach: Option<String>,
+    /// The top-level include this node renders through.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include: Option<String>,
+    /// Root-frame patch imported through `[template] extends`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub inherited: bool,
+    /// A repeat include's instances as one node: no ops, no dependencies.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub opaque: bool,
     pub depends_on: Vec<String>,
     pub ops: Vec<graph::OpSummary>,
 }
@@ -246,21 +262,30 @@ pub fn describe(template: &Template, eval: &dyn ExprEval) -> Result<DescribeDoc>
         .collect();
 
     let patches = template
-        .patches
+        .nodes
         .iter()
-        .map(|p| PatchDescription {
-            name: template.id_to_name[&p.id].clone(),
-            title: p.meta.title.clone(),
-            description: p.meta.description.clone(),
-            tags: p.meta.tags.clone(),
-            when: p.when.as_ref().map(|e| e.as_str().to_owned()),
-            foreach: p.foreach.clone(),
-            depends_on: p
-                .depends_on
-                .iter()
-                .filter_map(|d| template.id_to_name.get(d).cloned())
-                .collect(),
-            ops: p.ops.iter().map(graph::op_summary).collect(),
+        .map(|node| {
+            let p = template.node_patch(node);
+            PatchDescription {
+                name: node.name.clone(),
+                title: p.and_then(|p| p.meta.title.clone()),
+                description: p.and_then(|p| p.meta.description.clone()),
+                tags: p.map(|p| p.meta.tags.clone()).unwrap_or_default(),
+                when: p.and_then(|p| p.when.as_ref().map(|e| e.as_str().to_owned())),
+                foreach: p.and_then(|p| p.foreach.clone()),
+                include: node.include().map(str::to_owned),
+                inherited: matches!(node.kind, NodeKind::Root(_))
+                    && template.is_inherited(&node.name),
+                opaque: matches!(node.kind, NodeKind::Instances { .. }),
+                depends_on: node
+                    .depends_on
+                    .iter()
+                    .filter_map(|d| template.id_to_name.get(d).cloned())
+                    .collect(),
+                ops: p
+                    .map(|p| p.ops.iter().map(graph::op_summary).collect())
+                    .unwrap_or_default(),
+            }
         })
         .collect();
 
@@ -291,6 +316,10 @@ pub fn describe(template: &Template, eval: &dyn ExprEval) -> Result<DescribeDoc>
             name: template.manifest.template.name.clone(),
             weft_version: template.manifest.template.weft_version.clone(),
             description: template.manifest.template.description.clone(),
+            extends: template
+                .extends
+                .as_ref()
+                .map(|e| e.decl.template().to_string()),
         },
         questions: question_docs,
         presets,
@@ -536,6 +565,12 @@ pub fn agents_md(doc: &DescribeDoc) -> String {
         w(desc);
         w("");
     }
+    if let Some(extends) = &doc.template.extends {
+        w(&format!(
+            "Extends: `{extends}` (its questions and patches are part of this template)"
+        ));
+        w("");
+    }
     w("This directory is a [weft](https://github.com/SoheilSalmani/weft) template.");
     w("For the full machine-readable contract run `weft describe --json` here.");
     w("");
@@ -612,6 +647,15 @@ pub fn agents_md(doc: &DescribeDoc) -> String {
     w("");
     for p in &doc.patches {
         let mut line = format!("- **{}**", p.name);
+        if let Some(include) = &p.include {
+            line = if p.opaque {
+                format!("{line} (every instance of repeat include `{include}`)")
+            } else {
+                format!("{line} (via include `{include}`)")
+            };
+        } else if p.inherited {
+            line = format!("{line} (inherited)");
+        }
         if let Some(when) = &p.when {
             line = format!("{line} _(when `{when}`)_");
         }

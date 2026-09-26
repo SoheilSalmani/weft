@@ -1,0 +1,10 @@
+{
+  "description": "Baseline ignores.",
+  "ops": [
+    {
+      "op": "create_file",
+      "path": ".gitignore",
+      "content": ["node_modules/"]
+    }
+  ]
+}

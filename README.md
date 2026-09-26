@@ -192,6 +192,45 @@ my-template/
 See `fixtures/templates/hello/` for a complete example and `PLAN.md` /
 `PROGRESS.md` for the design and its implementation notes.
 
+## Composition: extends and include nodes
+
+A template's graph is *composed*: every patch that renders when the template
+does is a node in it, wherever that patch lives.
+
+- **`[template] extends = "../base"`** (or `{ template = "hub:org/base",
+  version = "^1" }`) imports a base template as-is: its questions, includes,
+  and patches keep their names and ids and become root nodes of this
+  template. Your own patches build on them like any other ancestor
+  (`"depends_on": ["base-readme"]`); you cannot redeclare an inherited name,
+  and `weft patch amend`/`squash` send you to the base template to edit it.
+  `weft patch ls` flags inherited rows.
+- **Include nodes.** A single (non-repeat) `[[include]]` named `web`
+  contributes its whole graph as `web/<patch>` nodes (nested:
+  `web/svc/base`), rendered under its mount with the instance's answers. A
+  root patch may depend on them: `"depends_on": ["web/next-config"]`. A
+  gated-off child patch switches off every parent patch depending on it,
+  across frames.
+- **Root mounts.** An include with `path = ""` (or omitted) mounts at the
+  root: its files merge with the parent's. Two roots creating the same path
+  is a render error, so a template meant to be mounted must not own repo
+  scaffolding (README, `.gitignore`, git init) — leave that to the outermost
+  template.
+- **The mount rule is inverted.** A parent patch may edit files under an
+  include's mount *iff* it depends on that include's nodes — the dependency
+  is what makes the child's files part of its base. `weft commit` infers the
+  dependency from the paths you touched; a patch editing under a mount it
+  does not depend on is rejected.
+- **Repeat includes stay opaque.** A `repeat = true` include is one node
+  standing for every instance; nothing may depend on it by name. Reach
+  inside instances with an integration patch: `"foreach": "connector"`
+  renders once per instance with `key` and `instance_<question>` in scope,
+  so a path segment `{"answer": "key"}` (e.g. `["connectors/", {"answer":
+  "key"}, "/README.md"]`) addresses that instance's files.
+
+`weft graph --json` and `weft describe --json` list the composed graph:
+include nodes carry `include`/`mount`, repeat nodes `opaque: true`,
+inherited patches `inherited: true`, and the document its `extends`.
+
 ## Workspace layout
 
 | Crate         | Role                                                        |

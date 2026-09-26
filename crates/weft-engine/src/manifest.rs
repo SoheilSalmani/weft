@@ -22,9 +22,11 @@ pub struct Manifest {
 /// A child template mounted at a path prefix. The child is an ordinary,
 /// self-contained weft template; it knows nothing of the parent.
 ///
-/// Child answers are addressed from the parent as `<name>.<id>` (and
-/// `<name>.<key>.<id>` once `repeat` instances land); `bind` seeds child
-/// answers from parent answers.
+/// Child answers are addressed from the parent as `<name>.<id>` (or
+/// `<name>.<key>.<id>` for `repeat` instances); `bind` seeds child answers
+/// from parent answers. A single (non-repeat) include's patches become nodes
+/// of the parent's graph, named `<name>/<patch>`, so parent patches can
+/// depend on them and edit the child's files.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IncludeDecl {
@@ -44,6 +46,9 @@ pub struct IncludeDecl {
     pub version: Option<String>,
     /// Mount prefix inside the rendered tree. May contain `{key}`, which is
     /// substituted with the instance key (required when `repeat = true`).
+    /// Empty (or `.`) mounts the child at the root — its files merge with
+    /// the parent's, and a path both create is a render error.
+    #[serde(default)]
     pub path: String,
     /// Whether the project may instantiate this include 0..N times.
     #[serde(default)]
@@ -75,6 +80,47 @@ impl IncludeDecl {
     }
 }
 
+/// What a template extends: a base template whose patches, questions, and
+/// includes are imported *as-is* (same names, same ids, no mount) — the
+/// extender's own patches build on them like any other ancestor. Either a
+/// path relative to this template root or a `hub:` ref with a version.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ExtendsDecl {
+    Path(Utf8PathBuf),
+    Full {
+        template: Utf8PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+    },
+}
+
+impl ExtendsDecl {
+    /// The synthetic include declaration the resolver sees (path/hub
+    /// resolution is the same as for an include; nothing else applies).
+    pub fn as_include(&self) -> IncludeDecl {
+        let (template, version) = match self {
+            ExtendsDecl::Path(p) => (p.clone(), None),
+            ExtendsDecl::Full { template, version } => (template.clone(), version.clone()),
+        };
+        IncludeDecl {
+            name: "extends".into(),
+            template,
+            version,
+            path: String::new(),
+            repeat: false,
+            bind: BTreeMap::new(),
+        }
+    }
+
+    pub fn template(&self) -> &Utf8PathBuf {
+        match self {
+            ExtendsDecl::Path(p) => p,
+            ExtendsDecl::Full { template, .. } => template,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TemplateMeta {
     pub name: String,
@@ -83,6 +129,9 @@ pub struct TemplateMeta {
     /// What this template scaffolds — the first thing agents read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// The base template this one builds on (see [`ExtendsDecl`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extends: Option<ExtendsDecl>,
 }
 
 /// A named, layered partial answer-set. The file is a plain TOML map of

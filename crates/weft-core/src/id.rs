@@ -37,6 +37,15 @@ impl PatchId {
     pub fn short(self) -> String {
         self.to_hex()[..12].to_owned()
     }
+
+    /// The identity of a child template's patch inside an including
+    /// template's graph. Two includes of the same child share native ids, so
+    /// a node is keyed by the include it is mounted through: the id of
+    /// `web/next-config` is `keyed("web", <next-config's id>)`. Nested
+    /// includes key repeatedly, outermost last.
+    pub fn keyed(scope: &str, id: PatchId) -> Self {
+        Self::from_canonical_bytes(format!("{scope}:{}", id.to_hex()).as_bytes())
+    }
 }
 
 impl fmt::Display for PatchId {

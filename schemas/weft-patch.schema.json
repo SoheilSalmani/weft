@@ -29,7 +29,7 @@
       "default": []
     },
     "depends_on": {
-      "description": "Names (file stems) of patches this one depends on. Patches with no\ndependency path between them must commute.",
+      "description": "Names of the graph nodes this patch depends on: another patch's file\nstem (own or inherited through `[template] extends`), or a single\ninclude's patch as `<include>/<patch>` (nested: `<include>/<include>/\n<patch>`). Depending on an include's node is what allows this patch\nto edit files under that include's mount. A repeat include has no\nnameable nodes — use `foreach`. Patches with no dependency path\nbetween them must commute.",
       "type": "array",
       "items": {
         "type": "string"

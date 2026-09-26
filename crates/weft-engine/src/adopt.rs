@@ -103,20 +103,22 @@ pub fn run(
     }
 
     let eval = StarlarkEval;
-    // Stored answers are the starting point; anything passed now overrides.
+    // Stored answers are the starting point; anything passed now overrides
+    // (namespaced answers go to the mounted includes).
+    let layered = answers::layered_with_json(
+        &template,
+        &opts.presets,
+        opts.answers_file.as_deref(),
+        &opts.answers,
+        opts.answers_json.as_deref(),
+    )?;
+    let (parent_layered, child_layered) = crate::compose::split_provided(&template, &layered)?;
     let provided = {
         let mut merged = state
             .as_ref()
             .map(|s| s.answers.clone())
             .unwrap_or_default();
-        let layered = answers::layered_with_json(
-            &template,
-            &opts.presets,
-            opts.answers_file.as_deref(),
-            &opts.answers,
-            opts.answers_json.as_deref(),
-        )?;
-        for (k, v) in layered.iter() {
+        for (k, v) in parent_layered.iter() {
             merged.insert(k.clone(), v.clone());
         }
         merged
@@ -128,15 +130,40 @@ pub fn run(
         &eval,
         interaction,
     )?;
+    let mut include_provided: BTreeMap<String, weft_core::AnswerSet> = BTreeMap::new();
+    for inc in template.includes.iter().filter(|i| !i.decl.repeat) {
+        let mut merged = state
+            .as_ref()
+            .and_then(|s| {
+                s.instances
+                    .iter()
+                    .find(|i| i.include == inc.decl.name && i.key == inc.decl.name)
+            })
+            .map(|i| i.answers.clone())
+            .unwrap_or_default();
+        if let Some(overlay) = child_layered.get(&(inc.decl.name.clone(), inc.decl.name.clone())) {
+            merged.overlay(overlay);
+        }
+        include_provided.insert(inc.decl.name.clone(), merged);
+    }
 
     // The base a scaffolded project should be diffed against is the one it was
     // rendered from — not `latest`, or every patch added since would read as a
-    // deletion the adopter never made.
+    // deletion the adopter never made. A project pins root patches plus each
+    // instance's child patches; keyed through the include they become nodes.
     let pinned: BTreeSet<_> = match (&opts.base, &state) {
         (Some(base), _) => start::pin_base(&template, base)?,
         (None, Some(s)) => {
-            for id in &s.state.base {
-                if !template.id_to_name.contains_key(id) {
+            let mut pinned: BTreeSet<_> = s.state.base.iter().copied().collect();
+            for inst in s.instances.iter().filter(|i| i.include == i.key) {
+                pinned.extend(
+                    inst.base
+                        .iter()
+                        .map(|id| weft_core::PatchId::keyed(&inst.include, *id)),
+                );
+            }
+            for id in &pinned {
+                if template.node(*id).is_none() {
                     bail!(
                         "the project pins patch {} which no longer exists in \
                          `{template_path}` (its history was rewritten); pass --base to \
@@ -145,7 +172,7 @@ pub fn run(
                     );
                 }
             }
-            s.state.base.iter().copied().collect()
+            pinned
         }
         (None, None) => start::pin_base(&template, "latest")?,
     };
@@ -155,7 +182,16 @@ pub fn run(
         .filter(|p| pinned.contains(&p.id) && p.foreach.is_none())
         .cloned()
         .collect();
-    let base_tree = weft_core::render::render(&base_patches, &resolved, &eval)
+    let mut parts = crate::compose::single_parts(
+        &template,
+        &resolved,
+        &include_provided,
+        &BTreeMap::new(),
+        &eval,
+        interaction,
+    )?;
+    crate::compose::filter_parts(&mut parts, &pinned);
+    let base_tree = crate::compose::render_composed(&base_patches, &resolved, &parts, &eval)
         .context("rendering the base state to diff against")?;
 
     let secret_specs: BTreeMap<_, _> = template
@@ -169,9 +205,17 @@ pub fn run(
             _ => None,
         })
         .collect();
+    let instances = parts
+        .iter()
+        .map(|p| session::SessionInstance {
+            include: p.instance.include.clone(),
+            answers: start::strip_secrets(&p.instance.answers),
+            secrets: crate::new::secret_specs(&p.template.manifest.questions, &p.instance.answers),
+        })
+        .collect();
     Session {
         session: SessionMeta {
-            base: base_patches.iter().map(|p| p.id).collect(),
+            base: pinned.into_iter().collect(),
             tree_hash: base_tree.hash(),
             worktree: Some(worktree.clone()),
             scope: opts.scope.clone(),
@@ -179,6 +223,7 @@ pub fn run(
         },
         answers: start::strip_secrets(&resolved),
         secrets: secret_specs,
+        instances,
         foreach: None,
         generator: None,
         amend: None,
