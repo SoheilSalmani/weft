@@ -65,6 +65,17 @@
       "items": {
         "$ref": "#/$defs/Hook"
       }
+    },
+    "generator": {
+      "description": "Present when this patch was recorded from a command's output\n(`weft record --exec`). Metadata: never part of the content hash.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Generator"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "additionalProperties": false,
@@ -106,6 +117,39 @@
             "op",
             "path",
             "content"
+          ]
+        },
+        {
+          "description": "Create an opaque binary file (errors if it already exists). The\ncontent is never abstracted or hunk-modified — replacing a binary is\n`delete_file` + a new `create_binary_file` in the same patch.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/TemplatePath"
+            },
+            "data": {
+              "description": "Raw bytes, standard-alphabet base64.",
+              "type": "string"
+            },
+            "mode": {
+              "description": "Unix mode as decimal (420 = 0o644, 493 = 0o755). Default 420.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0,
+              "default": null
+            },
+            "op": {
+              "type": "string",
+              "const": "create_binary_file"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "path",
+            "data"
           ]
         },
         {
@@ -388,6 +432,42 @@
             "$ref": "#/$defs/Segment"
           }
         }
+      ]
+    },
+    "Generator": {
+      "description": "The command a generated patch was recorded from, plus what\n`weft patch resync` needs to re-run it deterministically.",
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "Shell command run in the recording worktree: a plain string when\nliteral, or an array of segments to interpolate answers/exprs.",
+          "$ref": "#/$defs/Command"
+        },
+        "answers": {
+          "description": "Record-time answers the base was rendered with (secrets excluded).",
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        },
+        "secrets": {
+          "description": "Secret answers as source references (`env:…`, `cmd:…`, `prompt`),\nre-resolved at resync time — values never appear here.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "keep_literal": {
+          "description": "Occurrences kept literal at commit (`ANSWER@PATH:LINE[:NTH]`),\nreplayed on resync.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "command"
       ]
     }
   }
