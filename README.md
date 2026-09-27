@@ -27,8 +27,8 @@ Core ideas:
 
 ## Install
 
-> Weft is pre-1.0. Building from source is the verified path today; prebuilt
-> binaries, `cargo install`, and Homebrew arrive with the first tagged release.
+> Weft is pre-1.0. Building from source is the verified path today; Homebrew,
+> prebuilt binaries, and `cargo install` arrive with the first tagged release.
 
 **From source** (works today — needs a Rust toolchain, Linux or macOS):
 
@@ -37,6 +37,12 @@ git clone https://github.com/SoheilSalmani/weft
 cd weft
 cargo build --release          # produces target/release/weft
 install -m 0755 target/release/weft ~/.local/bin/weft   # put it on your PATH
+```
+
+**Homebrew** (macOS and Linux, with the first release):
+
+```sh
+brew install SoheilSalmani/tap/weft
 ```
 
 **Prebuilt binary** (with the first release):

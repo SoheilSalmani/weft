@@ -1,9 +1,18 @@
 name: Release
 
-# Cuts release binaries when a version tag is pushed:
+# Cuts a release when a version tag is pushed:
 #   git tag v0.1.0 && git push origin v0.1.0
-# Builds the `weft` binary for each target and uploads a
-# `weft-<target>.tar.gz` (plus a .sha256) to the GitHub Release for the tag.
+# 1. `create-release`: refuses a tag that disagrees with Cargo.toml, then
+#    creates the GitHub Release (upload-rust-binary-action only uploads).
+# 2. `upload`: builds `weft` per target and uploads `weft-<target>.tar.gz`
+#    plus `weft-<target>.sha256` to that release.
+# 3. `homebrew`: renders Formula/weft.rb from those checksums
+#    (scripts/homebrew-formula.sh) and pushes it to SoheilSalmani/homebrew-tap.
+#    Authenticates with a deploy key: the public half is a write-enabled deploy
+#    key on homebrew-tap, the private half is the HOMEBREW_TAP_DEPLOY_KEY
+#    secret here. Rotate by generating a fresh ed25519 pair and replacing both.
+#
+# Asset names are shared with install.sh and scripts/homebrew-formula.sh.
 
 on:
   push:
@@ -16,16 +25,44 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  create-release:
+    name: create release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The Homebrew formula's test asserts `weft --version` reports the tag's
+      # version, so a mismatched tag must never produce a release.
+      - name: Check tag matches Cargo.toml version
+        run: |
+          version="$(sed -n '/^\[workspace\.package\]/,/^\[/{s/^version = "\(.*\)"$/\1/p;}' Cargo.toml)"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+
+      - uses: taiki-e/create-gh-release-action@v1
+        with:
+          branch: master
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   upload:
     name: ${{ matrix.target }}
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Linux builds run in cross-rs containers (Ubuntu 20.04, glibc 2.31)
+          # so the binaries load on any distro install.sh or Homebrew on Linux
+          # (bundled glibc 2.35) targets; a native build would link against
+          # the runner's newer glibc.
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+            build_tool: cross
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
+            build_tool: cross
           - target: x86_64-apple-darwin
             os: macos-latest
           - target: aarch64-apple-darwin
@@ -37,13 +74,57 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install stable --profile minimal
 
-      # Builds the bin, cross-compiles when target != host, archives as
-      # weft-<target>.tar.gz, generates a sha256, and uploads to the release.
+      - uses: taiki-e/install-action@cross
+        if: matrix.build_tool == 'cross'
+
+      # Builds the bin, archives it as weft-<target>.tar.gz (binary at the
+      # archive root), writes weft-<target>.sha256, and uploads both.
       - uses: taiki-e/upload-rust-binary-action@v1
         with:
           bin: weft
           target: ${{ matrix.target }}
+          build-tool: ${{ matrix.build_tool }}
           archive: weft-$target
           tar: unix
           checksum: sha256
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  homebrew:
+    name: homebrew tap
+    needs: upload
+    # Pre-release tags (v0.2.0-rc.1) publish binaries but don't move the tap:
+    # Homebrew scans the version from the asset URL and can't parse suffixes.
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download release checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+          --pattern '*.sha256' --dir checksums
+
+      - name: Render formula
+        run: scripts/homebrew-formula.sh "${GITHUB_REF_NAME#v}" checksums > weft.rb
+
+      - uses: actions/checkout@v4
+        with:
+          repository: SoheilSalmani/homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          path: tap
+
+      - name: Push formula
+        run: |
+          cp weft.rb tap/Formula/weft.rb
+          cd tap
+          git add Formula/weft.rb
+          if git diff --cached --quiet; then
+            echo "formula already up to date"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "weft ${GITHUB_REF_NAME#v}"
+          git push
