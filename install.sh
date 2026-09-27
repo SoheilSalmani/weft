@@ -2,7 +2,7 @@
 # Weft installer. Downloads a prebuilt `weft` binary from GitHub Releases and
 # installs it onto your PATH.
 #
-#   curl -fsSL https://raw.githubusercontent.com/SoheilSalmani/weft/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/SoheilSalmani/weft/master/install.sh | sh
 #
 # Environment:
 #   WEFT_VERSION      release tag to install (default: latest), e.g. v0.1.0

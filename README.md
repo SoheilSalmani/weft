@@ -27,10 +27,22 @@ Core ideas:
 
 ## Install
 
-> Weft is pre-1.0. Building from source is the verified path today; Homebrew,
-> prebuilt binaries, and `cargo install` arrive with the first tagged release.
+> Weft is pre-1.0. Homebrew and prebuilt binaries cover macOS and Linux
+> (x86_64 and arm64); `cargo install` arrives once the crates are published.
 
-**From source** (works today — needs a Rust toolchain, Linux or macOS):
+**Homebrew** (macOS and Linux):
+
+```sh
+brew install SoheilSalmani/tap/weft
+```
+
+**Prebuilt binary**:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SoheilSalmani/weft/master/install.sh | sh
+```
+
+**From source** (needs a Rust toolchain, Linux or macOS):
 
 ```sh
 git clone https://github.com/SoheilSalmani/weft
@@ -39,19 +51,7 @@ cargo build --release          # produces target/release/weft
 install -m 0755 target/release/weft ~/.local/bin/weft   # put it on your PATH
 ```
 
-**Homebrew** (macOS and Linux, with the first release):
-
-```sh
-brew install SoheilSalmani/tap/weft
-```
-
-**Prebuilt binary** (with the first release):
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/SoheilSalmani/weft/main/install.sh | sh
-```
-
-**cargo** (with the first release): `cargo install weft-cli`.
+**cargo** (once published to crates.io): `cargo install weft-cli`.
 
 Full instructions and the documentation: <https://github.com/SoheilSalmani/weft>.
 The docs site (guides, tutorials, cookbook, CLI reference) is built from the
