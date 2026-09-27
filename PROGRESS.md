@@ -3,6 +3,50 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Change a project's answers (`weft update --answer`)
+
+- **Provenance**: `.weft/state.toml` now splits answers into `[answers]`
+  (given: supplied on any input layer, or prompted for) and `[derived]`
+  (defaults, computed values, include binds, the stand-in value of a
+  gated-off question) — root and per instance (`answers::provenance`). The
+  old render reproduces from given ∪ derived; the new render feeds back only
+  given, so derived values re-derive. Decided: derived values follow the
+  template on *every* update (a template changing a default reaches new
+  projects; the 3-way merge protects edits). A given answer for a gated-off
+  question is kept for when its gate opens. Pre-feature state has no
+  `[derived]` → every answer counts as given (unchanged behavior);
+  `--unset ID` releases one, and the update lists `kept as given` values
+  that matched their default/bind before and no longer do.
+- **`weft update`** gained `--answer/--preset/--answers-file/--answers-json`
+  (same layering as `new`, namespaced include answers routed through
+  `compose::route_answer`, now shared with `find_question`/`split_provided`),
+  `--unset ID` (needs a default or bind to fall back to), and
+  `--reconfigure` (wizard prefilled with given answers; `x` hands a value
+  back to its default — `wizard::run_reconfigure`). Answers for an instance
+  the project lacks point at `weft instance add`. The git-source "up to
+  date" early exit is skipped when answers change. Before writing, the
+  update prints every changed answer (declaration order, tagged
+  `(derived)`/`(bind)`); `UpdateReport` carries it structured.
+- **Conflict DX**: `[state] conflicts` records files left with markers; the
+  next update refuses while they still contain them. Inside a git work tree
+  the update refuses to write over files with uncommitted changes
+  (`vcs::dirty_paths`, `git status --porcelain -z`; `--allow-dirty` —
+  also on `instance add/remove`); outside git nothing is blocked.
+  `--dry-run --diff` prints unified diffs (stdout). Notes now name their
+  file (`Dockerfile: kept your version: …`).
+- **Fixes on the way**: instance child secrets are passed through on the new
+  side (a `prompt` secret was re-asked on every update); `instance add`
+  rolls its pin back when the update stops before pinning anything;
+  `adopt` reproduces from given ∪ derived.
+- **`weft answers [DEST] [--json]`** lists each answer with its origin
+  (`given`, `given (question off)`, `derived`, `secret`). **MCP**
+  `update_project` (answers, unset, dry_run, allow_dirty; hooks never run).
+- e2e `update_answers.rs` (8), plus git (same commit + answers), MCP
+  (`update_project`), compose (bound child answer is derived); unit tests
+  for provenance, porcelain parsing, and the wizard's reconfigure mode.
+- Not done (by decision): holding the template still during an answer
+  change — run `weft update`, commit, then change answers.
+
 ## Fix — remote `extends`/includes resolve in every command
 
 - **Bug**: `weft session new` in a terminal failed on a template with

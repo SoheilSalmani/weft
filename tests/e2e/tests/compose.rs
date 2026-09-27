@@ -46,8 +46,10 @@ fn scaffolds_the_composed_tree() {
     assert_eq!(inst["include"].as_str(), Some("svc"));
     assert_eq!(inst["mount"].as_str(), Some("services/hello"));
     assert_eq!(inst["base"].as_array().map(Vec::len), Some(3));
+    // The bound child answer is derived from the parent's: it follows the
+    // parent's answers on update.
     assert_eq!(
-        inst["answers"]["project_name"].as_str(),
+        inst["derived"]["project_name"].as_str(),
         Some("Acme Service")
     );
 }

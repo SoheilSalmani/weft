@@ -190,6 +190,13 @@ fn update_follows_a_tracked_branch_and_keeps_the_ref() {
     update(home.path(), &out, &[])
         .success()
         .stderr(predicates::str::contains("up to date"));
+
+    // Same commit, new answers: still a re-render, not "up to date".
+    update(home.path(), &out, &["--answer", "project_name=Retracked"])
+        .success()
+        .stderr(predicates::str::contains("\"Track\" → \"Retracked\""));
+    let readme = std::fs::read_to_string(out.join("README.md")).unwrap();
+    assert!(readme.starts_with("# Retracked"), "{readme}");
 }
 
 #[test]

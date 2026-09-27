@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
-use weft_core::{AnswerId, AnswerSet, Op, Patch, PatchId, StarlarkExpr, Value};
+use weft_core::{AnswerId, AnswerSet, Op, Patch, PatchId, StarlarkExpr};
 
 use crate::compose::ComposedPart;
 
@@ -151,11 +151,20 @@ impl BaseSnapshot {
 /// `.weft/state.toml` in a scaffolded destination. Answers are stored as
 /// concrete values *except* secrets, which are stored as references only
 /// (`[secrets]` maps answer id to its source spec string).
+///
+/// Answers carry provenance (see [`crate::answers::provenance`]):
+/// `[answers]` holds what you gave — the inputs every re-render starts from —
+/// and `[derived]` what the template computed from them at the last render.
+/// A project scaffolded before provenance was recorded has no `[derived]`:
+/// every stored answer counts as given (it stays put until `weft update
+/// --unset ID` hands it back to its default).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct State {
     pub state: StateMeta,
     #[serde(default)]
     pub answers: AnswerSet,
+    #[serde(default, skip_serializing_if = "AnswerSet::is_empty")]
+    pub derived: AnswerSet,
     #[serde(default)]
     pub secrets: BTreeMap<AnswerId, String>,
     /// Include instances (project-side data): which includes were
@@ -178,12 +187,36 @@ pub struct InstanceState {
     /// Pinned child base: ids of the child patches rendered from.
     #[serde(default)]
     pub base: Vec<PatchId>,
-    /// Child answers (secrets excluded — see `secrets`).
+    /// Child answers you gave (`<include>.<id>` answers; secrets excluded —
+    /// see `secrets`).
     #[serde(default)]
     pub answers: AnswerSet,
+    /// Child answers derived at the last render: binds, defaults, computed.
+    #[serde(default, skip_serializing_if = "AnswerSet::is_empty")]
+    pub derived: AnswerSet,
     /// Child secret references (answer id → source spec string).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub secrets: BTreeMap<AnswerId, String>,
+}
+
+impl InstanceState {
+    /// The child answers the last render used (secrets excluded).
+    pub fn rendered_answers(&self) -> AnswerSet {
+        let mut all = self.answers.clone();
+        all.overlay(&self.derived);
+        all
+    }
+
+    /// The flat id of one of this instance's child answers, as `--answer`
+    /// takes it: `<include>.<id>`, or `<include>.<key>.<id>` for an instance
+    /// of a repeat include.
+    pub fn flat_id(&self, repeat: bool, id: &AnswerId) -> String {
+        if repeat {
+            format!("{}.{}.{id}", self.include, self.key)
+        } else {
+            format!("{}.{id}", self.include)
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -200,6 +233,10 @@ pub struct StateMeta {
     pub base: Vec<PatchId>,
     /// Hash of the rendered tree (pre user edits).
     pub tree_hash: String,
+    /// Files the last update left conflict markers in. The next update
+    /// refuses to run while any of them still has markers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflicts: Vec<Utf8PathBuf>,
 }
 
 /// What `state.toml` records as the template source: the ref to track plus,
@@ -235,31 +272,26 @@ pub struct ProjectTemplate {
 }
 
 impl State {
-    /// Split `answers` into persistable values and secret refs.
+    /// Pin a render: its source, base, tree hash, and the root frame's
+    /// answers split into given and derived (secrets excluded; see
+    /// [`crate::answers::provenance`]).
     pub fn new(
         source: StoredSource,
         base: Vec<PatchId>,
         tree_hash: String,
-        answers: &AnswerSet,
+        (given, derived): (AnswerSet, AnswerSet),
         secret_specs: &BTreeMap<AnswerId, String>,
     ) -> Self {
-        let mut plain = AnswerSet::new();
-        for (id, value) in answers.iter() {
-            match value {
-                Value::Secret(_) => {}
-                other => {
-                    plain.insert(id.clone(), other.clone());
-                }
-            }
-        }
         State {
             state: StateMeta {
                 template: source.template,
                 commit: source.commit,
                 base,
                 tree_hash,
+                conflicts: Vec::new(),
             },
-            answers: plain,
+            answers: given,
+            derived,
             secrets: secret_specs.clone(),
             instances: Vec::new(),
         }
@@ -271,14 +303,32 @@ impl State {
         self
     }
 
-    /// Split a resolved answer set into (plain answers, nothing) dropping
-    /// secrets — the storable projection used for instance states.
-    pub fn plain_answers(answers: &AnswerSet) -> AnswerSet {
-        answers
-            .iter()
-            .filter(|(_, v)| !matches!(v, Value::Secret(_)))
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect()
+    /// The root answers the last render used (secrets excluded): given
+    /// overlaid with derived.
+    pub fn rendered_answers(&self) -> AnswerSet {
+        let mut all = self.answers.clone();
+        all.overlay(&self.derived);
+        all
+    }
+
+    /// Every stored answer — the root's, then each instance's — with where
+    /// it came from (what `weft answers` lists).
+    pub fn answer_rows(&self) -> Vec<AnswerRow> {
+        let mut rows = frame_rows(&self.answers, &self.derived, &self.secrets, |id| {
+            id.to_string()
+        });
+        for inst in &self.instances {
+            // State doesn't record repeat-ness: a key equal to its include's
+            // name is a single include's instance (as hook namespaces read it).
+            let repeat = inst.key != inst.include;
+            rows.extend(frame_rows(
+                &inst.answers,
+                &inst.derived,
+                &inst.secrets,
+                |id| inst.flat_id(repeat, id),
+            ));
+        }
+        rows
     }
 
     pub fn save(&self, dest: &Utf8Path) -> Result<()> {
@@ -297,6 +347,77 @@ impl State {
         })?;
         toml::from_str(&src).with_context(|| format!("parsing {path}"))
     }
+}
+
+/// One stored answer as `weft answers` lists it.
+#[derive(Debug, Serialize)]
+pub struct AnswerRow {
+    /// Flat id: `id`, `<include>.<id>`, or `<include>.<key>.<id>`.
+    pub id: String,
+    /// The value (absent for secrets, which are never stored).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<weft_core::Value>,
+    pub origin: AnswerOrigin,
+    /// A secret's source reference (`env:API_TOKEN`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+/// Where a stored answer came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AnswerOrigin {
+    /// You gave it; every re-render starts from it.
+    Given,
+    /// You gave it, but its question is off under the other answers; it
+    /// applies again when the question does.
+    Off,
+    /// The template computed it: a default, a computed value, a bind.
+    Derived,
+    /// Resolved from its source on every render; only the reference is
+    /// stored.
+    Secret,
+}
+
+impl AnswerOrigin {
+    pub fn label(self) -> &'static str {
+        match self {
+            AnswerOrigin::Given => "given",
+            AnswerOrigin::Off => "given (question off)",
+            AnswerOrigin::Derived => "derived",
+            AnswerOrigin::Secret => "secret",
+        }
+    }
+}
+
+fn frame_rows(
+    given: &AnswerSet,
+    derived: &AnswerSet,
+    secrets: &BTreeMap<AnswerId, String>,
+    flat_id: impl Fn(&AnswerId) -> String,
+) -> Vec<AnswerRow> {
+    let ids: std::collections::BTreeSet<&AnswerId> = given
+        .iter()
+        .chain(derived.iter())
+        .map(|(id, _)| id)
+        .chain(secrets.keys())
+        .collect();
+    ids.into_iter()
+        .map(|id| {
+            let (value, origin, source) = match (secrets.get(id), given.get(id), derived.get(id)) {
+                (Some(src), _, _) => (None, AnswerOrigin::Secret, Some(src.clone())),
+                (None, Some(g), Some(_)) => (Some(g.clone()), AnswerOrigin::Off, None),
+                (None, Some(g), None) => (Some(g.clone()), AnswerOrigin::Given, None),
+                (None, None, d) => (d.cloned(), AnswerOrigin::Derived, None),
+            };
+            AnswerRow {
+                id: flat_id(id),
+                value,
+                origin,
+                source,
+            }
+        })
+        .collect()
 }
 
 pub fn state_path(dest: &Utf8Path) -> Utf8PathBuf {

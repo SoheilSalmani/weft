@@ -38,6 +38,7 @@ pub mod start;
 pub mod state;
 pub mod template;
 pub mod update;
+pub mod vcs;
 pub mod weftignore;
 
 /// The default Starlark-backed expression evaluator, re-exported so binary

@@ -2,8 +2,8 @@
 //! AI agents as typed tools.
 //!
 //! Guardrails, by construction:
-//! - `scaffold` never runs template tasks (an agent can't trigger a
-//!   template's shell actions),
+//! - `scaffold` and `update_project` never run template tasks (an agent
+//!   can't trigger a template's shell actions),
 //! - secrets are never accepted as answers; they resolve through their
 //!   declared sources exactly like the CLI,
 //! - worktree file paths are validated (relative, no escapes).
@@ -126,6 +126,26 @@ pub struct ScaffoldParams {
     /// Preset names to layer under the answers.
     #[serde(default)]
     presets: Vec<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct UpdateProjectParams {
+    /// The scaffolded project's directory (it has `.weft/state.toml`).
+    dest: String,
+    /// Answers to change, keyed by question id. Include answers are
+    /// namespaced: `svc.port`, or `connector.stripe.port` for an instance
+    /// of a repeat include. Values derived from a changed answer follow it.
+    #[serde(default)]
+    answers: BTreeMap<String, serde_json::Value>,
+    /// Answer ids to hand back to their template default (or include bind).
+    #[serde(default)]
+    unset: Vec<String>,
+    /// Plan only: report the answer changes and conflicts without writing.
+    #[serde(default)]
+    dry_run: bool,
+    /// Write even over files with uncommitted git changes.
+    #[serde(default)]
+    allow_dirty: bool,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -277,6 +297,54 @@ impl WeftMcp {
         Ok(CallToolResult::structured(serde_json::json!({
             "dest": p.dest,
             "files": files,
+            "note": "template tasks were not run (agent guardrail)",
+        })))
+    }
+
+    #[tool(
+        name = "update_project",
+        description = "Re-render a scaffolded project against its template's current \
+                       state and, optionally, changed answers; the result is 3-way \
+                       merged over local edits (conflicts get markers, nothing is \
+                       clobbered). Returns the answer changes (including values \
+                       derived from the ones you set), files written, and conflicts. \
+                       Template tasks are NEVER executed by this tool."
+    )]
+    fn update_project(
+        &self,
+        Parameters(p): Parameters<UpdateProjectParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let dest = Utf8PathBuf::from(&p.dest);
+        let state =
+            weft_engine::state::State::load(&dest).map_err(|e| invalid(format!("{e:#}")))?;
+        let located = crate::source::locate_project(&state, None, false)
+            .map_err(|e| invalid(format!("{e:#}")))?;
+        let opts = weft_engine::update::UpdateOptions {
+            dest,
+            dry_run: p.dry_run,
+            diff: false,
+            template_override: Some(located.dir),
+            stored: located.stored,
+            skip_tasks: true, // guardrail: agents never run template shell tasks
+            drop_instances: vec![],
+            answers: weft_engine::update::AnswerChanges {
+                answers_json: answers_json(&p.answers),
+                unset: p.unset,
+                ..Default::default()
+            },
+            allow_dirty: p.allow_dirty,
+        };
+        let report = crate::source::with_resolver(|r| {
+            weft_engine::update::run(&opts, r, &mut NonInteractive)
+        })
+        .map_err(|e| invalid(format!("{e:#}")))?;
+        Ok(CallToolResult::structured(serde_json::json!({
+            "dry_run": p.dry_run,
+            "answers": report.answer_changes,
+            "kept": report.kept,
+            "written": report.written,
+            "conflicts": report.conflicts,
+            "notes": report.notes,
             "note": "template tasks were not run (agent guardrail)",
         })))
     }
@@ -475,9 +543,12 @@ impl ServerHandler for WeftMcp {
              (1) scaffold a project: list_templates → describe_template (read \
              the questions: `required` ones must be supplied, secrets resolve \
              from env/cmd sources) → scaffold. (2) author a template patch: \
-             record_start with concrete answers → record_write_file with \
+             session_start with concrete answers → session_write_file with \
              concrete values (weft abstracts them into answer references at \
-             commit) → record_commit with a description → check_template.",
+             commit) → session_commit with a description → check_template. \
+             (3) change a scaffolded project's answers or take template \
+             changes: update_project with dry_run first (it lists every answer \
+             that changes, derived ones included), then without.",
         )
     }
 }

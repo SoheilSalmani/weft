@@ -24,6 +24,19 @@ pub struct InstanceAddOptions {
     /// Child answers (`id=value`, child-scoped — no namespace needed).
     pub answers: Vec<String>,
     pub skip_tasks: bool,
+    /// Write even over files with uncommitted git changes.
+    pub allow_dirty: bool,
+    /// The project's template, already fetched when it is a remote source.
+    pub source: ProjectTemplate,
+}
+
+pub struct InstanceRemoveOptions {
+    pub dest: Utf8PathBuf,
+    pub include: String,
+    pub key: String,
+    pub skip_tasks: bool,
+    /// Write even over files with uncommitted git changes.
+    pub allow_dirty: bool,
     /// The project's template, already fetched when it is a remote source.
     pub source: ProjectTemplate,
 }
@@ -76,32 +89,45 @@ pub fn add(
 
     // Pin the instance with an empty base and only the explicit answers; the
     // update pass resolves the rest (binds, defaults, secrets, prompts) and
-    // re-pins the full picture.
+    // re-pins the full picture. If that pass stops before pinning anything
+    // (a guard, a bad answer), the pin is rolled back so the project is
+    // exactly as it was.
+    let state_file = crate::state::state_path(&opts.dest);
+    let original = std::fs::read_to_string(&state_file)?;
     state.instances.push(InstanceState {
         include: opts.include.clone(),
         key: opts.key.clone(),
         mount: compose::mount_path(&inc.decl.path, &opts.key)?.to_string(),
         base: vec![],
         answers: provided,
+        derived: Default::default(),
         secrets: Default::default(),
     });
     state
         .instances
         .sort_by(|a, b| (&a.include, &a.key).cmp(&(&b.include, &b.key)));
     state.save(&opts.dest)?;
-
+    let pinned = std::fs::read_to_string(&state_file)?;
     let report = update::run(
         &UpdateOptions {
             dest: opts.dest.clone(),
             dry_run: false,
+            diff: false,
             template_override: Some(opts.source.dir.clone()),
             stored: opts.source.stored.clone(),
             skip_tasks: opts.skip_tasks,
             drop_instances: vec![],
+            answers: Default::default(),
+            allow_dirty: opts.allow_dirty,
         },
         resolver,
         interaction,
-    )?;
+    )
+    .inspect_err(|_| {
+        if std::fs::read_to_string(&state_file).is_ok_and(|now| now == pinned) {
+            let _ = std::fs::write(&state_file, &original);
+        }
+    })?;
     eprintln!(
         "added instance `{}` of include `{}`",
         opts.key, opts.include
@@ -110,19 +136,16 @@ pub fn add(
 }
 
 pub fn remove(
-    dest: &Utf8PathBuf,
-    include: &str,
-    key: &str,
-    skip_tasks: bool,
-    source: &ProjectTemplate,
+    opts: &InstanceRemoveOptions,
     resolver: &mut dyn crate::template::IncludeResolver,
     interaction: &mut dyn Interaction,
 ) -> Result<UpdateReport> {
+    let (dest, include, key) = (&opts.dest, &opts.include, &opts.key);
     let state = State::load(dest)?;
     if !state
         .instances
         .iter()
-        .any(|i| i.include == include && i.key == key)
+        .any(|i| i.include == *include && i.key == *key)
     {
         bail!("no instance `{key}` of include `{include}` in this project");
     }
@@ -130,10 +153,13 @@ pub fn remove(
         &UpdateOptions {
             dest: dest.clone(),
             dry_run: false,
-            template_override: Some(source.dir.clone()),
-            stored: source.stored.clone(),
-            skip_tasks,
-            drop_instances: vec![(include.to_owned(), key.to_owned())],
+            diff: false,
+            template_override: Some(opts.source.dir.clone()),
+            stored: opts.source.stored.clone(),
+            skip_tasks: opts.skip_tasks,
+            drop_instances: vec![(include.clone(), key.clone())],
+            answers: Default::default(),
+            allow_dirty: opts.allow_dirty,
         },
         resolver,
         interaction,

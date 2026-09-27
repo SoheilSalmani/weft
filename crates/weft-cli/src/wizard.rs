@@ -63,8 +63,14 @@ pub struct WizardState<'a> {
     /// answered questions become locks, and multichoice popups author
     /// fixed/blocked constraints instead of selections.
     authoring: bool,
+    /// Reconfigure mode (`weft update --reconfigure`): `provided` holds the
+    /// project's current answers, and `x` can hand one back to its default.
+    reconfigure: bool,
     /// Answers the user set in the wizard.
     pub entered: BTreeMap<AnswerId, Value>,
+    /// Reconfigure mode: provided answers handed back to their default.
+    /// `entered` still wins over these.
+    pub cleared: BTreeSet<AnswerId>,
     /// Constraints authored in preset mode: id → (fixed, blocked).
     pub authored: BTreeMap<AnswerId, (Vec<String>, Vec<String>)>,
     selected: usize,
@@ -89,7 +95,9 @@ impl<'a> WizardState<'a> {
             locks,
             eval,
             authoring: false,
+            reconfigure: false,
             entered: BTreeMap::new(),
+            cleared: BTreeSet::new(),
             authored: BTreeMap::new(),
             selected: 0,
             editing: None,
@@ -112,6 +120,27 @@ impl<'a> WizardState<'a> {
         state.entered = prefill_locks;
         state.authored = prefill_constraints;
         state
+    }
+
+    /// Reconfigure state over a project's current answers (`provided`).
+    pub fn new_reconfigure(
+        questions: &'a [Question],
+        provided: &'a AnswerSet,
+        locks: &'a PresetLocks,
+        eval: &'a dyn ExprEval,
+    ) -> Self {
+        let mut state = Self::new(questions, provided, locks, eval);
+        state.reconfigure = true;
+        state
+    }
+
+    /// A provided value that still applies: not handed back to its default.
+    fn provided_value(&self, id: &AnswerId) -> Option<&Value> {
+        if self.cleared.contains(id) {
+            None
+        } else {
+            self.provided.get(id)
+        }
     }
 
     /// How many declared questions are locked by the selected presets.
@@ -152,8 +181,9 @@ impl<'a> WizardState<'a> {
     }
 
     /// Resolve as rendering would: declaration order, gates against the
-    /// answers so far (entered > provided > default). Returns the active
-    /// questions with their effective value/source.
+    /// answers so far (entered > provided > default; a cleared id skips
+    /// provided). Returns the active questions with their effective
+    /// value/source.
     fn resolve(&self) -> Vec<(usize, Option<Value>, Source)> {
         if self.authoring {
             // A preset may answer any question (even gated ones), so show
@@ -190,7 +220,7 @@ impl<'a> WizardState<'a> {
                 }
             }
             // Locked by a preset: answered, not editable, not shown — keep the
-            // value in scope so later gates/defaults resolve.
+            // value in scope so later gates/defaults resolve. Never clearable.
             if self.locks.locked.contains(&q.id) {
                 if let Some(v) = self.provided.get(&q.id) {
                     resolved.insert(q.id.clone(), v.clone());
@@ -204,7 +234,7 @@ impl<'a> WizardState<'a> {
                     .entered
                     .get(&q.id)
                     .cloned()
-                    .or_else(|| self.provided.get(&q.id).cloned())
+                    .or_else(|| self.provided_value(&q.id).cloned())
                     .or_else(|| {
                         q.default
                             .as_ref()
@@ -221,7 +251,7 @@ impl<'a> WizardState<'a> {
             }
             let (value, source) = if let Some(v) = self.entered.get(&q.id) {
                 (Some(v.clone()), Source::You)
-            } else if let Some(v) = self.provided.get(&q.id) {
+            } else if let Some(v) = self.provided_value(&q.id) {
                 (Some(v.clone()), Source::Provided)
             } else if let Some(default) = &q.default {
                 (self.eval.eval(default, &resolved).ok(), Source::Default)
@@ -460,13 +490,51 @@ impl<'a> WizardState<'a> {
     }
 
     /// Drop the selected question's wizard-entered value (and, when
-    /// authoring, its constraint), reverting to provided/default/free.
+    /// authoring, its constraint), reverting to provided/default/free. In
+    /// reconfigure mode, `x` on a current (provided) value hands it back to
+    /// the question's default instead.
     fn clear_selected(&mut self) {
-        if let Some(q) = self.selected_question() {
-            let id = q.id.clone();
-            self.entered.remove(&id);
-            self.authored.remove(&id);
-            self.error = None;
+        let Some((i, _, source)) = self.resolve().get(self.selected).cloned() else {
+            return;
+        };
+        let q = &self.questions[i];
+        let id = q.id.clone();
+        self.error = None;
+        self.authored.remove(&id);
+        if self.entered.remove(&id).is_some() || !self.reconfigure {
+            return;
+        }
+        // Only a current value can be handed back; locked, computed and
+        // secret questions never show one here.
+        if source != Source::Provided
+            || q.computed
+            || matches!(q.kind, AnswerKind::Secret { .. })
+            || self.locks.locked.contains(&id)
+        {
+            return;
+        }
+        if q.default.is_some() {
+            self.cleared.insert(id);
+        } else {
+            self.error = Some(format!("`{id}` has no default to fall back to"));
+        }
+    }
+
+    /// The reconfigure result: entered values, and the cleared ids the user
+    /// didn't then answer anew.
+    pub fn reconfigured(&self) -> Reconfigured {
+        Reconfigured {
+            entered: self
+                .entered
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            cleared: self
+                .cleared
+                .iter()
+                .filter(|id| !self.entered.contains_key(*id))
+                .cloned()
+                .collect(),
         }
     }
 }
@@ -523,6 +591,33 @@ pub fn run_author(
     ratatui::restore();
     result?;
     Ok((state.entered, state.authored))
+}
+
+/// What `weft update --reconfigure` gets back: the values the user set in the
+/// wizard, and the ids they handed back to their template default.
+pub struct Reconfigured {
+    pub entered: AnswerSet,
+    pub cleared: BTreeSet<AnswerId>,
+}
+
+/// Run the wizard over a project's current answers (`current`: the answers
+/// the project stores as given, plus any passed on this command line). Rows
+/// show current values as `(current)`; `x`/Delete on a current value hands it
+/// back to its default (only when the question has a `default`), which then
+/// evaluates live against the other answers. Errors if the user cancels.
+pub fn run_reconfigure(
+    template_name: &str,
+    questions: &[Question],
+    current: &AnswerSet,
+    locks: &PresetLocks,
+    eval: &dyn ExprEval,
+) -> Result<Reconfigured> {
+    let mut state = WizardState::new_reconfigure(questions, current, locks, eval);
+    let mut terminal = ratatui::init();
+    let result = event_loop(&mut terminal, &mut state, template_name);
+    ratatui::restore();
+    result?;
+    Ok(state.reconfigured())
 }
 
 fn event_loop(
@@ -715,6 +810,8 @@ fn draw(frame: &mut ratatui::Frame, state: &WizardState, template_name: &str) {
     // Header: command + context, same grammar as the command forms.
     let title = if state.authoring {
         "weft preset save"
+    } else if state.reconfigure {
+        "weft update --reconfigure"
     } else {
         "weft answers"
     };
@@ -762,6 +859,9 @@ fn draw(frame: &mut ratatui::Frame, state: &WizardState, template_name: &str) {
                     Span::styled(" (in preset)", Style::default().fg(Theme::OK))
                 }
                 Source::You => Span::styled(" (you)", Style::default().fg(Theme::OK)),
+                Source::Provided if state.reconfigure => {
+                    Span::styled(" (current)", Theme::accent())
+                }
                 Source::Provided => Span::styled(" (flag/preset)", Theme::accent()),
                 Source::Default => Span::styled(" (default)", Theme::dim()),
                 Source::Secret => Span::raw(""),
@@ -847,8 +947,23 @@ fn draw(frame: &mut ratatui::Frame, state: &WizardState, template_name: &str) {
         vec![
             ("↑↓", "move"),
             ("enter", "edit"),
-            ("x", "clear"),
+            (
+                "x",
+                if state.reconfigure {
+                    "reset to default"
+                } else {
+                    "clear"
+                },
+            ),
             ("s", if state.authoring { "save" } else { "continue" }),
+            ("q", "cancel"),
+        ]
+    } else if state.reconfigure {
+        vec![
+            ("↑↓", "move"),
+            ("enter", "edit"),
+            ("x", "reset to default"),
+            ("answer required fields", "to continue"),
             ("q", "cancel"),
         ]
     } else {
@@ -1139,5 +1254,113 @@ mod tests {
                 Value::String("lint".into()),
             ]))
         );
+    }
+
+    /// `project_name` (no default) and `package_name` (defaults to it), both
+    /// currently set.
+    fn reconfigure_fixture() -> (Vec<Question>, AnswerSet) {
+        let questions = vec![
+            question("project_name", AnswerKind::String, None, None),
+            question(
+                "package_name",
+                AnswerKind::String,
+                Some("project_name"),
+                None,
+            ),
+        ];
+        let current: AnswerSet = [
+            (AnswerId::from("project_name"), Value::String("old".into())),
+            (
+                AnswerId::from("package_name"),
+                Value::String("pinned".into()),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        (questions, current)
+    }
+
+    fn row_value(state: &WizardState, row: usize) -> (Option<Value>, Source) {
+        let (_, value, source) = state.resolve()[row].clone();
+        (value, source)
+    }
+
+    #[test]
+    fn reconfigure_clear_falls_back_to_live_default() {
+        let (questions, current) = reconfigure_fixture();
+        let locks = no_locks();
+        let mut state = WizardState::new_reconfigure(&questions, &current, &locks, &StubEval);
+
+        state.selected = 1;
+        state.clear_selected();
+        assert!(state.error.is_none());
+        let (value, source) = row_value(&state, 1);
+        assert_eq!(value, Some(Value::String("old".into())));
+        assert!(source == Source::Default);
+
+        // The default tracks the other answers live.
+        state.selected = 0;
+        state.commit_text("new");
+        assert_eq!(row_value(&state, 1).0, Some(Value::String("new".into())));
+
+        let out = state.reconfigured();
+        assert_eq!(
+            out.cleared,
+            [AnswerId::from("package_name")].into_iter().collect()
+        );
+        assert_eq!(
+            out.entered.get(&"project_name".into()),
+            Some(&Value::String("new".into()))
+        );
+    }
+
+    #[test]
+    fn reconfigure_clear_without_default_keeps_current_and_errors() {
+        let (questions, current) = reconfigure_fixture();
+        let locks = no_locks();
+        let mut state = WizardState::new_reconfigure(&questions, &current, &locks, &StubEval);
+
+        state.clear_selected(); // row 0: project_name, no default
+        assert!(state.error.is_some());
+        let (value, source) = row_value(&state, 0);
+        assert_eq!(value, Some(Value::String("old".into())));
+        assert!(source == Source::Provided);
+        assert!(state.reconfigured().cleared.is_empty());
+    }
+
+    #[test]
+    fn reconfigure_reentering_after_clear_reports_entered_not_cleared() {
+        let (questions, current) = reconfigure_fixture();
+        let locks = no_locks();
+        let mut state = WizardState::new_reconfigure(&questions, &current, &locks, &StubEval);
+
+        state.selected = 1;
+        state.clear_selected();
+        state.commit_text("fresh");
+        let (value, source) = row_value(&state, 1);
+        assert_eq!(value, Some(Value::String("fresh".into())));
+        assert!(source == Source::You);
+
+        let out = state.reconfigured();
+        assert!(out.cleared.is_empty());
+        assert_eq!(
+            out.entered.get(&"package_name".into()),
+            Some(&Value::String("fresh".into()))
+        );
+    }
+
+    #[test]
+    fn clear_does_not_drop_provided_value_outside_reconfigure() {
+        let (questions, current) = reconfigure_fixture();
+        let locks = no_locks();
+        let mut state = WizardState::new(&questions, &current, &locks, &StubEval);
+
+        state.selected = 1;
+        state.clear_selected();
+        assert!(state.cleared.is_empty());
+        assert!(state.error.is_none());
+        let (value, source) = row_value(&state, 1);
+        assert_eq!(value, Some(Value::String("pinned".into())));
+        assert!(source == Source::Provided);
     }
 }

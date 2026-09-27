@@ -78,8 +78,8 @@ enum Command {
         #[arg(long)]
         offline: bool,
     },
-    /// Re-render against the current template state and 3-way merge the
-    /// changes over local edits.
+    /// Re-render against the current template state (and, with `--answer`
+    /// & co., changed answers) and 3-way merge the changes over local edits.
     Update {
         /// Scaffolded project directory (defaults to `.`).
         #[arg(default_value = ".")]
@@ -87,6 +87,9 @@ enum Command {
         /// Print the plan without changing anything.
         #[arg(long)]
         dry_run: bool,
+        /// With --dry-run: also print the unified diff of every planned write.
+        #[arg(long, requires = "dry_run")]
+        diff: bool,
         /// Use this local template path instead of the recorded source
         /// (and record it from now on).
         #[arg(long, conflicts_with = "to")]
@@ -95,6 +98,33 @@ enum Command {
         /// branch, or commit; hub: version) and track it from now on.
         #[arg(long, value_name = "REV")]
         to: Option<String>,
+        /// Change an answer as KEY=VALUE (repeatable). Include answers are
+        /// namespaced: `svc.port=8080`, `connector.stripe.port=8080`.
+        /// Values derived from it (defaults, computed values, binds)
+        /// follow; answers you gave stay.
+        #[arg(long = "answer")]
+        answers: Vec<String>,
+        /// Apply a named preset's answers (repeatable).
+        #[arg(long = "preset")]
+        presets: Vec<String>,
+        /// TOML file with answers to change.
+        #[arg(long = "answers-file")]
+        answers_file: Option<Utf8PathBuf>,
+        /// Answers to change as a JSON object (inline, `@file`, or `-`).
+        #[arg(long = "answers-json")]
+        answers_json: Option<String>,
+        /// Hand an answer back to its default (or include bind), so it
+        /// follows the other answers again (repeatable).
+        #[arg(long = "unset", value_name = "ID")]
+        unset: Vec<String>,
+        /// Change answers in the full-screen wizard, prefilled with the
+        /// project's current answers.
+        #[arg(long)]
+        reconfigure: bool,
+        /// Write even over files with uncommitted git changes (by default
+        /// the update stops, so git can show and undo what the merge does).
+        #[arg(long)]
+        allow_dirty: bool,
         /// Do not run template tasks after merging.
         #[arg(long)]
         skip_tasks: bool,
@@ -107,6 +137,18 @@ enum Command {
         /// Never touch the network: update from the cached git mirror only.
         #[arg(long)]
         offline: bool,
+    },
+    /// Show a scaffolded project's answers and where each came from:
+    /// `given` (yours — every re-render starts from these), `derived`
+    /// (defaults, computed values, include binds — they follow the other
+    /// answers), or `secret` (resolved from its source, never stored).
+    Answers {
+        /// Scaffolded project directory (defaults to `.`).
+        #[arg(default_value = ".")]
+        dest: Utf8PathBuf,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
     },
     /// Manage repeatable-include instances of a scaffolded project.
     Instance {
@@ -350,6 +392,9 @@ enum InstanceCmd {
         /// Do not run hooks.
         #[arg(long)]
         skip_tasks: bool,
+        /// Write even over files with uncommitted git changes.
+        #[arg(long)]
+        allow_dirty: bool,
         /// Never prompt; fail if child answers are missing.
         #[arg(long)]
         non_interactive: bool,
@@ -366,6 +411,9 @@ enum InstanceCmd {
         /// Do not run hooks.
         #[arg(long)]
         skip_tasks: bool,
+        /// Write even over files with uncommitted git changes.
+        #[arg(long)]
+        allow_dirty: bool,
     },
     /// List the project's include instances.
     List {
@@ -863,20 +911,38 @@ fn main() -> anyhow::Result<()> {
         Command::Update {
             dest,
             dry_run,
+            diff,
             template,
             to,
+            answers,
+            presets,
+            answers_file,
+            answers_json,
+            unset,
+            reconfigure,
+            allow_dirty,
             skip_tasks,
             non_interactive,
             frozen,
             offline,
         } => {
+            let mut changes = weft_engine::update::AnswerChanges {
+                presets,
+                answers,
+                answers_file,
+                answers_json,
+                typed: Default::default(),
+                unset,
+            };
             let state = weft_engine::state::State::load(&dest)?;
-            let (template_override, stored) = match template {
+            let (template_dir, stored) = match template {
                 // A local path override replaces the recorded source.
-                Some(dir) => (Some(dir), None),
+                Some(dir) => (dir, None),
                 None => {
                     let located = source::locate_project(&state, to.as_deref(), offline)?;
-                    if let Some(s) = &located.stored {
+                    // Nothing to re-render when neither the source nor the
+                    // answers move.
+                    if let (true, Some(s)) = (changes.is_empty() && !reconfigure, &located.stored) {
                         if let Some(commit) = &s.commit {
                             if s.template == state.state.template
                                 && state.state.commit.as_deref() == Some(commit)
@@ -886,16 +952,29 @@ fn main() -> anyhow::Result<()> {
                             }
                         }
                     }
-                    (Some(located.dir), located.stored)
+                    (located.dir, located.stored)
                 }
             };
+            if reconfigure {
+                use std::io::IsTerminal;
+                if non_interactive || !std::io::stdin().is_terminal() {
+                    anyhow::bail!(
+                        "--reconfigure opens the answers wizard and needs a terminal; \
+                         change answers with --answer ID=VALUE / --unset ID instead"
+                    );
+                }
+                reconfigure_answers(&template_dir, &state, &mut changes)?;
+            }
             let opts = weft_engine::update::UpdateOptions {
                 dest,
                 dry_run,
-                template_override,
+                diff,
+                template_override: Some(template_dir),
                 stored,
                 skip_tasks,
                 drop_instances: vec![],
+                answers: changes,
+                allow_dirty,
             };
             let mut interaction = auto_interaction(non_interactive);
             let mut resolver =
@@ -908,6 +987,39 @@ fn main() -> anyhow::Result<()> {
                 weft_engine::update::finish(&report)
             }
         }
+        Command::Answers { dest, json } => {
+            let state = weft_engine::state::State::load(&dest)?;
+            let rows = state.answer_rows();
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({ "answers": rows }))?
+                );
+                return Ok(());
+            }
+            let width = rows.iter().map(|r| r.id.len()).max().unwrap_or(0);
+            let shown: Vec<String> = rows
+                .iter()
+                .map(|r| match (&r.value, &r.source) {
+                    (Some(v), _) => weft_engine::update::show_value(v),
+                    (None, Some(src)) => src.clone(),
+                    (None, None) => String::new(),
+                })
+                .collect();
+            let value_width = shown.iter().map(|s| s.chars().count()).max().unwrap_or(0);
+            for (row, value) in rows.iter().zip(&shown) {
+                println!(
+                    "{:width$}  {value:value_width$}  {}",
+                    row.id,
+                    row.origin.label()
+                );
+            }
+            eprintln!(
+                "change one with `weft update --answer ID=VALUE`, hand one back to its default \
+                 with `--unset ID`, or edit them in the wizard with `weft update --reconfigure`"
+            );
+            Ok(())
+        }
         Command::Instance { cmd } => match cmd {
             InstanceCmd::Add {
                 include,
@@ -915,6 +1027,7 @@ fn main() -> anyhow::Result<()> {
                 answers,
                 dest,
                 skip_tasks,
+                allow_dirty,
                 non_interactive,
                 no_tui,
             } => {
@@ -940,6 +1053,7 @@ fn main() -> anyhow::Result<()> {
                         key,
                         answers,
                         skip_tasks,
+                        allow_dirty,
                         source,
                     },
                     &mut resolver,
@@ -953,17 +1067,21 @@ fn main() -> anyhow::Result<()> {
                 key,
                 dest,
                 skip_tasks,
+                allow_dirty,
             } => {
                 let state = weft_engine::state::State::load(&dest)?;
                 let source = source::locate_project(&state, None, false)?;
                 let mut interaction = auto_interaction(false);
                 let mut resolver = source::RemoteResolver::new(hub::registry_url(None).ok(), false);
                 let report = weft_engine::instance::remove(
-                    &dest,
-                    &include,
-                    &key,
-                    skip_tasks,
-                    &source,
+                    &weft_engine::instance::InstanceRemoveOptions {
+                        dest,
+                        include,
+                        key,
+                        skip_tasks,
+                        allow_dirty,
+                        source,
+                    },
                     &mut resolver,
                     interaction.as_mut(),
                 )?;
@@ -2114,6 +2232,48 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
+}
+
+/// `weft update --reconfigure`: open the answers wizard over the project's
+/// current answers — the ones it stores as given, overlaid with any passed
+/// on this command line — and fold what the user changed and reset into
+/// this update's answer changes. Derived values show as live defaults.
+fn reconfigure_answers(
+    template_dir: &camino::Utf8Path,
+    state: &weft_engine::state::State,
+    changes: &mut weft_engine::update::AnswerChanges,
+) -> anyhow::Result<()> {
+    let template = source::load_template(template_dir)?;
+    let layered = weft_engine::answers::layered_with_json_full(
+        &template,
+        &changes.presets,
+        changes.answers_file.as_deref(),
+        &changes.answers,
+        changes.answers_json.as_deref(),
+    )?;
+    let (root, _) = weft_engine::compose::split_provided(&template, &layered.answers)?;
+    let mut current = state.answers.clone();
+    current.overlay(&root);
+    for id in &changes.unset {
+        current.remove(&weft_core::AnswerId(id.clone()));
+    }
+    let locks = wizard::PresetLocks {
+        locked: layered.locked,
+        constraints: layered.constraints,
+    };
+    let eval = weft_engine::eval();
+    let result = wizard::run_reconfigure(
+        &template.manifest.template.name,
+        &template.manifest.questions,
+        &current,
+        &locks,
+        &eval,
+    )?;
+    changes.typed = result.entered;
+    changes
+        .unset
+        .extend(result.cleared.into_iter().map(|id| id.0));
+    Ok(())
 }
 
 /// Run the full-screen wizard when interactive (TTY, not --non-interactive,

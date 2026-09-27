@@ -174,6 +174,10 @@ impl AnswerSet {
         }
     }
 
+    pub fn remove(&mut self, id: &AnswerId) -> Option<Value> {
+        self.0.remove(id)
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&AnswerId, &Value)> {
         self.0.iter()
     }

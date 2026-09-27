@@ -112,16 +112,38 @@ pub fn run(
     fsio::write_tree(&opts.dest, &tree)?;
 
     // Pin state: parent answers/base plus one entry per include instance.
+    // Answers are stored with provenance: what was supplied (or prompted)
+    // is given; defaults, computed values, and binds are derived and follow
+    // the template on the next update.
     let parent_secrets = secret_specs(&template.manifest.questions, &resolved);
+    let root_answers = answers::provenance(
+        &template.manifest.questions,
+        &parent_provided,
+        &Default::default(),
+        &resolved,
+        &eval,
+    );
     let instance_states: Vec<InstanceState> = parts
         .iter()
-        .map(|p| InstanceState {
-            include: p.instance.include.clone(),
-            key: p.instance.key.clone(),
-            mount: p.instance.mount.to_string(),
-            base: p.patches.iter().map(|patch| patch.id).collect(),
-            answers: State::plain_answers(&p.instance.answers),
-            secrets: secret_specs(&p.template.manifest.questions, &p.instance.answers),
+        .map(|p| {
+            let slot = (p.instance.include.clone(), p.instance.key.clone());
+            let supplied = child_provided.get(&slot).cloned().unwrap_or_default();
+            let (given, derived) = answers::provenance(
+                &p.template.manifest.questions,
+                &supplied,
+                &compose::bind_ids(&template, &p.instance.include),
+                &p.instance.answers,
+                &eval,
+            );
+            InstanceState {
+                include: p.instance.include.clone(),
+                key: p.instance.key.clone(),
+                mount: p.instance.mount.to_string(),
+                base: p.patches.iter().map(|patch| patch.id).collect(),
+                answers: given,
+                derived,
+                secrets: secret_specs(&p.template.manifest.questions, &p.instance.answers),
+            }
         })
         .collect();
     let source = opts
@@ -132,7 +154,7 @@ pub fn run(
         source,
         template.patches.iter().map(|p| p.id).collect(),
         tree.hash(),
-        &resolved,
+        root_answers,
         &parent_secrets,
     )
     .with_instances(instance_states);

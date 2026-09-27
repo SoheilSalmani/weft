@@ -25,6 +25,10 @@ true.
   Use `EDITOR=true` so nothing opens an editor.
 - One tutorial, one feature ladder. Do not teach includes inside the update
   tutorial; link to the includes tutorial instead.
+- If a tutorial puts the project under git (it should, from rung 2 on:
+  `git init && git add -A && git commit -m scaffold` right after `weft
+  new`), commit before every `weft update` — an update refuses to write over
+  uncommitted changes. Scratch projects outside git are never blocked.
 
 ## Layout the reader builds
 
@@ -63,7 +67,9 @@ here, check `weft <cmd> --help` and add it to this table.
 | Look at the graph | `weft graph T [--answer …] [--json] [--diff PATCH]` | nodes, edges, `[active]`/`[inactive]`, a node's contribution |
 | Describe | `weft describe T --json`, `--agents-md -` | the contract agents read |
 | Scaffold | `weft new T DEST --answer k=v [--preset P] [--instance inc=key] --skip-tasks --non-interactive` | the tree, `.weft/state.toml`, `.weft/base.json` |
-| Sync | `weft update DEST [--template T] [--dry-run] --non-interactive --skip-tasks` | stderr `N file(s) written`; conflicts exit nonzero |
+| Sync | `weft update DEST [--template T] [--dry-run [--diff]] --non-interactive --skip-tasks` | the `answers:` block (when answers move), stderr `N file(s) written`; conflicts exit nonzero |
+| Change answers | `weft update DEST --answer ID=V [--unset ID] …` (`--reconfigure` opens the wizard; TTY only) | `answers:` lines, derived ones tagged `(derived)` / `(bind)` |
+| Inspect answers | `weft answers DEST [--json]` | each answer's value and origin: `given`, `derived`, `secret` |
 | Edit a patch | `weft patch amend NAME --template T --answer …`, then `weft commit --yes` | ``amended patch `NAME` …; its content id changed`` |
 | Combine | `weft patch squash A B --into C` | ids downstream move; projects still update |
 | Fleet | `weft instance add INC KEY --dest DEST`, `instance remove`, `instance list` | files appear/disappear, integration lines follow |
@@ -122,11 +128,21 @@ changes, and is idempotent; conflicts are marked, never clobbered.
 7. `weft patch amend` the template, update again: the project follows the
    rewrite (`.weft/base.json` is why — one sentence, then link to the
    explanation page, do not explain in the tutorial).
+8. **Change an answer.** `weft answers proj` first (given vs derived), then
+   `weft update proj --answer "project_name=New Name"`: assert the
+   `answers:` block lists the given change *and* the derived one
+   (`package_name … (derived)`), the files follow, and a local edit on
+   another line survives. Then scaffold `proj-2` with an explicit
+   `package_name`, rename again, and assert it stays; `--unset
+   package_name` makes it follow. Finish with a conflicting answer change
+   (local edit on the title line), show that the next plain `weft update`
+   refuses until the markers are resolved, resolve, and re-run.
 
 Traps: `weft update` reads `.weft/state.toml` for the template path; when the
 template moved, pass `--template`. Every `--answer` the template needs must be
 in state or on the command line — a new required question prompts, so add it
-with a `default`.
+with a `default`. An answer change and template changes land in the same run;
+to show only the answer's effect, run `weft update` (and commit) first.
 
 ### 3. A base template and a template that extends it
 
@@ -249,6 +265,10 @@ its refusal; keep the exact stderr fragment in the script:
 | Situation | Fragment to assert |
 | --- | --- |
 | Conflict on update | `conflict`, `<<<<<<< local`, `>>>>>>> template` |
+| Update with markers still in a file | `conflict markers that are still there` |
+| Update over uncommitted git changes | `uncommitted changes in file(s) this update would write` (`--allow-dirty` overrides) |
+| `--unset` on a question with no default | `has no default to fall back to` |
+| Answer for a repeat instance the project lacks | ``add it with `weft instance add`` |
 | `--depends-on` that cannot be honoured | `does not apply with only` |
 | Inherited patch edited in the extender | ``inherited from`` |
 | Mount edit without dependency (check) | `is under include` … `does not depend on any of its nodes` |

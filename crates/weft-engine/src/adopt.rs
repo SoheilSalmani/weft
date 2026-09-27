@@ -113,10 +113,12 @@ pub fn run(
         opts.answers_json.as_deref(),
     )?;
     let (parent_layered, child_layered) = crate::compose::split_provided(&template, &layered)?;
+    // The project's rendered answers (given and derived alike) reproduce the
+    // base it was rendered from.
     let provided = {
         let mut merged = state
             .as_ref()
-            .map(|s| s.answers.clone())
+            .map(|s| s.rendered_answers())
             .unwrap_or_default();
         for (k, v) in parent_layered.iter() {
             merged.insert(k.clone(), v.clone());
@@ -139,7 +141,7 @@ pub fn run(
                     .iter()
                     .find(|i| i.include == inc.decl.name && i.key == inc.decl.name)
             })
-            .map(|i| i.answers.clone())
+            .map(|i| i.rendered_answers())
             .unwrap_or_default();
         if let Some(overlay) = child_layered.get(&(inc.decl.name.clone(), inc.decl.name.clone())) {
             merged.overlay(overlay);

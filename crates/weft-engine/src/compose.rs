@@ -68,34 +68,75 @@ pub fn valid_key(key: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
-/// Resolve a possibly-namespaced flat answer id to its declaring question:
-/// a parent question, `<include>.<child-id>` (non-repeat), or
-/// `<include>.<key>.<child-id>` (repeat).
-pub fn find_question<'t>(template: &'t Template, flat_id: &str) -> Option<&'t Question> {
+/// Where a possibly-namespaced flat answer id lands: a parent question, or a
+/// child question of one include instance — `<include>.<child-id>` for a
+/// single include (whose key is its name), `<include>.<key>.<child-id>` for
+/// a repeat include.
+pub enum AnswerRoute<'t> {
+    Root(&'t Question),
+    Instance {
+        include: &'t LoadedInclude,
+        key: String,
+        question: &'t Question,
+    },
+}
+
+impl<'t> AnswerRoute<'t> {
+    pub fn question(&self) -> &'t Question {
+        match self {
+            AnswerRoute::Root(q) => q,
+            AnswerRoute::Instance { question, .. } => question,
+        }
+    }
+}
+
+/// Route a flat answer id (see [`AnswerRoute`]); `None` when it names no
+/// question of the template or its includes.
+pub fn route_answer<'t>(template: &'t Template, flat_id: &str) -> Option<AnswerRoute<'t>> {
     if let Some(q) = template
         .manifest
         .questions
         .iter()
         .find(|q| q.id.0 == flat_id)
     {
-        return Some(q);
+        return Some(AnswerRoute::Root(q));
     }
     let (ns, rest) = flat_id.split_once('.')?;
     let inc = template.include(ns)?;
-    let child_id = if inc.decl.repeat {
+    let (key, child_id) = if inc.decl.repeat {
         let (key, child_id) = rest.split_once('.')?;
         if !valid_key(key) {
             return None;
         }
-        child_id
+        (key, child_id)
     } else {
-        rest
+        (inc.decl.name.as_str(), rest)
     };
-    inc.template
+    let question = inc
+        .template
         .manifest
         .questions
         .iter()
-        .find(|q| q.id.0 == child_id)
+        .find(|q| q.id.0 == child_id)?;
+    Some(AnswerRoute::Instance {
+        include: inc,
+        key: key.to_owned(),
+        question,
+    })
+}
+
+/// Resolve a possibly-namespaced flat answer id to its declaring question.
+pub fn find_question<'t>(template: &'t Template, flat_id: &str) -> Option<&'t Question> {
+    route_answer(template, flat_id).map(|r| r.question())
+}
+
+/// The child answer ids an include seeds through `bind` (derived inputs of
+/// its instances). Empty for an unknown include.
+pub fn bind_ids(template: &Template, include: &str) -> std::collections::BTreeSet<AnswerId> {
+    template
+        .include(include)
+        .map(|inc| inc.decl.bind.keys().map(|k| AnswerId(k.clone())).collect())
+        .unwrap_or_default()
 }
 
 /// Per-instance child answer sets, keyed by `(include name, instance key)`.
@@ -109,40 +150,19 @@ pub fn split_provided(template: &Template, flat: &AnswerSet) -> Result<(AnswerSe
     let mut parent = AnswerSet::new();
     let mut children: BTreeMap<(String, String), AnswerSet> = BTreeMap::new();
     for (id, value) in flat.iter() {
-        if template.manifest.questions.iter().any(|q| q.id == *id) {
-            parent.insert(id.clone(), value.clone());
-            continue;
-        }
-        let routed = (|| {
-            let (ns, rest) = id.0.split_once('.')?;
-            let inc = template.include(ns)?;
-            let (key, child_id) = if inc.decl.repeat {
-                let (key, child_id) = rest.split_once('.')?;
-                if !valid_key(key) {
-                    return None;
-                }
-                (key, child_id)
-            } else {
-                (inc.decl.name.as_str(), rest)
-            };
-            inc.template
-                .manifest
-                .questions
-                .iter()
-                .any(|q| q.id.0 == child_id)
-                .then(|| {
-                    (
-                        (inc.decl.name.clone(), key.to_owned()),
-                        AnswerId(child_id.to_owned()),
-                    )
-                })
-        })();
-        match routed {
-            Some((slot, child_id)) => {
+        match route_answer(template, &id.0) {
+            Some(AnswerRoute::Root(_)) => {
+                parent.insert(id.clone(), value.clone());
+            }
+            Some(AnswerRoute::Instance {
+                include,
+                key,
+                question,
+            }) => {
                 children
-                    .entry(slot)
+                    .entry((include.decl.name.clone(), key))
                     .or_default()
-                    .insert(child_id, value.clone());
+                    .insert(question.id.clone(), value.clone());
             }
             None => bail!(
                 "answer `{id}` does not match any question in template `{}` or its includes",

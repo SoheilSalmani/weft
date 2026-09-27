@@ -131,6 +131,7 @@ fn mcp_scaffold_flow() {
         "session_start",
         "session_write_file",
         "session_commit",
+        "update_project",
     ] {
         assert!(names.contains(&expected), "missing tool {expected}");
     }
@@ -169,6 +170,31 @@ fn mcp_scaffold_flow() {
     let readme = std::fs::read_to_string(dest_path.join("README.md")).unwrap();
     assert!(readme.starts_with("# MCP App"));
     // guardrail: the template's task must NOT have run
+    assert!(!dest_path.join(".task-ran").exists());
+
+    // Change an answer: the derived value follows, a dry run writes nothing.
+    let rename = serde_json::json!({
+        "dest": dest_path.to_str().unwrap(),
+        "answers": {"project_name": "Renamed App"},
+    });
+    let mut dry = rename.clone();
+    dry["dry_run"] = serde_json::json!(true);
+    let plan = client.call_tool("update_project", dry);
+    assert_eq!(plan["written"], 0);
+    assert!(std::fs::read_to_string(dest_path.join("README.md"))
+        .unwrap()
+        .starts_with("# MCP App"));
+    let result = client.call_tool("update_project", rename);
+    let changes = result["answers"].as_array().unwrap();
+    let package = changes
+        .iter()
+        .find(|c| c["id"] == "package_name")
+        .expect("derived package_name follows the rename");
+    assert_eq!(package["origin"], "derived");
+    assert_eq!(package["new"], "renamed-app");
+    assert!(result["conflicts"].as_array().unwrap().is_empty());
+    let readme = std::fs::read_to_string(dest_path.join("README.md")).unwrap();
+    assert!(readme.starts_with("# Renamed App"));
     assert!(!dest_path.join(".task-ran").exists());
 }
 

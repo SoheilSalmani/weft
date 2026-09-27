@@ -233,6 +233,66 @@ pub fn gather(
     Ok(validated)
 }
 
+/// Split one frame's resolved answers into what a project stores:
+///
+/// - `given` — the inputs: every `supplied` answer (any input layer: flags,
+///   answers file, JSON, wizard, preset, or a stored given answer on update),
+///   kept even while its question is gated off so it returns when the gate
+///   opens; plus answers to open questions with no default and no `seeded`
+///   value, which were prompted for.
+/// - `derived` — every other resolved value: defaults, computed values,
+///   `seeded` values (include binds), and the value standing in for a
+///   gated-off question.
+///
+/// An old render reproduces from `given` overlaid with `derived` (see
+/// [`crate::state::State::rendered_answers`]); a new render feeds back only
+/// `given`, so derived values follow the template and the other answers.
+/// Secrets are in neither: they persist as source references.
+pub fn provenance(
+    questions: &[Question],
+    supplied: &AnswerSet,
+    seeded: &std::collections::BTreeSet<weft_core::AnswerId>,
+    resolved: &AnswerSet,
+    eval: &dyn ExprEval,
+) -> (AnswerSet, AnswerSet) {
+    let mut given = AnswerSet::new();
+    let mut derived = AnswerSet::new();
+    for q in questions {
+        if matches!(q.kind, AnswerKind::Secret { .. }) {
+            continue;
+        }
+        // Gates reference earlier answers, so evaluating them over the final
+        // set gives what `gather` saw.
+        let open = q
+            .when
+            .as_ref()
+            .is_none_or(|w| eval.eval_bool(w, resolved).unwrap_or(true));
+        let value = resolved.get(&q.id);
+        if let Some(input) = supplied.get(&q.id) {
+            match (open, value) {
+                (true, Some(v)) => {
+                    given.insert(q.id.clone(), v.clone());
+                }
+                (_, v) => {
+                    given.insert(q.id.clone(), input.clone());
+                    if let Some(v) = v {
+                        derived.insert(q.id.clone(), v.clone());
+                    }
+                }
+            }
+            continue;
+        }
+        let Some(v) = value else { continue };
+        let prompted = open && !q.computed && q.default.is_none() && !seeded.contains(&q.id);
+        if prompted {
+            given.insert(q.id.clone(), v.clone());
+        } else {
+            derived.insert(q.id.clone(), v.clone());
+        }
+    }
+    (given, derived)
+}
+
 /// The full pre-interactive layering: answers file → `--answer` flags →
 /// answers JSON (inline, `@file`, `-` for stdin; later wins) — then the
 /// selected presets' locks and constraints are enforced over the result.
@@ -359,4 +419,96 @@ pub fn answers_from_json(questions: &[Question], json: &str) -> Result<AnswerSet
         );
     }
     Ok(set)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use weft_core::{AnswerId, StarlarkExpr};
+    use weft_lang::StarlarkEval;
+
+    use super::*;
+
+    fn q(id: &str, default: Option<&str>, when: Option<&str>) -> Question {
+        Question {
+            id: AnswerId::from(id),
+            kind: AnswerKind::String,
+            prompt: None,
+            description: None,
+            example: None,
+            default: default.map(|d| StarlarkExpr(d.to_owned())),
+            when: when.map(|w| StarlarkExpr(w.to_owned())),
+            computed: false,
+            section: None,
+        }
+    }
+
+    fn set(pairs: &[(&str, &str)]) -> AnswerSet {
+        pairs
+            .iter()
+            .map(|(k, v)| (AnswerId::from(*k), Value::String((*v).to_owned())))
+            .collect()
+    }
+
+    fn ids(s: &AnswerSet) -> Vec<&str> {
+        s.iter().map(|(k, _)| k.0.as_str()).collect()
+    }
+
+    #[test]
+    fn supplied_and_prompted_answers_are_given_defaults_and_binds_derived() {
+        let questions = vec![
+            q("name", None, None),                 // prompted
+            q("slug", Some("name.lower()"), None), // default
+            q("owner", None, None),                // seeded by a bind
+            q("title", Some("'x'"), None),         // supplied though defaulted
+        ];
+        let resolved = set(&[
+            ("name", "Acme"),
+            ("slug", "acme"),
+            ("owner", "ops"),
+            ("title", "Custom"),
+        ]);
+        let seeded: BTreeSet<AnswerId> = [AnswerId::from("owner")].into();
+        let (given, derived) = provenance(
+            &questions,
+            &set(&[("title", "Custom")]),
+            &seeded,
+            &resolved,
+            &StarlarkEval,
+        );
+        assert_eq!(ids(&given), vec!["name", "title"]);
+        assert_eq!(ids(&derived), vec!["owner", "slug"]);
+    }
+
+    #[test]
+    fn a_supplied_answer_behind_a_closed_gate_is_kept_with_its_stand_in() {
+        let mut docker = q("use_docker", None, None);
+        docker.kind = AnswerKind::Bool;
+        let questions = vec![docker, q("image", Some("'python'"), Some("use_docker"))];
+        let mut resolved = set(&[("image", "python")]);
+        resolved.insert(AnswerId::from("use_docker"), Value::Bool(false));
+        let mut supplied = set(&[("image", "custom")]);
+        supplied.insert(AnswerId::from("use_docker"), Value::Bool(false));
+        let (given, derived) = provenance(
+            &questions,
+            &supplied,
+            &BTreeSet::new(),
+            &resolved,
+            &StarlarkEval,
+        );
+        // The input survives for when the gate opens again; the render used
+        // the default standing in for it.
+        assert_eq!(
+            given.get(&AnswerId::from("image")),
+            Some(&Value::String("custom".into()))
+        );
+        assert_eq!(
+            derived.get(&AnswerId::from("image")),
+            Some(&Value::String("python".into()))
+        );
+        let mut rendered = given.clone();
+        rendered.overlay(&derived);
+        assert_eq!(rendered, resolved);
+    }
 }

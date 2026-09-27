@@ -124,13 +124,51 @@ When the template gains patches, `weft update` re-renders both states and
 3-way merges the difference over your local edits:
 
 ```sh
-weft update /tmp/demo --dry-run     # show the plan
-weft update /tmp/demo               # apply; conflicts get <<<<<<< markers
+weft update /tmp/demo --dry-run          # show the plan
+weft update /tmp/demo --dry-run --diff   # …and the unified diff it would apply
+weft update /tmp/demo                    # apply; conflicts get <<<<<<< markers
 ```
 
 Tasks re-fire only when their declared inputs (file globs, answers, upstream
 tasks) actually changed between the two renders. Running `update` twice in a
 row is a no-op.
+
+A file left with conflict markers blocks the next `weft update` until you
+resolve it. Inside a git work tree, `weft update` also refuses to write over
+files with uncommitted changes, so `git diff` shows exactly what the merge
+did and `git checkout` undoes it; `--allow-dirty` overrides.
+
+### Change a project's answers
+
+The same update changes answers and re-renders:
+
+```sh
+weft answers /tmp/demo                                  # what's set, and where it came from
+weft update /tmp/demo --answer "project_name=New Name"  # re-render + 3-way merge
+weft update /tmp/demo --answer svc.port=8080            # an include's answer
+weft update /tmp/demo --unset package_name              # back to its default
+weft update /tmp/demo --reconfigure                     # edit them all in the wizard
+```
+
+`.weft/state.toml` keeps two kinds of answers. `[answers]` holds the ones you
+gave; they stay until you change them. `[derived]` holds what the template
+computed from them (defaults, computed values, include binds); those follow on
+every update. So renaming `project_name` also moves a `package_name` that
+defaulted from it, but not one you set yourself. Before any file is written,
+the update lists every answer that changes, derived ones marked:
+
+```
+answers:
+  project_name  "Old Name" → "New Name"
+  package_name  "old-name" → "new-name"  (derived)
+```
+
+Projects scaffolded before weft recorded this store every answer as given.
+Those values stay put, and the update points out the ones that no longer
+match their default (`kept as given: … --unset package_name to follow it`).
+
+Template changes arrive in the same run: when the template moved too, run
+`weft update`, commit, then change answers to review the two separately.
 
 ### Templates from git
 
@@ -153,7 +191,8 @@ commit = "9f3c1e…"
 ```
 
 `weft update` fetches, resolves the tracked rev again, and merges whatever
-changed; a tag stays put until you move it. `weft update --to v2.0` (or a
+changed (an answer change re-renders even when the commit is unchanged); a
+tag stays put until you move it. `weft update --to v2.0` (or a
 branch, or a commit) retargets and tracks that from then on; `--offline`
 updates from the local mirror only. Repositories are mirrored under
 `~/.weft/git/` with one immutable export per commit, so a pinned commit
