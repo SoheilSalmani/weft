@@ -55,7 +55,10 @@ install -m 0755 target/release/weft ~/.local/bin/weft   # put it on your PATH
 
 Full instructions and the documentation: <https://github.com/SoheilSalmani/weft>.
 The docs site (guides, tutorials, cookbook, CLI reference) is built from the
-`weft-cloud` repo and published separately.
+`weft-cloud` repo and published separately. How to write its tutorials, and
+the scripts that replay them, is in
+[`docs/tutorials/README.md`](https://github.com/SoheilSalmani/weft-cloud/blob/master/docs/tutorials/README.md)
+there.
 
 ### Developing
 
