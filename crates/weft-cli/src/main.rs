@@ -689,6 +689,10 @@ enum PatchCmd {
         /// Report what would change without writing anything.
         #[arg(long)]
         dry_run: bool,
+        /// Accept answer references the previous version of the patch did
+        /// not have.
+        #[arg(long)]
+        yes: bool,
         /// Emit the report as JSON.
         #[arg(long)]
         json: bool,
@@ -1212,6 +1216,7 @@ fn main() -> anyhow::Result<()> {
                 answers,
                 keep_literal,
                 dry_run,
+                yes,
                 json,
             } => {
                 let opts = weft_engine::generate::ResyncOptions {
@@ -1221,6 +1226,7 @@ fn main() -> anyhow::Result<()> {
                     answers,
                     keep_literal,
                     dry_run,
+                    accept_new_refs: yes,
                 };
                 let mut resolver = source::RemoteResolver::new(hub::registry_url(None).ok(), false);
                 let mut interaction = auto_interaction(false);
@@ -1291,6 +1297,7 @@ fn main() -> anyhow::Result<()> {
                         answers: vec![],
                         keep_literal: vec![],
                         dry_run: false,
+                        accept_new_refs: false,
                     };
                     let mut resolver =
                         source::RemoteResolver::new(hub::registry_url(None).ok(), false);
@@ -1440,9 +1447,12 @@ fn main() -> anyhow::Result<()> {
                 None
             };
             let here = scope.resolve()?;
+            // An amend session's name is the amended patch: no name form.
+            let amending = weft_engine::session::Session::load(&here.template, &here.session)
+                .is_ok_and(|s| s.amend.is_some());
             let (name, title, describe, when, tags) = match name {
                 Some(name) => (Some(name), title, describe, when, tags),
-                None if tui::interactive(no_tui) => {
+                None if !amending && tui::interactive(no_tui) => {
                     let form = forms::commit(&here.template, title, describe, when, tags)?;
                     (
                         Some(form.name),

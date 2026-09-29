@@ -24,6 +24,7 @@ fn fixture_patches() -> Vec<Patch> {
         vec![
             Op::CreateFile {
                 path: TemplatePath::literal("README.md"),
+                omit_when_empty: vec![],
                 content: Content(vec![
                     Line(vec![
                         Segment::Literal("# ".into()),
@@ -36,6 +37,7 @@ fn fixture_patches() -> Vec<Patch> {
             },
             Op::CreateFile {
                 path: TemplatePath::literal("pyproject.toml"),
+                omit_when_empty: vec![],
                 content: Content(vec![
                     Line::literal("[project]"),
                     Line(vec![
@@ -54,6 +56,7 @@ fn fixture_patches() -> Vec<Patch> {
         vec![
             Op::CreateFile {
                 path: TemplatePath::literal("Dockerfile"),
+                omit_when_empty: vec![],
                 content: Content(vec![Line::literal("FROM python:3.12-slim")]),
                 mode: DEFAULT_FILE_MODE,
             },
@@ -74,6 +77,7 @@ fn fixture_patches() -> Vec<Patch> {
         vec![
             Op::CreateFile {
                 path: TemplatePath::literal("scripts/run.sh"),
+                omit_when_empty: vec![],
                 content: Content(vec![Line::literal("#!/bin/sh"), Line::literal("exec app")]),
                 mode: DEFAULT_FILE_MODE,
             },

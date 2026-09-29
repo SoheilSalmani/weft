@@ -526,7 +526,8 @@ pub fn validate_all(template: &Template) -> Vec<String> {
                         ));
                     }
                 }
-                weft_core::Segment::Literal(_) => {}
+                // Commands cannot hold slots: they never parse there.
+                weft_core::Segment::Literal(_) | weft_core::Segment::Slot(_) => {}
             }
         }
     }

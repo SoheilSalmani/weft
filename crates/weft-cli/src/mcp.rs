@@ -496,10 +496,14 @@ impl WeftMcp {
         Parameters(p): Parameters<CommitParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let dir = self.template_dir(&p.template)?;
+        // An amend session keeps the amended patch's name; the required
+        // `name` parameter is not a rename there.
+        let amending =
+            weft_engine::session::Session::load(&dir, &p.session).is_ok_and(|s| s.amend.is_some());
         let opts = weft_engine::commit::CommitOptions {
             template: dir,
             session: p.session.clone(),
-            name: Some(p.name.clone()),
+            name: (!amending).then(|| p.name.clone()),
             when: p.when.clone(),
             title: None,
             describe: p.description.clone(),

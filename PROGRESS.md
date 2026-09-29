@@ -3,6 +3,128 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Slots: several patches adding to one file (`fill_slot`)
+
+- **The gap**: only one patch could create a file, and siblings inserting
+  after the same anchor do not commute. The house templates worked around it
+  with `expr` lines on several bools (`mcp`), a gated owner split into
+  complementary patches (`lightdash-mcp` / `-standalone`), and dependency
+  chains that exist only to order lines (`[tools]` in `mise.toml`, Gradle
+  blocks in `java`).
+- **Model** (format-agnostic, line level): a slot is declared as a line of the
+  lines a patch adds — `create_file` content or a hunk's `added` — written as
+  the object itself, `{"slot": "servers", "separator": ","}`
+  (`Segment::Slot(SlotDecl)`, only ever a whole `Line`; a slot inside a
+  segment array does not parse). `fill_slot {path, slot, key, lines}` adds a
+  contribution. `create_file` gains `omit_when_empty: [slot…]`. Both new
+  fields are skipped when empty, so existing ids are unchanged (the canonical
+  snapshot still passes).
+- **Render** (`weft_core::draft`): ops now apply to a `Draft`, finished into
+  a `Tree`. While open, a slot is one NUL-bearing marker line no hunk can
+  match, and fills are kept aside by key; `finish` renders contributions in
+  key order, the separator ending all but the last, an empty slot as zero
+  lines, and drops a file whose `omit_when_empty` slots are all empty. So
+  hunks never see slot content and fill-only patches commute by
+  construction, whatever the order. Errors: duplicate key in one slot (names
+  both patches), unknown slot, fill on a missing file, empty fill, bad or
+  duplicate slot name, a slot line anywhere else (`MisplacedSlot`, so slots
+  do not nest), a lost marker.
+- **Decided** (the open questions): slots may open in a hunk's `added` lines
+  (a patch editing a file can offer a place, e.g. `[env]` in `mise.toml`);
+  they do not nest; a file `omit_when_empty` drops while another patch
+  changed it by anything but a fill is a render error naming both patches
+  (dropping the edit silently, or keeping a file with empty slots, were the
+  alternatives); keys are strings or segment arrays (a foreach patch needs
+  the instance `key` in its key).
+- **Recording** (`diff::record_text_change`): commit gets the base's trace.
+  A slot owns every line added from just after the line before it to just
+  before the line after it; its existing contributions may only move (their
+  separator follows their position). The new block becomes a `fill_slot`
+  under the patch's name (`<name>/{key}` in a foreach session; an amend or a
+  resync keeps the keys the patch already used), the trailing separator
+  stripped, and it must render back exactly: out of key order, split in two,
+  or editing another patch's contribution is refused with the expected
+  layout. Hunks are taken with each slot collapsed to one line that never
+  anchors, so no context comes from slot content. `weft diff` notes the
+  lines that will fill which slot, keyed by the session's name. A file the
+  base left out (`omit_when_empty`, slots empty) keeps its would-be text in
+  the trace (`Trace::omitted`), so a worktree that has it is diffed against
+  that: the first filler of such a file, and an amend of its only filler,
+  record a `fill_slot` instead of a `create_file` that clashes with the owner.
+- **Check**: static slot validation; the duplicate-key render error is
+  reported once per pair of patches, whichever applied first, with both
+  names; every report built from a render error names patches instead of
+  ids; pairs whose only shared files are ones both merely fill (under
+  different keys) are skipped and counted as commuting by construction.
+  `weft patch amend` refuses a patch that declares slots, and `weft patch
+  resync` skips one: re-deriving ops from a worktree or a command's output
+  would drop them.
+- Surfaces: graph/describe op kind `fill_slot` (`path#slot`), schemas
+  regenerated (both copies; slot lines only allowed where they are legal).
+- Tests: draft unit tests (key order both ways, separators, omit, errors,
+  hunk-opened slot, hunks never seeing slot content), canonical forms, a
+  diff test with a hunk and a fill in one file, e2e `slots.rs` (siblings +
+  check, omit, duplicate key reported once, an omitted file's edit named in
+  check, commit records a fill and replays it, the first fill of an omitted
+  file, amending its only fill, key order refusal, amend refusal), resync
+  refusal (`generate.rs`), schema forms. The weft-cloud server's recording
+  (`render_traced` added for flat renders) was migrated and smoked over
+  HTTP. Smoke: the `dbt` template's
+  `mcp` converted to three slotted files with `linear-mcp`/`jira-mcp` fills;
+  a recorded `lightdash-mcp` (`--depends-on mcp,lightdash --when
+  use_lightdash`) passes check under all eight tracker/Lightdash
+  combinations, replacing the two-patch split.
+
+## Fix — `weft commit` takes hunk context from `expr` output
+
+- **Bug**: context lines were whatever the base rendered next to the change,
+  including lines rendered from `{"expr"}` segments. Commit replays under the
+  session's answers only, so it accepted context that exists only under those
+  answers (`lightdash-mcp` anchored on `mcp`'s Linear line), and `weft check`
+  under other answers failed every pair with "do not commute: one
+  application order fails".
+- **Fix**: rendering can be traced (`Draft::traced`, `Trace`): every line of
+  every text file carries its node and source (plain, `expr`, slot). The
+  session base is rendered traced, and `hunks_between` takes context only from
+  lines that anchor, stopping at the first one that does not (fewer lines,
+  down to none) and splitting a group at an interior one. A change left with
+  no pattern is refused unless it appends at the end of the file.
+- **Check**: every node is rendered on top of its own ancestors first. One
+  that fails there fails every order: it is reported once as "does not apply
+  under these answers", and it and its descendants stay out of the full
+  render and pair reports. For a hunk that matched nowhere a traced render
+  gives the near miss: the expected line, the file's line there and the
+  patch and segment that rendered it (or the slot the context straddles).
+  The repro went from 14 issues to one naming `mcp`'s `expr` segment.
+- `RenderError::HunkNoMatch` gained `near`, op errors now carry the graph
+  node id (a keyed id for an include's patch), and `RenderError::patch()`
+  says which node an error is about.
+
+## Fix — `weft patch resync` answers
+
+- `--answer` overrides are stored in the generator metadata even when the
+  output is up to date (they were only saved on a rewrite). A
+  `--keep-literal` repair changes how the output is recorded, not what it
+  renders, so it always re-derives the ops: an occurrence an earlier resync
+  abstracted goes back to literal with the command's output unchanged, and
+  when the ops come out the same the patch is left alone and only the specs
+  are stored.
+- Answers are gathered like `weft update` does: stored answers and overrides
+  provided, secrets re-resolved, questions added since recording take their
+  defaults. Filling a default silently could abstract it into the regenerated
+  text, so answer references the previous version did not have skip the patch
+  with their occurrence keys until `--yes` (new flag) or `--keep-literal`.
+  A rewrite stores the full answer set it rendered with.
+
+## Fix — `weft commit --describe` in an amend session
+
+- `--title`, `--describe` and `--tag` were silently ignored when finishing
+  `weft patch amend`; they now apply as `weft patch set` does, in the same
+  save as the ops. `--when`, `--depends-on`/`--after` and a different `--name`
+  are refused before anything is written (amend keeps name, gate and
+  dependencies). The CLI skips the name form and MCP drops its required name
+  for an amend session.
+
 ## Post-MVP — Session names are optional (`default`)
 
 - **`weft session new [NAME]`** and **`weft session adopt PATH [-n NAME]`**

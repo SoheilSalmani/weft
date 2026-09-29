@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use anyhow::{bail, Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use weft_core::render::ExprEval;
-use weft_core::{AnswerId, AnswerSet, Patch, PatchId, Question, Tree, Value};
+use weft_core::{AnswerId, AnswerSet, Draft, Patch, PatchId, Question, Trace, Tree, Value};
 
 use crate::answers;
 use crate::interact::Interaction;
@@ -627,13 +627,38 @@ pub fn render_composed(
     parts: &[ComposedPart<'_>],
     eval: &dyn ExprEval,
 ) -> Result<Tree> {
+    let draft = draft_composed(Draft::new(), parent_patches, parent_answers, parts, eval)?;
+    draft.finish().context("rendering the composed graph")
+}
+
+/// [`render_composed`], plus where every line of the tree came from.
+pub fn render_composed_traced(
+    parent_patches: &[Patch],
+    parent_answers: &AnswerSet,
+    parts: &[ComposedPart<'_>],
+    eval: &dyn ExprEval,
+) -> Result<(Tree, Trace)> {
+    let draft = draft_composed(Draft::traced(), parent_patches, parent_answers, parts, eval)?;
+    draft
+        .finish_traced()
+        .context("rendering the composed graph")
+}
+
+/// [`render_composed`] onto `draft`, left unfinished.
+pub fn draft_composed(
+    draft: Draft,
+    parent_patches: &[Patch],
+    parent_answers: &AnswerSet,
+    parts: &[ComposedPart<'_>],
+    eval: &dyn ExprEval,
+) -> Result<Draft> {
     let nodes = graph_nodes(parent_patches, parent_answers, parts);
     let framed = framed(&nodes);
     let order = weft_core::render::framed_order(&framed).context("ordering the composed graph")?;
-    let (mut tree, skipped) =
-        weft_core::render::render_framed(&order, eval).context("rendering the composed graph")?;
+    let (mut draft, skipped) = weft_core::render::render_framed_into(draft, &order, eval)
+        .context("rendering the composed graph")?;
     apply_foreach(
-        &mut tree,
+        &mut draft,
         &skipped,
         &[],
         parent_patches,
@@ -642,7 +667,7 @@ pub fn render_composed(
         parts,
         eval,
     )?;
-    Ok(tree)
+    Ok(draft)
 }
 
 /// Which nodes of a composed render are active (gate open, no skipped
@@ -670,7 +695,7 @@ pub fn active_nodes(
 /// skipped dependency is off, like any other patch.
 #[allow(clippy::too_many_arguments)]
 fn apply_foreach(
-    tree: &mut Tree,
+    draft: &mut Draft,
     skipped: &std::collections::BTreeSet<PatchId>,
     scopes: &[String],
     patches: &[Patch],
@@ -683,7 +708,7 @@ fn apply_foreach(
         let mut scopes = scopes.to_vec();
         scopes.push(part_scope(&part.instance));
         apply_foreach(
-            tree,
+            draft,
             skipped,
             &scopes,
             &part.patches,
@@ -724,15 +749,15 @@ fn apply_foreach(
                     continue;
                 }
             }
-            weft_core::render::apply_ops_in(tree, patch, &scope, eval, mount).with_context(
-                || {
+            draft
+                .apply(patch.id, patch, &scope, eval, mount)
+                .with_context(|| {
                     format!(
                         "applying foreach patch {} for instance `{}` of include `{include}`",
                         patch.id.short(),
                         part.instance.key
                     )
-                },
-            )?;
+                })?;
         }
     }
     Ok(())

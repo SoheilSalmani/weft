@@ -93,6 +93,16 @@ fn patch_schema_rejects_malformed_ops() {
             "stray top-level key",
             serde_json::json!({"ops": [], "wehn": "typo"}),
         ),
+        (
+            "slot in hunk context",
+            serde_json::json!({"ops": [{"op": "modify_file", "path": "x", "hunks": [
+                {"context_before": [{"slot": "s"}], "added": ["y"]}]}]}),
+        ),
+        (
+            "fill with no lines",
+            serde_json::json!({"ops": [{"op": "fill_slot", "path": "x", "slot": "s",
+                "key": "k", "lines": []}]}),
+        ),
     ] {
         assert!(!validator.is_valid(&bad), "schema accepted {label}: {bad}");
     }
@@ -108,6 +118,19 @@ fn patch_schema_rejects_malformed_ops() {
     assert!(
         validator.is_valid(&action_patch),
         "schema must accept a zero-op action patch"
+    );
+
+    let slots = serde_json::json!({"ops": [
+        {"op": "create_file", "path": ".mcp.json", "omit_when_empty": ["servers"],
+         "content": ["{", {"slot": "servers", "separator": ","}, "}"]},
+        {"op": "modify_file", "path": "mise.toml", "hunks": [
+            {"context_before": ["[tools]"], "added": ["", "[env]", {"slot": "env"}]}]},
+        {"op": "fill_slot", "path": ".mcp.json", "slot": "servers",
+         "key": ["lightdash/", {"answer": "key"}], "lines": ["  \"lightdash\": {}"]}
+    ]});
+    assert!(
+        validator.is_valid(&slots),
+        "schema must accept slot declarations and fills"
     );
 }
 

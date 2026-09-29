@@ -100,6 +100,17 @@ pub fn start(
             opts.name
         );
     }
+    // A worktree holds text, not slots: re-deriving the patch from it would
+    // drop the slots it declares and break every patch that fills them.
+    let slots = declared_slots(target);
+    if !slots.is_empty() {
+        bail!(
+            "patch `{}` declares slot(s) {}, which a recording cannot reproduce: edit \
+             `patches/{0}.json` by hand instead, then run `weft check`",
+            opts.name,
+            slots.join(", ")
+        );
+    }
     // Amending a patch with dependents is a rebase: the dependents' hunks
     // replay over the new content and may conflict. That's handled at commit
     // (a full render surfaces any that break); warn up front.
@@ -170,11 +181,21 @@ pub fn start(
             secrets: crate::new::secret_specs(&p.template.manifest.questions, &p.instance.answers),
         })
         .collect();
-    let base_tree = crate::compose::render_composed(&base_patches, &resolved, &parts, &eval)
-        .context("rendering the patch's ancestors")?;
-    let mut seed = base_tree.clone();
+    let base = crate::compose::draft_composed(
+        weft_core::Draft::new(),
+        &base_patches,
+        &resolved,
+        &parts,
+        &eval,
+    )
+    .context("rendering the patch's ancestors")?;
+    let mut seed = base.clone();
     // Force the target on regardless of its gate (we're editing it).
-    weft_core::render::apply_ops(&mut seed, target, &resolved, &eval)
+    seed.apply(target.id, target, &resolved, &eval, Utf8Path::new(""))
+        .with_context(|| format!("applying patch `{}` to seed the worktree", opts.name))?;
+    let base_tree = base.finish().context("rendering the patch's ancestors")?;
+    let seed = seed
+        .finish()
         .with_context(|| format!("applying patch `{}` to seed the worktree", opts.name))?;
 
     let worktree = session::default_worktree_dir(&opts.template, session_name);
@@ -218,9 +239,18 @@ pub fn start(
     Ok(worktree)
 }
 
+/// `weft commit --title/--describe/--tag` in an amend session, applied like
+/// `weft patch set`: non-empty replaces, empty clears, tags are appended.
+pub(crate) struct MetaEdits<'a> {
+    pub title: Option<&'a str>,
+    pub describe: Option<&'a str>,
+    pub tags: &'a [String],
+}
+
 /// Finish an amend session (called by `weft commit`): re-derive the target's
 /// ops from the worktree and write them back into its file in place. Keeps
-/// the target's name, dependencies, gate, foreach, and metadata.
+/// the target's name, dependencies, gate and foreach; metadata changes only
+/// through `meta`.
 #[allow(clippy::too_many_arguments)] // one call site; all of it is the amend's state
 pub(crate) fn finish(
     template: &Template,
@@ -233,6 +263,7 @@ pub(crate) fn finish(
     answers: &weft_core::AnswerSet,
     work_tree: &weft_core::Tree,
     ops: Vec<weft_core::Op>,
+    meta: &MetaEdits<'_>,
     resolver: &mut dyn crate::template::IncludeResolver,
     interaction: &mut dyn Interaction,
 ) -> Result<()> {
@@ -282,6 +313,17 @@ pub(crate) fn finish(
 
     let op_count = ops.len();
     file.ops = ops;
+    if let Some(title) = meta.title {
+        file.title = (!title.is_empty()).then(|| title.to_owned());
+    }
+    if let Some(describe) = meta.describe {
+        file.description = (!describe.is_empty()).then(|| describe.to_owned());
+    }
+    for tag in meta.tags {
+        if !file.tags.contains(tag) {
+            file.tags.push(tag.clone());
+        }
+    }
     template.save_patch_file(target, &file)?;
     session.end(template_root, session_name)?;
     eprintln!("amended patch `{target}` ({op_count} op(s)); its content id changed");
@@ -331,4 +373,27 @@ pub fn announce(worktree: &Utf8Path, name: &str) {
         "amending `{name}`: the worktree above is the patch applied on its base — \
          edit it, then run `weft commit`"
     );
+}
+
+/// The slots a patch declares, as `` `name` in `path` ``. A recording (amend,
+/// resync) re-derives ops from text, which cannot carry them.
+pub(crate) fn declared_slots(patch: &weft_core::Patch) -> Vec<String> {
+    let mut out = Vec::new();
+    for op in &patch.ops {
+        let (path, lines): (_, Vec<&weft_core::Line>) = match op {
+            weft_core::Op::CreateFile { path, content, .. } => (path, content.0.iter().collect()),
+            weft_core::Op::ModifyFile { path, hunks } => {
+                (path, hunks.iter().flat_map(|h| &h.added).collect())
+            }
+            _ => continue,
+        };
+        let path = crate::graph::display_path(path);
+        out.extend(
+            lines
+                .into_iter()
+                .filter_map(weft_core::Line::as_slot)
+                .map(|decl| format!("`{}` in `{path}`", decl.slot)),
+        );
+    }
+    out
 }

@@ -90,11 +90,19 @@
             "path": {
               "$ref": "#/$defs/TemplatePath"
             },
-            "content": {
-              "description": "File content as an array of lines.",
+            "omit_when_empty": {
+              "description": "Slots of `content` that, when every one of them is still empty at\nthe end of the render, leave the file out altogether.",
               "type": "array",
               "items": {
-                "$ref": "#/$defs/Line"
+                "type": "string"
+              },
+              "default": []
+            },
+            "content": {
+              "description": "File content as an array of lines; a `{\"slot\": …}` line declares\na slot.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AddedLine"
               }
             },
             "mode": {
@@ -241,6 +249,43 @@
             "path",
             "mode"
           ]
+        },
+        {
+          "description": "Add lines to a slot of an existing file as the contribution under\n`key`. Contributions render sorted by key, so patches that only fill\nslots commute; two with one key in one slot are an error.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/TemplatePath"
+            },
+            "slot": {
+              "description": "The slot's name, as its file declares it.",
+              "type": "string"
+            },
+            "key": {
+              "description": "Orders the contribution within the slot: a plain string when\nliteral, or an array of segments (a foreach patch needs the\ninstance `key` in it). Recording uses the patch's name.",
+              "$ref": "#/$defs/Line"
+            },
+            "lines": {
+              "description": "The contribution's lines (at least one; slots do not nest).",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Line"
+              },
+              "minItems": 1
+            },
+            "op": {
+              "type": "string",
+              "const": "fill_slot"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "path",
+            "slot",
+            "key",
+            "lines"
+          ]
         }
       ]
     },
@@ -295,8 +340,8 @@
         }
       ]
     },
-    "Line": {
-      "description": "One line of file content: a plain string when fully literal, or an array\nof segments.",
+    "AddedLine": {
+      "description": "One line of the lines a patch adds (`create_file` content, a hunk's\n`added`): a line, or a slot declaration.",
       "anyOf": [
         {
           "type": "string"
@@ -306,7 +351,34 @@
           "items": {
             "$ref": "#/$defs/Segment"
           }
+        },
+        {
+          "description": "Declare a slot here: a named place other patches add lines to with\n`fill_slot`. It renders their contributions sorted by key.",
+          "$ref": "#/$defs/SlotDecl"
         }
+      ]
+    },
+    "SlotDecl": {
+      "description": "A slot declaration, a line of its own.",
+      "type": "object",
+      "properties": {
+        "slot": {
+          "description": "The slot's name, unique within the file: ASCII letters, digits, `-`,\n`_` and `.`.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "separator": {
+          "description": "Appended to the last line of every contribution but the final one\n(e.g. `,` between JSON entries).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "slot"
       ]
     },
     "Hunk": {
@@ -328,7 +400,7 @@
         "added": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/Line"
+            "$ref": "#/$defs/AddedLine"
           }
         },
         "context_after": {
@@ -339,6 +411,20 @@
         }
       },
       "additionalProperties": false
+    },
+    "Line": {
+      "description": "One line of file content: a plain string when fully literal, or an array\nof segments.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Segment"
+          }
+        }
+      ]
     },
     "Hook": {
       "description": "A patch-scoped side-effect that runs before (`pre`) or after (`post`) the\nrender.",

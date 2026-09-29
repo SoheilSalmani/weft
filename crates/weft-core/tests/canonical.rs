@@ -3,7 +3,8 @@
 
 use proptest::prelude::*;
 use weft_core::{
-    Content, Hunk, Line, Op, Patch, Segment, StarlarkExpr, TemplatePath, DEFAULT_FILE_MODE,
+    Content, Hunk, Line, Op, Patch, Segment, SlotDecl, StarlarkExpr, TemplatePath,
+    DEFAULT_FILE_MODE,
 };
 
 fn fixture_base_patch() -> Patch {
@@ -13,6 +14,7 @@ fn fixture_base_patch() -> Patch {
         vec![
             Op::CreateFile {
                 path: TemplatePath::literal("README.md"),
+                omit_when_empty: vec![],
                 content: Content(vec![
                     Line(vec![
                         Segment::Literal("# ".into()),
@@ -28,6 +30,7 @@ fn fixture_base_patch() -> Patch {
                     Segment::Answer("project_name".into()),
                     Segment::Literal("/__init__.py".into()),
                 ]),
+                omit_when_empty: vec![],
                 content: Content(vec![]),
                 mode: DEFAULT_FILE_MODE,
             },
@@ -42,6 +45,7 @@ fn fixture_docker_patch(base: &Patch) -> Patch {
         vec![
             Op::CreateFile {
                 path: TemplatePath::literal("Dockerfile"),
+                omit_when_empty: vec![],
                 content: Content(vec![Line::literal("FROM python:3.12-slim")]),
                 mode: DEFAULT_FILE_MODE,
             },
@@ -76,6 +80,55 @@ fn canonical_json_parses_back_to_same_id() {
     assert_eq!(rebuilt.id, base.id);
 }
 
+/// The slot forms: a slot line is its declaration object, `omit_when_empty`
+/// and `fill_slot` keep a fixed key order, and an empty `omit_when_empty`
+/// or separator is left out (so patches without them keep their ids).
+#[test]
+fn slot_forms_are_canonical() {
+    let owner = Op::CreateFile {
+        path: TemplatePath::literal(".mcp.json"),
+        omit_when_empty: vec!["servers".into()],
+        content: Content(vec![
+            Line::literal("{"),
+            Line::slot(SlotDecl {
+                slot: "servers".into(),
+                separator: ",".into(),
+            }),
+            Line::slot(SlotDecl {
+                slot: "extra".into(),
+                separator: String::new(),
+            }),
+            Line::literal("}"),
+        ]),
+        mode: DEFAULT_FILE_MODE,
+    };
+    assert_eq!(
+        serde_json::to_string(&owner).unwrap(),
+        r#"{"op":"create_file","path":".mcp.json","omit_when_empty":["servers"],"content":["{",{"slot":"servers","separator":","},{"slot":"extra"},"}"],"mode":420}"#
+    );
+    let fill = Op::FillSlot {
+        path: TemplatePath::literal(".mcp.json"),
+        slot: "servers".into(),
+        key: Line::literal("lightdash"),
+        lines: vec![Line(vec![
+            Segment::Literal("url = ".into()),
+            Segment::Answer("lightdash_url".into()),
+        ])],
+    };
+    assert_eq!(
+        serde_json::to_string(&fill).unwrap(),
+        r#"{"op":"fill_slot","path":".mcp.json","slot":"servers","key":"lightdash","lines":[["url = ",{"answer":"lightdash_url"}]]}"#
+    );
+    for op in [owner, fill] {
+        let json = serde_json::to_string(&op).unwrap();
+        let back: Op = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, op);
+    }
+    // A slot is a whole line, never a piece of one.
+    let err = serde_json::from_str::<Line>(r#"["a", {"slot": "s"}]"#).unwrap_err();
+    assert!(err.to_string().contains("a slot is a whole line"), "{err}");
+}
+
 // ---- property tests: serialize -> deserialize -> serialize is byte-identical
 
 fn arb_segment() -> impl Strategy<Value = Segment> {
@@ -87,7 +140,13 @@ fn arb_segment() -> impl Strategy<Value = Segment> {
 }
 
 fn arb_line() -> impl Strategy<Value = Line> {
-    prop::collection::vec(arb_segment(), 0..4).prop_map(Line)
+    prop_oneof![
+        4 => prop::collection::vec(arb_segment(), 0..4).prop_map(Line),
+        1 => ("[a-z_]{1,8}", "[,;]?").prop_map(|(slot, separator)| Line::slot(SlotDecl {
+            slot,
+            separator,
+        })),
+    ]
 }
 
 fn arb_content() -> impl Strategy<Value = Content> {
@@ -118,11 +177,29 @@ fn arb_hunk() -> impl Strategy<Value = Hunk> {
 
 fn arb_op() -> impl Strategy<Value = Op> {
     prop_oneof![
-        (arb_path(), arb_content()).prop_map(|(path, content)| Op::CreateFile {
-            path,
-            content,
-            mode: DEFAULT_FILE_MODE
-        }),
+        (
+            arb_path(),
+            arb_content(),
+            prop::collection::vec("[a-z_]{1,8}", 0..2)
+        )
+            .prop_map(|(path, content, omit_when_empty)| Op::CreateFile {
+                path,
+                omit_when_empty,
+                content,
+                mode: DEFAULT_FILE_MODE
+            }),
+        (
+            arb_path(),
+            "[a-z_]{1,8}",
+            arb_line(),
+            prop::collection::vec(arb_line(), 1..3)
+        )
+            .prop_map(|(path, slot, key, lines)| Op::FillSlot {
+                path,
+                slot,
+                key,
+                lines
+            }),
         (arb_path(), prop::collection::vec(arb_hunk(), 0..3))
             .prop_map(|(path, hunks)| Op::ModifyFile { path, hunks }),
         arb_path().prop_map(|path| Op::DeleteFile { path }),

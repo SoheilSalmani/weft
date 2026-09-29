@@ -8,11 +8,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use camino::{Utf8Path, Utf8PathBuf};
 
+use crate::draft::{Draft, NearMiss, Trace};
 use crate::id::{AnswerId, PatchId};
-use crate::patch::{Hunk, Op, Patch};
+use crate::patch::Patch;
 use crate::question::{AnswerKind, Question, StarlarkExpr};
 use crate::segment::{join_lines, Content, Line, Segment, TemplatePath};
-use crate::tree::{FileEntry, Tree};
+use crate::tree::Tree;
 use crate::value::{AnswerSet, Value};
 
 /// Expression evaluation, implemented by `weft-lang`. Core defines the trait
@@ -97,6 +98,8 @@ pub enum RenderError {
         patch: PatchId,
         path: Utf8PathBuf,
         hunk: usize,
+        /// Where the pattern nearly matched (traced renders only).
+        near: Option<Box<NearMiss>>,
     },
     #[error("patch {patch}: hunk {hunk} matches `{path}` in {count} places; context is ambiguous")]
     HunkAmbiguous {
@@ -114,6 +117,96 @@ pub enum RenderError {
     BinaryModify { patch: PatchId, path: Utf8PathBuf },
     #[error("patch {patch}: create_binary_file `{path}` carries invalid base64 data")]
     InvalidBinaryData { patch: PatchId, path: Utf8PathBuf },
+    #[error(
+        "slot `{0}` is declared where only text can go; a slot is a line of its own in \
+         `create_file` content or in a hunk's `added` lines, and slots do not nest"
+    )]
+    MisplacedSlot(String),
+    #[error(
+        "patch {patch}: `{slot}` is not a valid slot name for `{path}` (ASCII letters, digits, \
+         `-`, `_` and `.`)"
+    )]
+    InvalidSlotName {
+        patch: PatchId,
+        path: Utf8PathBuf,
+        slot: String,
+    },
+    #[error("patch {patch}: `{path}` already has a slot `{slot}`")]
+    DuplicateSlot {
+        patch: PatchId,
+        path: Utf8PathBuf,
+        slot: String,
+    },
+    #[error("patch {patch}: `{path}` has no slot `{slot}`")]
+    UnknownSlot {
+        patch: PatchId,
+        path: Utf8PathBuf,
+        slot: String,
+    },
+    #[error("patch {patch}: key {key:?} for slot `{slot}` of `{path}` must be one non-empty line")]
+    InvalidSlotKey {
+        patch: PatchId,
+        path: Utf8PathBuf,
+        slot: String,
+        key: String,
+    },
+    #[error("patch {patch}: its fill of slot `{slot}` of `{path}` adds no lines")]
+    EmptySlotFill {
+        patch: PatchId,
+        path: Utf8PathBuf,
+        slot: String,
+    },
+    #[error(
+        "patches {} and {} both fill slot `{}` of `{}` under key `{}`",
+        .0.first, .0.second, .0.slot, .0.path, .0.key
+    )]
+    DuplicateSlotKey(Box<SlotClash>),
+    #[error(
+        "patch {editor} changes `{path}`, which patch {owner} leaves out while its slots are \
+         empty (`omit_when_empty`); fill one of its slots instead, or drop `omit_when_empty`"
+    )]
+    OmittedFileEdited {
+        path: Utf8PathBuf,
+        owner: PatchId,
+        editor: PatchId,
+    },
+    #[error("`{path}` lost slot `{slot}`: a hunk removed the line it sits on")]
+    SlotLost { path: Utf8PathBuf, slot: String },
+}
+
+impl RenderError {
+    /// The graph node an op-level error is about, if any.
+    pub fn patch(&self) -> Option<PatchId> {
+        match self {
+            RenderError::CreateExists { patch, .. }
+            | RenderError::MissingFile { patch, .. }
+            | RenderError::RenameExists { patch, .. }
+            | RenderError::HunkNoMatch { patch, .. }
+            | RenderError::HunkAmbiguous { patch, .. }
+            | RenderError::BinaryModify { patch, .. }
+            | RenderError::InvalidBinaryData { patch, .. }
+            | RenderError::InvalidSlotName { patch, .. }
+            | RenderError::DuplicateSlot { patch, .. }
+            | RenderError::UnknownSlot { patch, .. }
+            | RenderError::InvalidSlotKey { patch, .. }
+            | RenderError::EmptySlotFill { patch, .. }
+            | RenderError::UnknownDep { patch, .. } => Some(*patch),
+            RenderError::DuplicateSlotKey(clash) => Some(clash.second),
+            RenderError::OmittedFileEdited { editor, .. } => Some(*editor),
+            _ => None,
+        }
+    }
+}
+
+/// Two contributions under one key in one slot ([`RenderError::DuplicateSlotKey`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotClash {
+    pub path: Utf8PathBuf,
+    pub slot: String,
+    pub key: String,
+    /// The node whose fill came first, and the one that clashed with it.
+    pub first: PatchId,
+    pub second: PatchId,
 }
 
 /// Resolve the full answer set for `questions` from layered `provided`
@@ -509,6 +602,20 @@ pub fn render(
     render_ordered(&order, answers, eval)
 }
 
+/// [`render`], plus where every line of the tree came from and where its
+/// slots sit ([`Trace`]): what recording a patch against the tree needs.
+pub fn render_traced(
+    patches: &[Patch],
+    answers: &AnswerSet,
+    eval: &dyn ExprEval,
+) -> Result<(Tree, Trace), RenderError> {
+    let order = patch_order(patches)?;
+    let framed: Vec<Framed> = order.iter().map(|p| Framed::root(p, answers)).collect();
+    let refs: Vec<&Framed> = framed.iter().collect();
+    let (draft, _) = render_framed_into(Draft::traced(), &refs, eval)?;
+    draft.finish_traced()
+}
+
 /// Render with an explicit, caller-chosen application order (must be a valid
 /// linear extension of the dependency DAG — not verified here). Used by
 /// `weft check` to prove that independent patches commute: applying them in
@@ -535,16 +642,26 @@ pub fn render_framed(
     order: &[&Framed<'_>],
     eval: &dyn ExprEval,
 ) -> Result<(Tree, BTreeSet<PatchId>), RenderError> {
+    let (draft, skipped) = render_framed_into(Draft::new(), order, eval)?;
+    Ok((draft.finish()?, skipped))
+}
+
+/// [`render_framed`] onto `draft`, left unfinished so the caller can apply
+/// more ops (foreach patches) or finish it traced.
+pub fn render_framed_into(
+    mut draft: Draft,
+    order: &[&Framed<'_>],
+    eval: &dyn ExprEval,
+) -> Result<(Draft, BTreeSet<PatchId>), RenderError> {
     let mut skipped: BTreeSet<PatchId> = BTreeSet::new();
-    let mut tree = Tree::new();
     for &node in order {
         if framed_active(node, &skipped, eval)? {
-            apply_patch(&mut tree, node.patch, node.answers, eval, node.mount)?;
+            draft.apply(node.id, node.patch, node.answers, eval, node.mount)?;
         } else {
             skipped.insert(node.id);
         }
     }
-    Ok((tree, skipped))
+    Ok((draft, skipped))
 }
 
 /// The skip set [`render_framed`] would produce, without applying any ops.
@@ -581,173 +698,6 @@ fn framed_active(
     }
 }
 
-/// Apply one patch's ops to an existing tree. Used by the engine's composed
-/// rendering for `foreach` integration patches, which run once per include
-/// instance with an instance-scoped answer set. The patch's `when` gate is
-/// **not** evaluated here — the caller decides applicability.
-pub fn apply_ops(
-    tree: &mut Tree,
-    patch: &Patch,
-    answers: &AnswerSet,
-    eval: &dyn ExprEval,
-) -> Result<(), RenderError> {
-    apply_patch(tree, patch, answers, eval, Utf8Path::new(""))
-}
-
-/// [`apply_ops`] with every op path placed under `mount`.
-pub fn apply_ops_in(
-    tree: &mut Tree,
-    patch: &Patch,
-    answers: &AnswerSet,
-    eval: &dyn ExprEval,
-    mount: &Utf8Path,
-) -> Result<(), RenderError> {
-    apply_patch(tree, patch, answers, eval, mount)
-}
-
-fn apply_patch(
-    tree: &mut Tree,
-    patch: &Patch,
-    answers: &AnswerSet,
-    eval: &dyn ExprEval,
-    mount: &Utf8Path,
-) -> Result<(), RenderError> {
-    let render_path = |path: &TemplatePath| -> Result<Utf8PathBuf, RenderError> {
-        let path = render_path(path, answers, eval)?;
-        Ok(if mount.as_str().is_empty() {
-            path
-        } else {
-            mount.join(path)
-        })
-    };
-    for op in &patch.ops {
-        match op {
-            Op::CreateFile {
-                path,
-                content,
-                mode,
-            } => {
-                let path = render_path(path)?;
-                if tree.get(&path).is_some() {
-                    return Err(RenderError::CreateExists {
-                        patch: patch.id,
-                        path,
-                    });
-                }
-                let text = render_content(content, answers, eval)?;
-                tree.insert(
-                    path,
-                    FileEntry {
-                        content: text.into(),
-                        mode: *mode,
-                    },
-                );
-            }
-            Op::CreateBinaryFile { path, data, mode } => {
-                let path = render_path(path)?;
-                if tree.get(&path).is_some() {
-                    return Err(RenderError::CreateExists {
-                        patch: patch.id,
-                        path,
-                    });
-                }
-                use base64::Engine as _;
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(data)
-                    .map_err(|_| RenderError::InvalidBinaryData {
-                        patch: patch.id,
-                        path: path.clone(),
-                    })?;
-                tree.insert(
-                    path,
-                    FileEntry {
-                        content: crate::tree::FileData::from_bytes(bytes),
-                        mode: *mode,
-                    },
-                );
-            }
-            Op::ModifyFile { path, hunks } => {
-                let path = render_path(path)?;
-                let entry = tree.get(&path).ok_or_else(|| RenderError::MissingFile {
-                    patch: patch.id,
-                    path: path.clone(),
-                })?;
-                let Some(text) = entry.content.text() else {
-                    return Err(RenderError::BinaryModify {
-                        patch: patch.id,
-                        path,
-                    });
-                };
-                let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
-                for (i, hunk) in hunks.iter().enumerate() {
-                    apply_hunk(&mut lines, hunk, answers, eval).map_err(|e| match e {
-                        HunkApplyError::NoMatch => RenderError::HunkNoMatch {
-                            patch: patch.id,
-                            path: path.clone(),
-                            hunk: i,
-                        },
-                        HunkApplyError::Ambiguous(count) => RenderError::HunkAmbiguous {
-                            patch: patch.id,
-                            path: path.clone(),
-                            hunk: i,
-                            count,
-                        },
-                        HunkApplyError::Render(e) => e,
-                    })?;
-                }
-                let mode = entry.mode;
-                tree.insert(
-                    path,
-                    FileEntry {
-                        content: join_lines(&lines).into(),
-                        mode,
-                    },
-                );
-            }
-            Op::DeleteFile { path } => {
-                let path = render_path(path)?;
-                if tree.remove(&path).is_none() {
-                    return Err(RenderError::MissingFile {
-                        patch: patch.id,
-                        path,
-                    });
-                }
-            }
-            Op::RenamePath { from, to } => {
-                let from = render_path(from)?;
-                let to = render_path(to)?;
-                let entry = tree.remove(&from).ok_or_else(|| RenderError::MissingFile {
-                    patch: patch.id,
-                    path: from.clone(),
-                })?;
-                if tree.get(&to).is_some() {
-                    return Err(RenderError::RenameExists {
-                        patch: patch.id,
-                        path: to,
-                    });
-                }
-                tree.insert(to, entry);
-            }
-            Op::SetMode { path, mode } => {
-                let path = render_path(path)?;
-                let entry = tree.get(&path).ok_or_else(|| RenderError::MissingFile {
-                    patch: patch.id,
-                    path: path.clone(),
-                })?;
-                let content = entry.content.clone();
-                tree.insert(
-                    path,
-                    FileEntry {
-                        content,
-                        mode: *mode,
-                    },
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
 fn render_segment(
     seg: &Segment,
     answers: &AnswerSet,
@@ -775,6 +725,9 @@ fn render_segment(
             }
             Ok(value.render_text())
         }
+        // A slot line is only rendered as a slot where a patch adds lines
+        // (see `Draft::apply`); anywhere else it has no text.
+        Segment::Slot(decl) => Err(RenderError::MisplacedSlot(decl.slot.clone())),
     }
 }
 
@@ -834,61 +787,6 @@ pub fn render_path(
     Ok(Utf8PathBuf::from(out))
 }
 
-enum HunkApplyError {
-    NoMatch,
-    Ambiguous(usize),
-    Render(RenderError),
-}
-
-/// Apply one context-anchored hunk. The pattern
-/// `context_before + removed + context_after` must match exactly one position
-/// in `lines`; `removed` is replaced with `added`. An entirely empty pattern
-/// appends `added` at end of file.
-fn apply_hunk(
-    lines: &mut Vec<String>,
-    hunk: &Hunk,
-    answers: &AnswerSet,
-    eval: &dyn ExprEval,
-) -> Result<(), HunkApplyError> {
-    let rl = |ls: &[Line]| -> Result<Vec<String>, HunkApplyError> {
-        ls.iter()
-            .map(|l| render_line(l, answers, eval))
-            .collect::<Result<_, _>>()
-            .map_err(HunkApplyError::Render)
-    };
-    let before = rl(&hunk.context_before)?;
-    let removed = rl(&hunk.removed)?;
-    let added = rl(&hunk.added)?;
-    let after = rl(&hunk.context_after)?;
-
-    let mut pattern: Vec<&str> = Vec::new();
-    pattern.extend(before.iter().map(String::as_str));
-    pattern.extend(removed.iter().map(String::as_str));
-    pattern.extend(after.iter().map(String::as_str));
-
-    if pattern.is_empty() {
-        lines.extend(added);
-        return Ok(());
-    }
-
-    let matches: Vec<usize> = (0..=lines.len().saturating_sub(pattern.len()))
-        .filter(|&i| {
-            lines.len() - i >= pattern.len()
-                && pattern.iter().enumerate().all(|(j, p)| lines[i + j] == *p)
-        })
-        .collect();
-
-    match matches.as_slice() {
-        [] => Err(HunkApplyError::NoMatch),
-        [start] => {
-            let remove_at = start + before.len();
-            lines.splice(remove_at..remove_at + removed.len(), added);
-            Ok(())
-        }
-        many => Err(HunkApplyError::Ambiguous(many.len())),
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod test_support {
     use super::*;
@@ -917,54 +815,13 @@ pub(crate) mod test_support {
 mod tests {
     use super::test_support::StubEval;
     use super::*;
+    use crate::patch::{Hunk, Op};
 
     fn answers(pairs: &[(&str, Value)]) -> AnswerSet {
         pairs
             .iter()
             .map(|(k, v)| (AnswerId::from(*k), v.clone()))
             .collect()
-    }
-
-    #[test]
-    fn hunk_applies_at_unique_context() {
-        let mut lines: Vec<String> = ["a", "b", "c", "d"].iter().map(|s| s.to_string()).collect();
-        let hunk = Hunk {
-            context_before: vec![Line::literal("b")],
-            removed: vec![Line::literal("c")],
-            added: vec![Line::literal("C1"), Line::literal("C2")],
-            context_after: vec![Line::literal("d")],
-        };
-        apply_hunk(&mut lines, &hunk, &AnswerSet::new(), &StubEval)
-            .ok()
-            .unwrap();
-        assert_eq!(lines, vec!["a", "b", "C1", "C2", "d"]);
-    }
-
-    #[test]
-    fn hunk_fails_cleanly_on_missing_context() {
-        let mut lines: Vec<String> = vec!["a".into()];
-        let hunk = Hunk {
-            context_before: vec![Line::literal("nope")],
-            ..Default::default()
-        };
-        assert!(matches!(
-            apply_hunk(&mut lines, &hunk, &AnswerSet::new(), &StubEval),
-            Err(HunkApplyError::NoMatch)
-        ));
-    }
-
-    #[test]
-    fn hunk_fails_on_ambiguous_context() {
-        let mut lines: Vec<String> = ["x", "x"].iter().map(|s| s.to_string()).collect();
-        let hunk = Hunk {
-            context_before: vec![Line::literal("x")],
-            added: vec![Line::literal("y")],
-            ..Default::default()
-        };
-        assert!(matches!(
-            apply_hunk(&mut lines, &hunk, &AnswerSet::new(), &StubEval),
-            Err(HunkApplyError::Ambiguous(2))
-        ));
     }
 
     #[test]
@@ -987,6 +844,7 @@ mod tests {
             None,
             vec![Op::CreateFile {
                 path: TemplatePath::literal("a.txt"),
+                omit_when_empty: vec![],
                 content: Content::from_text("a\n"),
                 mode: 0o644,
             }],
@@ -996,6 +854,7 @@ mod tests {
             Some(StarlarkExpr::from("use_docker")),
             vec![Op::CreateFile {
                 path: TemplatePath::literal("Dockerfile"),
+                omit_when_empty: vec![],
                 content: Content::from_text("FROM x\n"),
                 mode: 0o644,
             }],

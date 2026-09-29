@@ -177,6 +177,69 @@ fn amend_non_leaf_warns_about_dependents() {
     assert!(tpl.join(".weft-sessions/base/worktree").exists());
 }
 
+/// Open an amend session on `base` and add a file to its worktree.
+fn amend_base_with_edit(tpl: &Path) {
+    weft()
+        .args(["patch", "amend", "base"])
+        .args([
+            "--answer",
+            "project_name=Demo",
+            "--answer",
+            "use_docker=true",
+        ])
+        .arg("--template")
+        .arg(tpl)
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    std::fs::write(
+        tpl.join(".weft-sessions/base/worktree/extra.txt"),
+        "extra\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn amend_commit_applies_title_and_description() {
+    let dir = tempfile::tempdir().unwrap();
+    let tpl = dir.path().join("hello");
+    copy_dir(&hello_template(), &tpl);
+    amend_base_with_edit(&tpl);
+    weft()
+        .args(["commit", "--yes", "--no-tui"])
+        .args(["--describe", "New words.", "--title", "New title"])
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("amended patch `base`"));
+    let after = read(&tpl, "patches/base.json");
+    assert!(after.contains("\"description\": \"New words.\""), "{after}");
+    assert!(after.contains("\"title\": \"New title\""), "{after}");
+    assert!(
+        after.contains("extra.txt"),
+        "ops rewritten in the same save: {after}"
+    );
+}
+
+#[test]
+fn amend_commit_refuses_when() {
+    let dir = tempfile::tempdir().unwrap();
+    let tpl = dir.path().join("hello");
+    copy_dir(&hello_template(), &tpl);
+    amend_base_with_edit(&tpl);
+    let before = read(&tpl, "patches/base.json");
+    weft()
+        .args(["commit", "--yes", "--no-tui", "--when", "x"])
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("amend keeps the patch's name"));
+    assert_eq!(read(&tpl, "patches/base.json"), before);
+    assert!(tpl.join(".weft-sessions/base").exists(), "session kept");
+}
+
 #[test]
 fn amend_rewrites_a_leaf_patch_in_place() {
     let dir = tempfile::tempdir().unwrap();

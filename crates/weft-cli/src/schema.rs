@@ -41,6 +41,32 @@ pub enum Line {
     Segments(Vec<Segment>),
 }
 
+/// One line of the lines a patch adds (`create_file` content, a hunk's
+/// `added`): a line, or a slot declaration.
+#[derive(JsonSchema, Deserialize)]
+#[serde(untagged)]
+pub enum AddedLine {
+    Literal(String),
+    Segments(Vec<Segment>),
+    /// Declare a slot here: a named place other patches add lines to with
+    /// `fill_slot`. It renders their contributions sorted by key.
+    Slot(SlotDecl),
+}
+
+/// A slot declaration, a line of its own.
+#[derive(JsonSchema, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SlotDecl {
+    /// The slot's name, unique within the file: ASCII letters, digits, `-`,
+    /// `_` and `.`.
+    #[schemars(regex(pattern = r"^[A-Za-z0-9_.-]+$"))]
+    pub slot: String,
+    /// Appended to the last line of every contribution but the final one
+    /// (e.g. `,` between JSON entries).
+    #[serde(default)]
+    pub separator: Option<String>,
+}
+
 /// A path inside the rendered tree: a plain string when fully literal, or an
 /// array of segments. Relative, `/`-separated, no `..`.
 #[derive(JsonSchema, Deserialize)]
@@ -61,7 +87,7 @@ pub struct Hunk {
     #[serde(default)]
     pub removed: Vec<Line>,
     #[serde(default)]
-    pub added: Vec<Line>,
+    pub added: Vec<AddedLine>,
     #[serde(default)]
     pub context_after: Vec<Line>,
 }
@@ -73,8 +99,13 @@ pub enum Op {
     /// Create a file (errors if it already exists).
     CreateFile {
         path: TemplatePath,
-        /// File content as an array of lines.
-        content: Vec<Line>,
+        /// Slots of `content` that, when every one of them is still empty at
+        /// the end of the render, leave the file out altogether.
+        #[serde(default)]
+        omit_when_empty: Vec<String>,
+        /// File content as an array of lines; a `{"slot": …}` line declares
+        /// a slot.
+        content: Vec<AddedLine>,
         /// Unix mode as decimal (420 = 0o644, 493 = 0o755). Default 420.
         #[serde(default)]
         mode: Option<u32>,
@@ -107,6 +138,21 @@ pub enum Op {
         path: TemplatePath,
         /// Unix mode as decimal (493 = 0o755).
         mode: u32,
+    },
+    /// Add lines to a slot of an existing file as the contribution under
+    /// `key`. Contributions render sorted by key, so patches that only fill
+    /// slots commute; two with one key in one slot are an error.
+    FillSlot {
+        path: TemplatePath,
+        /// The slot's name, as its file declares it.
+        slot: String,
+        /// Orders the contribution within the slot: a plain string when
+        /// literal, or an array of segments (a foreach patch needs the
+        /// instance `key` in it). Recording uses the patch's name.
+        key: Line,
+        /// The contribution's lines (at least one; slots do not nest).
+        #[schemars(length(min = 1))]
+        lines: Vec<Line>,
     },
 }
 

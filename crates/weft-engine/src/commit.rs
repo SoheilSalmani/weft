@@ -101,6 +101,7 @@ pub fn run(
         base_patches,
         parts,
         base_tree,
+        base_trace,
         work_tree: full_work,
         worktree_root,
     } = session_trees(&template, &opts.session, interaction)?;
@@ -118,6 +119,29 @@ pub fn run(
              base state, and that worktree is an adopted project, not a scratch render. \
              Commit it stacked (the default there) instead."
         );
+    }
+    // An amend session keeps the patch's identity and graph position: only
+    // its ops and descriptive metadata change.
+    if let Some(target) = &sess.amend {
+        let target = target.as_str();
+        if opts.name.as_deref().is_some_and(|n| n != target) {
+            bail!(
+                "amend keeps the patch's name, gate and dependencies; `--name` must be \
+                 `{target}` or omitted (rename by editing `patches/{target}.json`)"
+            );
+        }
+        if opts.when.is_some() {
+            bail!(
+                "amend keeps the patch's name, gate and dependencies; drop `--when` and \
+                 edit the gate in `patches/{target}.json`"
+            );
+        }
+        if opts.depends_on.is_some() {
+            bail!(
+                "amend keeps the patch's name, gate and dependencies; drop \
+                 `--depends-on`/`--after` and edit `patches/{target}.json`"
+            );
+        }
     }
 
     // The staged tree (`weft add`) is what we commit. An empty index stages
@@ -165,6 +189,39 @@ pub fn run(
         }
     }
     let keep_literal = parse_keep_literal(&opts.keep_literal)?;
+    // The patch's name, which also keys its slot contributions: an amend
+    // keeps the target's (and the keys it already filled slots under).
+    let name = match (&sess.amend, &opts.name) {
+        (Some(target), _) => target.clone(),
+        (None, Some(name)) => name.clone(),
+        (None, None) => format!("patch-{:03}", template.patches.len() + 1),
+    };
+    let keys = match &sess.foreach {
+        Some(f) => diff::SlotKeys::per_instance(&name, &f.key),
+        None => diff::SlotKeys::named(&name),
+    };
+    let previous = sess
+        .amend
+        .as_ref()
+        .and_then(|target| template.name_to_id.get(target))
+        .and_then(|id| template.patches.iter().find(|p| p.id == *id));
+    let keys = match previous {
+        Some(previous) => keys.keeping(previous, &answers),
+        None => keys,
+    };
+    let names = |id: weft_core::PatchId| {
+        template
+            .id_to_name
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| id.short())
+    };
+    let rec = diff::Recording {
+        base: &base_tree,
+        trace: &base_trace,
+        keys: &keys,
+        names: &names,
+    };
     let ops = match &opts.decisions {
         Some(decisions) => {
             let texts = diff::collect_texts(&base_tree, &work_tree);
@@ -173,13 +230,7 @@ pub fn run(
                 .map(|(k, v)| (weft_core::AnswerId(k.clone()), *v))
                 .collect();
             let confirmed = abstractor.confirmed_from_decisions(&texts, &decisions);
-            diff::build_ops_decided(
-                &base_tree,
-                &work_tree,
-                &abstractor,
-                &confirmed,
-                &keep_literal,
-            )
+            diff::build_ops_decided(&rec, &work_tree, &abstractor, &confirmed, &keep_literal)?
         }
         // Generator sessions always take the scripted path (confirm-all
         // minus --keep-literal): interactive per-occurrence choices can't be
@@ -189,15 +240,9 @@ pub fn run(
             // --yes semantics) minus the kept-literal occurrences.
             let texts = diff::collect_texts(&base_tree, &work_tree);
             let confirmed = abstractor.confirmed_from_decisions(&texts, &Default::default());
-            diff::build_ops_decided(
-                &base_tree,
-                &work_tree,
-                &abstractor,
-                &confirmed,
-                &keep_literal,
-            )
+            diff::build_ops_decided(&rec, &work_tree, &abstractor, &confirmed, &keep_literal)?
         }
-        None => diff::build_ops(&base_tree, &work_tree, &abstractor, interaction)?,
+        None => diff::build_ops(&rec, &work_tree, &abstractor, interaction)?,
     };
     if ops.is_empty() {
         bail!("worktree has no changes against the base state; nothing to commit");
@@ -217,15 +262,16 @@ pub fn run(
             &answers,
             &work_tree,
             ops,
+            &crate::amend::MetaEdits {
+                title: opts.title.as_deref(),
+                describe: opts.describe.as_deref(),
+                tags: &opts.tags,
+            },
             resolver,
             interaction,
         );
     }
 
-    let name = match &opts.name {
-        Some(name) => name.clone(),
-        None => format!("patch-{:03}", template.patches.len() + 1),
-    };
     let when = opts.when.clone().map(StarlarkExpr);
     // Depend only on the *active* nodes of the base: a patch gated off under
     // the session answers contributed nothing to the recorded state, and
@@ -473,6 +519,8 @@ pub struct SessionTrees<'t> {
     pub base_patches: Vec<weft_core::Patch>,
     pub parts: Vec<crate::compose::ComposedPart<'t>>,
     pub base_tree: weft_core::Tree,
+    /// Where every line of the base came from (the same render).
+    pub base_trace: weft_core::Trace,
     pub work_tree: weft_core::Tree,
     /// Where this session's worktree lives (it may be anywhere on disk).
     pub worktree_root: Utf8PathBuf,
@@ -491,8 +539,9 @@ pub fn session_trees<'t>(
     if let Some(f) = &sess.foreach {
         parts.push(crate::start::sample_part(template, f, &eval, interaction)?);
     }
-    let full_base = crate::compose::render_composed(&base_patches, &answers, &parts, &eval)
-        .context("re-rendering base state")?;
+    let (full_base, base_trace) =
+        crate::compose::render_composed_traced(&base_patches, &answers, &parts, &eval)
+            .context("re-rendering base state")?;
     if full_base.hash() != sess.session.tree_hash {
         bail!(
             "base state hash changed since the session started (template or secret \
@@ -520,6 +569,7 @@ pub fn session_trees<'t>(
         base_patches,
         parts,
         base_tree,
+        base_trace,
         work_tree,
         worktree_root,
     })
@@ -612,6 +662,11 @@ pub struct PreviewFile {
     /// Either side is binary: before/after are empty, content is opaque.
     #[serde(default)]
     pub binary: bool,
+    /// What the commit makes of slot content: the lines that record as a
+    /// fill of a slot (keyed by the session's name, the name the patch is
+    /// expected to take), or why they cannot record.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 /// What `weft diff` (and UIs) show before a commit.
@@ -652,6 +707,31 @@ pub fn preview_target(
     let texts = diff::collect_texts(base_tree, &after);
     let candidates = abstractor.candidates(&texts);
     let occurrences = diff::added_occurrences(base_tree, &after, &abstractor);
+    // Slot fills are keyed by the patch's name, which `weft diff` does not
+    // know yet: an amend keeps the target's, and a session is named after
+    // the patch it records.
+    let key = trees
+        .sess
+        .amend
+        .clone()
+        .unwrap_or_else(|| session.to_owned());
+    let keys = match &trees.sess.foreach {
+        Some(f) => diff::SlotKeys::per_instance(&key, &f.key),
+        None => diff::SlotKeys::named(&key),
+    };
+    let names = |id: weft_core::PatchId| {
+        template
+            .id_to_name
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| id.short())
+    };
+    let rec = diff::Recording {
+        base: base_tree,
+        trace: &trees.base_trace,
+        keys: &keys,
+        names: &names,
+    };
 
     // Binary sides show as opaque (empty text, `binary: true`) — previews
     // and diffs never try to line-render bytes.
@@ -669,19 +749,29 @@ pub fn preview_target(
                 },
                 after: text_of(entry),
                 binary: entry.content.is_binary(),
+                // A file the base left out while its slots were empty.
+                notes: match (trees.base_trace.omitted(path), entry.content.text()) {
+                    (Some(old), Some(new)) => diff::slot_notes(path, old, new, &rec),
+                    _ => Vec::new(),
+                },
             }),
             Some(base_entry) if base_entry.content != entry.content => {
                 let binary = base_entry.content.is_binary() || entry.content.is_binary();
+                let texts = base_entry.content.text().zip(entry.content.text());
                 files.push(PreviewFile {
                     path: path.clone(),
                     change: "modified",
-                    added_lines: match (base_entry.content.text(), entry.content.text()) {
-                        (Some(old), Some(new)) => diff::added_line_numbers(old, new),
-                        _ => Default::default(),
+                    added_lines: match texts {
+                        Some((old, new)) => diff::added_line_numbers(old, new),
+                        None => Default::default(),
                     },
                     before: text_of(base_entry),
                     after: text_of(entry),
                     binary,
+                    notes: match texts {
+                        Some((old, new)) => diff::slot_notes(path, old, new, &rec),
+                        None => Vec::new(),
+                    },
                 });
             }
             Some(_) => {}
@@ -696,6 +786,7 @@ pub fn preview_target(
             after: String::new(),
             added_lines: Default::default(),
             binary: base_entry.is_some_and(|e| e.content.is_binary()),
+            notes: Vec::new(),
         });
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
@@ -794,7 +885,9 @@ pub(crate) fn include_deps(
                 | weft_core::Op::CreateBinaryFile { path, .. }
                 | weft_core::Op::ModifyFile { path, .. }
                 | weft_core::Op::SetMode { path, .. } => vec![path],
-                weft_core::Op::DeleteFile { .. } => vec![],
+                // A fill owns nothing a later edit anchors on (hunks never
+                // see slot content); the slot belongs to its file's creator.
+                weft_core::Op::DeleteFile { .. } | weft_core::Op::FillSlot { .. } => vec![],
                 weft_core::Op::RenamePath { to, .. } => vec![to],
             };
             for path in paths {

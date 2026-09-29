@@ -55,6 +55,7 @@ impl Command {
                 Segment::Literal(t) => t.clone(),
                 Segment::Answer(id) => format!("${{{}}}", id.0),
                 Segment::Expr(e) => format!("${{{}}}", e.0),
+                Segment::Slot(decl) => format!("${{slot {}}}", decl.slot),
             })
             .collect()
     }

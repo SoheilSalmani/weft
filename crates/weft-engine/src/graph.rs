@@ -143,10 +143,12 @@ fn hook_summary(hook: &weft_core::Hook) -> HookSummary {
 
 #[derive(Debug, Serialize)]
 pub struct OpSummary {
-    /// `create_file` | `modify_file` | `delete_file` | `rename_path` | `set_mode`
+    /// `create_file` | `create_binary_file` | `modify_file` | `delete_file`
+    /// | `rename_path` | `set_mode` | `fill_slot`
     pub kind: &'static str,
     /// Display form of the target path; answer references render as `{id}`,
-    /// expressions as `{=expr}`, renames as `from → to`.
+    /// expressions as `{=expr}`, renames as `from → to`, and a fill as
+    /// `path#slot`.
     pub path: String,
 }
 
@@ -380,6 +382,10 @@ pub(crate) fn op_summary(op: &Op) -> OpSummary {
             kind: "set_mode",
             path: display_path(path),
         },
+        Op::FillSlot { path, slot, .. } => OpSummary {
+            kind: "fill_slot",
+            path: format!("{}#{slot}", display_path(path)),
+        },
     }
 }
 
@@ -391,6 +397,8 @@ pub fn display_path(path: &TemplatePath) -> String {
             Segment::Literal(s) => s.clone(),
             Segment::Answer(id) => format!("{{{id}}}"),
             Segment::Expr(e) => format!("{{={}}}", e.as_str()),
+            // Paths never parse with a slot in them.
+            Segment::Slot(decl) => format!("{{slot {}}}", decl.slot),
         })
         .collect()
 }

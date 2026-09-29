@@ -130,6 +130,11 @@ fn canonical_json(
 pub enum Op {
     CreateFile {
         path: TemplatePath,
+        /// Slots of `content` (see [`crate::SlotDecl`]) that, when every one
+        /// of them is still empty at the end of the render, leave the file out
+        /// altogether. Skipped when empty, so patches without it keep their ids.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        omit_when_empty: Vec<String>,
         content: Content,
         #[serde(default = "default_mode")]
         mode: u32,
@@ -160,6 +165,17 @@ pub enum Op {
         path: TemplatePath,
         mode: u32,
     },
+    /// Add `lines` to slot `slot` of the file at `path` as the contribution
+    /// under `key`. A slot renders its contributions sorted by key, the
+    /// slot's separator ending every one but the last, so patches that only
+    /// fill slots commute; two contributions with one key in one slot are an
+    /// error.
+    FillSlot {
+        path: TemplatePath,
+        slot: String,
+        key: Line,
+        lines: Vec<Line>,
+    },
 }
 
 /// A context-anchored change to a file: never line-numbered. The hunk matches
@@ -189,6 +205,7 @@ mod tests {
             vec![
                 Op::CreateFile {
                     path: TemplatePath::literal("Dockerfile"),
+                    omit_when_empty: vec![],
                     content: Content(vec![
                         Line::literal("FROM python:3.12-slim"),
                         Line(vec![

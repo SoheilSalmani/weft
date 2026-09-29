@@ -34,6 +34,9 @@ pub struct ResyncOptions {
     pub keep_literal: Vec<String>,
     /// Report what would change without writing anything.
     pub dry_run: bool,
+    /// Accept answer references the previous version of the patch did not
+    /// have (otherwise such patches are skipped with an issue).
+    pub accept_new_refs: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -150,14 +153,54 @@ pub fn resync(
             );
             continue;
         }
+        // Regenerated ops come from the command's text, which cannot carry a
+        // slot: rewriting would drop the slots someone added by hand.
+        let slots = crate::amend::declared_slots(&patch);
+        if !slots.is_empty() {
+            skip(
+                &mut report,
+                format!(
+                    "it declares slot(s) {}, which regenerating from the command would drop; \
+                     move the slot to a hand-written patch, or `weft patch detach {name}` and \
+                     edit it by hand",
+                    slots.join(", ")
+                ),
+            );
+            continue;
+        }
 
-        // Answers: stored record-time set, CLI overrides, secrets from refs.
-        let mut answers = generator.answers.clone();
+        // Answers like `weft update`: the stored record-time set plus CLI
+        // overrides as the provided layer, secrets re-resolved from their
+        // refs, then gathered so questions added since recording take their
+        // defaults (stored values win).
+        let mut provided = generator.answers.clone();
         for arg in &opts.answers {
             let (id, value) = crate::answers::parse_answer_arg(&template.manifest.questions, arg)?;
-            answers.insert(id, value);
+            provided.insert(id, value);
         }
-        commit::resolve_secret_refs(&template, &generator.secrets, &mut answers, interaction)?;
+        let mut presolved = AnswerSet::new();
+        commit::resolve_secret_refs(&template, &generator.secrets, &mut presolved, interaction)?;
+        let mut answers = crate::answers::gather(
+            &template,
+            &provided,
+            &presolved,
+            &eval,
+            &mut crate::interact::NonInteractive,
+        )
+        .with_context(|| {
+            format!(
+                "resolving the resync answers of `{name}`; pass a missing answer with \
+                 `weft patch resync {name} --answer ID=VALUE`"
+            )
+        })?;
+        // Keep stored values that are not root questions (e.g. namespaced
+        // include answers), as resync always replayed them.
+        for (k, v) in provided.iter() {
+            if !answers.contains(k) {
+                answers.insert(k.clone(), v.clone());
+            }
+        }
+        let overrides = !opts.answers.is_empty() || !opts.keep_literal.is_empty();
 
         // The patch's gate must be open under these answers, or the replay
         // comparison below is meaningless.
@@ -203,8 +246,9 @@ pub fn resync(
             interaction,
         )?;
         crate::compose::filter_parts(&mut parts, &base_ids);
-        let base_tree = crate::compose::render_composed(&base_patches, &answers, &parts, &eval)
-            .with_context(|| format!("rendering the base of `{name}`"))?;
+        let (base_tree, base_trace) =
+            crate::compose::render_composed_traced(&base_patches, &answers, &parts, &eval)
+                .with_context(|| format!("rendering the base of `{name}`"))?;
 
         // Re-run the generator in a scratch worktree.
         let scratch = tempfile::tempdir().context("creating a scratch worktree")?;
@@ -244,12 +288,18 @@ pub fn resync(
         }
 
         // Up to date? The existing patch replayed over the base must equal
-        // the fresh output byte-for-byte.
+        // the fresh output byte-for-byte. A --keep-literal repair changes how
+        // the output is recorded, not what it renders, so it goes on to
+        // re-derive the ops.
         let mut with_existing = base_patches.clone();
         with_existing.push(patch.clone());
         let existing = crate::compose::render_composed(&with_existing, &answers, &parts, &eval)
             .with_context(|| format!("replaying the current `{name}`"))?;
-        if existing.hash() == work_tree.hash() {
+        if existing.hash() == work_tree.hash() && opts.keep_literal.is_empty() {
+            if overrides && !opts.dry_run {
+                store_inputs(&template, name, &answers, &[], None)?;
+                report.notes.push(stored_note(name, opts));
+            }
             report.entries.push(ResyncEntry {
                 name: name.clone(),
                 outcome: Outcome::UpToDate,
@@ -280,7 +330,27 @@ pub fn resync(
         }
         let texts = diff::collect_texts(&base_tree, &work_tree);
         let confirmed = abstractor.confirmed_from_decisions(&texts, &Default::default());
-        let ops = diff::build_ops_decided(&base_tree, &work_tree, &abstractor, &confirmed, &keep);
+        let keys = diff::SlotKeys::named(name).keeping(&patch, &answers);
+        let names = |id: weft_core::PatchId| {
+            template
+                .id_to_name
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| id.short())
+        };
+        let rec = diff::Recording {
+            base: &base_tree,
+            trace: &base_trace,
+            keys: &keys,
+            names: &names,
+        };
+        let ops = match diff::build_ops_decided(&rec, &work_tree, &abstractor, &confirmed, &keep) {
+            Ok(ops) => ops,
+            Err(e) => {
+                skip(&mut report, format!("{e:#}"));
+                continue;
+            }
+        };
         if ops.is_empty() {
             skip(
                 &mut report,
@@ -306,6 +376,75 @@ pub fn resync(
             );
             continue;
         }
+        // A repair that re-derives the ops the patch already has leaves the
+        // patch alone; only its inputs are stored.
+        if with_new[with_new.len() - 1].id == patch.id {
+            if !opts.dry_run {
+                store_inputs(&template, name, &answers, &opts.keep_literal, None)?;
+                report.notes.push(stored_note(name, opts));
+            }
+            report.entries.push(ResyncEntry {
+                name: name.clone(),
+                outcome: Outcome::UpToDate,
+            });
+            continue;
+        }
+
+        // New-reference guard: answers the previous version did not
+        // reference (e.g. a question added since recording whose default
+        // appears in the output) need the author's consent.
+        let old_refs = crate::check::answer_refs(&patch);
+        let new_refs: Vec<_> = crate::check::answer_refs(&with_new[with_new.len() - 1])
+            .into_iter()
+            .filter(|id| !old_refs.contains(id))
+            .collect();
+        if !new_refs.is_empty() {
+            let listed: Vec<String> = new_refs
+                .iter()
+                .map(|id| {
+                    let hits: Vec<_> = occurrences
+                        .iter()
+                        .filter(|o| o.id == *id)
+                        .filter(|o| {
+                            !keep.iter().any(|(a, p, l, n)| {
+                                a == &o.id && p == &o.path && *l == o.line && *n == o.nth
+                            })
+                        })
+                        .collect();
+                    // Never print a secret: its occurrences are its value.
+                    let value = match answers.get(id) {
+                        Some(weft_core::Value::Secret(_)) => "(secret)".to_owned(),
+                        Some(v) => format!("{:?}", v.render_text()),
+                        None => "(unset)".to_owned(),
+                    };
+                    let keys: Vec<_> = hits
+                        .iter()
+                        .map(|o| format!("{}@{}:{}:{}", o.id, o.path, o.line, o.nth))
+                        .collect();
+                    if keys.is_empty() {
+                        format!("`{id}` = {value}")
+                    } else {
+                        format!("`{id}` = {value} at {}", keys.join(", "))
+                    }
+                })
+                .collect();
+            if !opts.accept_new_refs {
+                skip(
+                    &mut report,
+                    format!(
+                        "the resynced ops reference answer(s) the previous version did not: \
+                         {}; pass --yes to accept them, or --keep-literal \
+                         ID@PATH:LINE[:NTH] to keep those occurrences literal",
+                        listed.join("; ")
+                    ),
+                );
+                continue;
+            }
+            report.notes.push(format!(
+                "`{name}`: accepted new answer reference(s) {}",
+                listed.join("; ")
+            ));
+        }
 
         if opts.dry_run {
             report.entries.push(ResyncEntry {
@@ -317,20 +456,11 @@ pub fn resync(
 
         // Rewrite ops in place; deps/when/meta stay. Persist any repaired
         // metadata so the next resync replays the same inputs.
-        let mut file = template.patch_file(name)?;
-        file.ops = ops.clone();
-        if let Some(stored) = &mut file.generator {
-            if !opts.answers.is_empty() {
-                stored.answers = crate::start::strip_secrets(&answers);
-            }
-            if !opts.keep_literal.is_empty() {
-                stored.keep_literal = specs.clone();
-            }
-        }
-        template.save_patch_file(name, &file)?;
+        let count = ops.len();
+        store_inputs(&template, name, &answers, &opts.keep_literal, Some(ops))?;
         report.entries.push(ResyncEntry {
             name: name.clone(),
-            outcome: Outcome::Rewritten { ops: ops.len() },
+            outcome: Outcome::Rewritten { ops: count },
         });
         rewritten.push((name.clone(), answers));
     }
@@ -366,4 +496,37 @@ pub fn resync(
         }
     }
     Ok(report)
+}
+
+/// Stores the answers a resync ran with, and the CLI keep-literal specs when
+/// given, in the patch's generator metadata so the next resync replays the
+/// same inputs. `ops`, when given, replaces the patch's ops.
+fn store_inputs(
+    template: &Template,
+    name: &str,
+    answers: &AnswerSet,
+    keep_literal: &[String],
+    ops: Option<Vec<weft_core::Op>>,
+) -> Result<()> {
+    let mut file = template.patch_file(name)?;
+    if let Some(ops) = ops {
+        file.ops = ops;
+    }
+    if let Some(stored) = &mut file.generator {
+        stored.answers = crate::start::strip_secrets(answers);
+        if !keep_literal.is_empty() {
+            stored.keep_literal = keep_literal.to_vec();
+        }
+    }
+    template.save_patch_file(name, &file)
+}
+
+/// The note for a resync that stored its inputs and left the ops alone.
+fn stored_note(name: &str, opts: &ResyncOptions) -> String {
+    let what = match (opts.answers.is_empty(), opts.keep_literal.is_empty()) {
+        (false, false) => "the --answer override(s) and --keep-literal spec(s)",
+        (false, true) => "the --answer override(s)",
+        _ => "the --keep-literal spec(s)",
+    };
+    format!("`{name}`: stored {what} in its generator metadata (ops unchanged)")
 }

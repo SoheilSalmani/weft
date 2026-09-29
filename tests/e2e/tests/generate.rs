@@ -162,6 +162,178 @@ fn resync_noop_when_output_unchanged() {
 }
 
 #[test]
+fn resync_skips_a_generated_patch_that_declares_a_slot() {
+    let scratch = tempfile::tempdir().unwrap();
+    let src = scratch.path().join("upstream.txt");
+    std::fs::write(&src, "static v1\n").unwrap();
+    let (_guard, tpl) = template_with_generated(&src, "gen.txt", "gen");
+    // A slot added by hand to the generated file, then an upstream change.
+    let patch = read(&tpl, "patches/gen.json").replacen(
+        "\"static v1\"",
+        "\"static v1\", {\"slot\": \"notes\"}",
+        1,
+    );
+    std::fs::write(tpl.join("patches/gen.json"), &patch).unwrap();
+    std::fs::write(&src, "static v2\n").unwrap();
+    weft()
+        .args(["patch", "resync", "gen"])
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "declares slot(s) `notes` in `gen.txt`, which regenerating from the command would \
+             drop",
+        ));
+    assert_eq!(read(&tpl, "patches/gen.json"), patch, "left as it was");
+}
+
+#[test]
+fn resync_answer_override_persists_when_up_to_date() {
+    let scratch = tempfile::tempdir().unwrap();
+    let src = scratch.path().join("upstream.txt");
+    std::fs::write(&src, "static v1\n").unwrap();
+    let (_guard, tpl) = template_with_generated(&src, "gen.txt", "gen");
+
+    let before = read(&tpl, "patches/gen.json");
+    weft()
+        .args(["patch", "resync", "gen", "--answer", "project_name=Other"])
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("up to date"));
+    let after = read(&tpl, "patches/gen.json");
+    assert!(
+        after.contains("\"project_name\": \"Other\""),
+        "patch: {after}"
+    );
+    let ops = |s: &str| s[s.find("\"ops\"").unwrap()..s.find("\"generator\"").unwrap()].to_owned();
+    assert_eq!(ops(&after), ops(&before), "ops unchanged");
+}
+
+/// Add a defaulted question after recording and reference it from `base`.
+fn add_site_url_question(tpl: &Path) {
+    let toml = read(tpl, "weft.toml");
+    std::fs::write(
+        tpl.join("weft.toml"),
+        format!(
+            "{toml}\n[[question]]\nid = \"site_url\"\nkind = \"string\"\n\
+             default = \"'https://site.example'\"\n"
+        ),
+    )
+    .unwrap();
+    let base = read(tpl, "patches/base.json");
+    let base = base.replacen(
+        "\"ops\": [",
+        "\"ops\": [{\"op\": \"create_file\", \"path\": \"site.txt\", \
+         \"content\": [[{\"answer\": \"site_url\"}]]},",
+        1,
+    );
+    std::fs::write(tpl.join("patches/base.json"), base).unwrap();
+}
+
+#[test]
+fn resync_fills_default_of_question_added_after_recording() {
+    let scratch = tempfile::tempdir().unwrap();
+    let src = scratch.path().join("upstream.txt");
+    std::fs::write(&src, "static v1\n").unwrap();
+    let (_guard, tpl) = template_with_generated(&src, "gen.txt", "gen");
+    add_site_url_question(&tpl);
+
+    weft()
+        .args(["patch", "resync", "gen"])
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("up to date"));
+}
+
+#[test]
+fn resync_new_answer_reference_needs_consent() {
+    let scratch = tempfile::tempdir().unwrap();
+    let src = scratch.path().join("upstream.txt");
+    std::fs::write(&src, "static v1\n").unwrap();
+    let (_guard, tpl) = template_with_generated(&src, "gen.txt", "gen");
+    add_site_url_question(&tpl);
+
+    // The regenerated output now contains the new question's default.
+    std::fs::write(&src, "static v2 at https://site.example\n").unwrap();
+    let before = read(&tpl, "patches/gen.json");
+    weft()
+        .args(["patch", "resync", "gen"])
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("site_url@gen.txt:1:1"))
+        .stderr(predicates::str::contains("--yes"));
+    assert_eq!(read(&tpl, "patches/gen.json"), before, "skipped, untouched");
+
+    // Keeping the occurrence literal means no new reference.
+    weft()
+        .args(["patch", "resync", "gen", "--dry-run"])
+        .args(["--keep-literal", "site_url@gen.txt:1"])
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .success();
+
+    weft()
+        .args(["patch", "resync", "gen", "--yes"])
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("rewritten"));
+    let after = read(&tpl, "patches/gen.json");
+    assert!(after.contains("\"answer\": \"site_url\""), "patch: {after}");
+    assert!(
+        after.contains("\"site_url\": \"https://site.example\""),
+        "default recorded in generator answers: {after}"
+    );
+}
+
+#[test]
+fn resync_keep_literal_repairs_a_patch_whose_output_is_unchanged() {
+    let scratch = tempfile::tempdir().unwrap();
+    let src = scratch.path().join("upstream.txt");
+    std::fs::write(&src, "static v1\n").unwrap();
+    let (_guard, tpl) = template_with_generated(&src, "gen.txt", "gen");
+    add_site_url_question(&tpl);
+    std::fs::write(&src, "static v2 at https://site.example\n").unwrap();
+    let resync = |extra: &[&str]| {
+        let mut cmd = weft();
+        cmd.args(["patch", "resync", "gen"])
+            .args(extra)
+            .arg("--template")
+            .arg(&tpl);
+        cmd.assert().success()
+    };
+    resync(&["--yes"]);
+    assert!(read(&tpl, "patches/gen.json").contains("\"answer\": \"site_url\""));
+
+    // Same output, but the repair must reach the ops.
+    resync(&["--keep-literal", "site_url@gen.txt:1"])
+        .stderr(predicates::str::contains("rewritten"));
+    let repaired = read(&tpl, "patches/gen.json");
+    assert!(
+        !repaired.contains("\"answer\": \"site_url\""),
+        "patch: {repaired}"
+    );
+    assert!(
+        repaired.contains("\"site_url@gen.txt:1\""),
+        "spec stored: {repaired}"
+    );
+
+    // Repeating it re-derives the same ops: nothing to rewrite.
+    resync(&["--keep-literal", "site_url@gen.txt:1"])
+        .stderr(predicates::str::contains("up to date"));
+    assert_eq!(read(&tpl, "patches/gen.json"), repaired);
+}
+
+#[test]
 fn resync_rewrites_on_output_change() {
     let scratch = tempfile::tempdir().unwrap();
     let src = scratch.path().join("upstream.txt");
