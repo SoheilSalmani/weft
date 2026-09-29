@@ -30,9 +30,12 @@ deviations from the plan.
   patch.
 - **Hints**: the session-start and amend hints name the exact `weft session
   shell` command, with `--template` when the current directory would not
-  find the template (`start::announce`/`amend::announce` moved to the CLI).
-  A commit or `session end` that deletes the worktree its own session shell
-  stands in says that `exit` returns to where the shell was opened.
+  find the template, relative to that directory when the template sits below
+  it (`start::announce`/`amend::announce` moved to the CLI). The error a
+  worktree command gives outside a worktree (ADR-0004) names the same command
+  instead of `cd "$(weft session path NAME)"`. A commit or `session end` that
+  deletes the worktree its own session shell stands in says that `exit`
+  returns to where the shell was opened.
 - **Decided against**: an "open a shell?" prompt after `session new` (a
   preference, not missing input, so a flag or an alias holds it; and a new
   trailing prompt is one more place for an agent in a pty to block); an

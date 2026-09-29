@@ -138,8 +138,9 @@ fn not_in_worktree(template: &Utf8Path) -> anyhow::Error {
     };
     anyhow!(
         "not inside a session worktree of `{template}`; its sessions:\n{}\n\
-         run this inside one (cd \"$(weft session path {name})\"), or pass --session {name}",
-        rows.join("\n")
+         run this inside one (`{}` opens a shell there), or pass --session {name}",
+        rows.join("\n"),
+        crate::shell::command_for(template, name)
     )
 }
 

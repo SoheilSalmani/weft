@@ -66,18 +66,24 @@ pub fn command_for(template: &Utf8Path, session: &str) -> String {
 }
 
 /// ` --template DIR` for a suggested command, or nothing when the directory
-/// this command runs in finds the template by itself.
+/// this command runs in finds the template by itself. DIR is relative when
+/// the template sits below that directory, as it was most likely typed.
 pub fn template_arg(template: &Utf8Path) -> String {
     let template = discover::absolute(template);
-    let found = discover::cwd()
-        .ok()
-        .and_then(|cwd| discover::locate(&cwd))
+    let cwd = discover::cwd().ok();
+    let found = cwd
+        .as_deref()
+        .and_then(discover::locate)
         .is_some_and(|loc| loc.template_root == template);
     if found {
-        String::new()
-    } else {
-        format!(" --template {}", shell_quote(template.as_str()))
+        return String::new();
     }
+    let shown = cwd
+        .as_deref()
+        .and_then(|cwd| template.strip_prefix(cwd).ok())
+        .filter(|relative| !relative.as_str().is_empty())
+        .unwrap_or(template.as_path());
+    format!(" --template {}", shell_quote(shown.as_str()))
 }
 
 /// Start `command` in `worktree`, or, when it is empty, the user's shell with
