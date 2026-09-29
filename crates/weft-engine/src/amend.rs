@@ -366,15 +366,6 @@ pub(crate) fn finish(
     Ok(())
 }
 
-/// Print where the amend worktree is.
-pub fn announce(worktree: &Utf8Path, name: &str) {
-    println!("{worktree}");
-    eprintln!(
-        "amending `{name}`: the worktree above is the patch applied on its base — \
-         edit it, then run `weft commit`"
-    );
-}
-
 /// The slots a patch declares, as `` `name` in `path` ``. A recording (amend,
 /// resync) re-derives ops from text, which cannot carry them.
 pub(crate) fn declared_slots(patch: &weft_core::Patch) -> Vec<String> {

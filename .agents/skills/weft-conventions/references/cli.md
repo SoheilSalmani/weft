@@ -28,11 +28,12 @@ The generated `weft.toml` carries `description = "TODO: what this template scaff
 ```text
 weft session new NAME [--template DIR] [--base latest|PATCH] [--preset P]... [--answer K=V]...
                       [--answers-file F] [--path DIR] [--foreach INCLUDE=KEY] [--exec [CMD]]
-                      [--force] [--non-interactive] [--no-wizard]
+                      [--force] [--non-interactive] [--no-wizard] [--shell]
 weft session adopt PATH -n NAME [--template DIR] [--base REF] [--preset P]... [--answer K=V]...
                       [--answers-file F] [--scope GLOB]... [--force] [--non-interactive]
 weft session list | ls
 weft session path [NAME]
+weft session shell [NAME] [--template DIR] [-- CMD [ARGS]...]
 weft session move NAME DEST
 weft session scope [--add GLOB]... [--rm GLOB]
 weft session refresh [--answer K=V]... [--preset P]... [--answers-file F] [--answers-json J]
@@ -43,7 +44,8 @@ weft session end [NAME] [--discard]
 - `--exec CMD` runs the command in the rendered worktree; its output is the patch and the command is stored so `weft patch resync` can re-run it. `${answer}` and `${expr}` interpolate declared answers. Pass `--exec` with no value to write the command in `$EDITOR`.
 - `adopt` on a directory `weft new` made needs no arguments beyond `-n`; it reads `.weft/state.toml`. On any other directory pass `--template`, the answers, and `--scope`, or every file reads as new.
 - `end` refuses a worktree with uncommitted changes unless `--discard`. A worktree weft created is deleted; an adopted one is only unlinked.
-- Inside a worktree no `--template` or `--session` is needed: weft walks up to `.weft/worktree.toml`. Anywhere else `status`, `add`, `reset`, `diff` and `commit` need `-s NAME`, even when the template has one session; `session scope|refresh|path|end` still fall back to the only one.
+- `shell` without `CMD` opens `$SHELL` (else `/bin/sh`) in the worktree with `WEFT_SESSION` set to the session's name; it needs a terminal, and `exit` returns. With `-- CMD` it runs that command there instead, terminal or not, and exits with its status (127 when the command is not found). `session new --shell` opens the same shell once the session exists, and without a terminal refuses before creating anything.
+- Inside a worktree no `--template` or `--session` is needed: weft walks up to `.weft/worktree.toml`. Anywhere else `status`, `add`, `reset`, `diff` and `commit` need `-s NAME`, even when the template has one session; `session scope|refresh|path|shell|end` still fall back to the only one.
 
 ## Staging and committing
 

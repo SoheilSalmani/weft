@@ -3,6 +3,53 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — `weft session shell` and `weft session new --shell`
+
+- **The gap**: entering a session meant `cd`-ing into the path `weft session
+  new` printed; nothing opened a shell there, or started an editor or an
+  agent with the worktree as its directory.
+- **`weft session shell [NAME] [--template DIR] [-- CMD…]`** (`shell.rs`):
+  a `weft session` subcommand, so the session resolves as for `session path`,
+  the template's only one included (ADR-0004). Bare, it opens `$SHELL` (else
+  `/bin/sh`) at the worktree root and needs a terminal; without one it fails
+  at once and names `-- CMD`, since a shell on a pipe would run whatever it
+  reads. With `-- CMD` it runs that argv there, without shell parsing or a
+  terminal, and exits with its status; a command that cannot start exits
+  127/126 like `env`. On Unix weft `exec`s, so Ctrl-C, job control and the
+  exit status belong to the child and no weft parent is left to die on
+  SIGINT; elsewhere it waits and propagates. The shell gets
+  `WEFT_SESSION=<name>` for prompts; a `-- CMD` child does not, so an editor
+  or agent started that way is never told to `exit`. weft reads it only to
+  word hints, never to pick a session, keeping the rule that patch-writing
+  commands never choose one silently. Every child gets a `PWD` that matches
+  its directory. A session whose worktree is missing is an error naming
+  `session end --discard`, not a misleading "cannot run `$SHELL`".
+- **`weft session new --shell`** refuses without a terminal before anything
+  is rendered, prints the path as before, then opens the same shell. No
+  `-- CMD` on `new`: it would read like `--exec`, whose output becomes the
+  patch.
+- **Hints**: the session-start and amend hints name the exact `weft session
+  shell` command, with `--template` when the current directory would not
+  find the template (`start::announce`/`amend::announce` moved to the CLI).
+  A commit or `session end` that deletes the worktree its own session shell
+  stands in says that `exit` returns to where the shell was opened.
+- **Decided against**: an "open a shell?" prompt after `session new` (a
+  preference, not missing input, so a flag or an alias holds it; and a new
+  trailing prompt is one more place for an agent in a pty to block); an
+  editor command or an editor setting (`$VISUAL`/`$EDITOR` mean "edit this
+  buffer and block", wrong for opening a folder with `code --wait` or
+  `nano`; `-- code .` covers any editor, and weft has no user config file);
+  shell integration for a real `cd` (per-shell init scripts and rc edits;
+  revisit if nested shells annoy).
+- Tests: e2e `session.rs` covers a command's directory and `WEFT_SESSION`,
+  its exit status and 127, a bare `shell` without a terminal refusing without
+  running its piped stdin, and `new --shell` without a terminal leaving no
+  session. Smoke in a pty (the interactive paths need one): the wizard,
+  submitted with `s`, hands a restored terminal (`icanon echo`) to the shell
+  `--shell` opens, whose exit status weft returns; nesting prints its note;
+  both exit hints and the `--template` form of the start and amend hints
+  appear only where they should.
+
 ## Fix — the answers wizard opened inside `$(…)`
 
 - **Bug**: `cd $(weft session new …)`, the documented way into a session,

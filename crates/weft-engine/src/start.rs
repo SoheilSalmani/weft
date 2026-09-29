@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Context, Result};
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8PathBuf;
 use weft_core::{AnswerKind, PatchId};
 use weft_lang::StarlarkEval;
 
@@ -362,14 +362,4 @@ pub fn base_leaves(template: &Template, active: &BTreeSet<PatchId>) -> Vec<Strin
         .filter(|p| active.contains(&p.id) && !depended_upon.contains(&p.id))
         .filter_map(|p| template.id_to_name.get(&p.id).cloned())
         .collect()
-}
-
-/// Convenience for CLI: print where the worktree is, so `cd $(weft session
-/// new)` drops you straight into it.
-pub fn announce(name: &str, worktree: &Utf8Path) {
-    println!("{worktree}");
-    eprintln!(
-        "session `{name}` started — `cd` into the worktree above, edit, \
-         then `weft add` and `weft commit`"
-    );
 }

@@ -1,7 +1,7 @@
 //! Recording-session lifecycle: the staging index (`weft add`/`reset`/`status`),
 //! multiple patches per session with the sibling-vs-stack choice, `session
 //! refresh` (edit the manifest or change answers mid-session), `session end`,
-//! and back-compat of the classic one-shot `record → commit`.
+//! `session shell`, and back-compat of the classic one-shot `record → commit`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -316,4 +316,80 @@ fn diff_staged_shows_only_the_staged_changes() {
         staged.contains("A.txt") && !staged.contains("B.txt"),
         "staged diff should list only the staged file: {staged}"
     );
+}
+
+#[test]
+fn session_shell_runs_a_command_in_the_worktree_and_exits_with_its_status() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tpl = init_template(tmp.path());
+    record(&tpl, "project_name=Demo");
+    let wt = fs::canonicalize(tpl.join(".weft-sessions/main/worktree")).unwrap();
+
+    // A `weft session` subcommand (ADR-0004): at the template root the only
+    // session will do. Only an interactive session shell carries
+    // `WEFT_SESSION`: an editor or agent started with `--` must not take
+    // weft's `exit` hint as its own.
+    let out = weft()
+        .current_dir(&tpl)
+        .args(["session", "shell", "--"])
+        .args(["sh", "-c", "pwd -P; echo \"${WEFT_SESSION-unset}\""])
+        .env_remove("WEFT_SESSION")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("{}\nunset\n", wt.display())
+    );
+
+    // Scripts see the command's own status, including "not found".
+    weft()
+        .args(["session", "shell", "main", "--template"])
+        .arg(&tpl)
+        .args(["--", "sh", "-c", "exit 3"])
+        .assert()
+        .code(3);
+    weft()
+        .args(["session", "shell", "main", "--template"])
+        .arg(&tpl)
+        .args(["--", "weft-e2e-no-such-command"])
+        .assert()
+        .code(127);
+}
+
+#[test]
+fn session_shell_without_a_terminal_needs_a_command() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tpl = init_template(tmp.path());
+    record(&tpl, "project_name=Demo");
+    let wt = tpl.join(".weft-sessions/main/worktree");
+
+    // A shell reading this pipe would run it; weft refuses to start a shell
+    // nobody can see.
+    weft()
+        .args(["session", "shell", "main", "--template"])
+        .arg(&tpl)
+        .write_stdin("touch ran.txt\n")
+        .assert()
+        .code(1)
+        .stderr(predicates::str::contains("-- CMD"));
+    assert!(!wt.join("ran.txt").exists());
+}
+
+#[test]
+fn session_new_shell_without_a_terminal_creates_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tpl = init_template(tmp.path());
+    weft()
+        .args(["session", "new", "main", "--shell", "--template"])
+        .arg(&tpl)
+        .args(["--answer", "project_name=Demo"])
+        .assert()
+        .code(1)
+        .stderr(predicates::str::contains("--shell"));
+    assert!(!tpl.join(".weft-sessions").exists());
 }

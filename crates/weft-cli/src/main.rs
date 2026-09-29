@@ -7,6 +7,7 @@ mod hub;
 mod lsp;
 mod mcp;
 mod schema;
+mod shell;
 mod source;
 mod tui;
 mod wizard;
@@ -482,7 +483,7 @@ enum HookCmd {
 #[derive(Subcommand)]
 enum SessionCmd {
     /// Start a session: render a base state into a worktree and print its
-    /// path, so `cd $(weft session new)` drops you into it.
+    /// path, so `cd $(weft session new)` drops you into it (or pass --shell).
     New {
         /// Session name (also its directory under `.weft-sessions/`).
         #[arg(default_value = weft_engine::session::DEFAULT_SESSION_NAME)]
@@ -527,6 +528,10 @@ enum SessionCmd {
         /// Use sequential prompts instead of the full-screen wizard.
         #[arg(long)]
         no_wizard: bool,
+        /// Open a shell in the new worktree once it is ready (`exit` returns
+        /// here); needs a terminal. `weft session shell` does the same later.
+        #[arg(long)]
+        shell: bool,
     },
     /// Link a directory you already have as a session's worktree, so code you
     /// wrote in a real project can be promoted back into patches. A project
@@ -592,6 +597,24 @@ enum SessionCmd {
         /// Template directory (defaults to the one found from here).
         #[arg(long)]
         template: Option<Utf8PathBuf>,
+    },
+    /// Open a shell in a session's worktree (`exit` returns here), or run
+    /// one command there: `weft session shell NAME -- code .`.
+    ///
+    /// The shell is `$SHELL`, else /bin/sh, with `WEFT_SESSION` naming the
+    /// session, and needs a terminal; a command after `--` runs without one,
+    /// and weft exits with its status (127 when it is not found). No program
+    /// can move the shell that started it, so this is a new shell: `cd
+    /// $(weft session path NAME)` stays in the current one.
+    Shell {
+        /// Session name (defaults to the one you are in, or the only one).
+        name: Option<String>,
+        /// Template directory (defaults to the one found from here).
+        #[arg(long)]
+        template: Option<Utf8PathBuf>,
+        /// A command to run in the worktree instead of a shell.
+        #[arg(last = true, value_name = "CMD")]
+        command: Vec<String>,
     },
     /// Move a session's worktree to another directory (like `git worktree
     /// move`). Moving it with `mv` also works — weft repairs the record.
@@ -1370,7 +1393,7 @@ fn main() -> anyhow::Result<()> {
                 let worktree =
                     weft_engine::amend::start(&opts, &mut resolver, interaction.as_mut())?;
                 resolver.flush()?;
-                weft_engine::amend::announce(&worktree, &opts.name);
+                shell::announce_amend(&opts.template, &opts.name, &worktree);
                 Ok(())
             }
         },
@@ -1450,9 +1473,14 @@ fn main() -> anyhow::Result<()> {
                 None
             };
             let here = scope.resolve()?;
+            let session = weft_engine::session::Session::load(&here.template, &here.session).ok();
             // An amend session's name is the amended patch: no name form.
-            let amending = weft_engine::session::Session::load(&here.template, &here.session)
-                .is_ok_and(|s| s.amend.is_some());
+            let amending = session.as_ref().is_some_and(|s| s.amend.is_some());
+            // Asked before committing: a commit that ends the session deletes
+            // the worktree the answer depends on.
+            let under_shell = session
+                .as_ref()
+                .is_some_and(|s| shell::stands_in(s, &here.template, &here.session));
             let (name, title, describe, when, tags) = match name {
                 Some(name) => (Some(name), title, describe, when, tags),
                 None if !amending && tui::interactive(no_tui) => {
@@ -1484,7 +1512,12 @@ fn main() -> anyhow::Result<()> {
             let mut resolver = source::RemoteResolver::new(hub::registry_url(None).ok(), false);
             let result = weft_engine::commit::run(&opts, &mut resolver, interaction.as_mut());
             resolver.flush()?;
-            result
+            result?;
+            if under_shell && !weft_engine::session::Session::exists(&opts.template, &opts.session)
+            {
+                shell::exit_hint();
+            }
+            Ok(())
         }
         Command::Diff {
             scope,
@@ -1694,7 +1727,16 @@ fn main() -> anyhow::Result<()> {
                 force,
                 non_interactive,
                 no_wizard,
+                shell: open_shell,
             } => {
+                // Refused before anything is rendered or written, so no
+                // half-made session is left behind.
+                if open_shell && !tui::interactive(false) {
+                    anyhow::bail!(
+                        "--shell opens a shell in the new worktree and needs a terminal; \
+                         drop it and `cd` into the path `weft session new` prints"
+                    );
+                }
                 let template = ctx::Scope {
                     template,
                     session: None,
@@ -1736,7 +1778,10 @@ fn main() -> anyhow::Result<()> {
                 let mut resolver = source::RemoteResolver::new(hub::registry_url(None).ok(), false);
                 let worktree = weft_engine::start::run(&opts, &mut resolver, interaction.as_mut())?;
                 resolver.flush()?;
-                weft_engine::start::announce(&opts.name, &worktree);
+                shell::announce_new(&opts.template, &opts.name, &worktree, open_shell);
+                if open_shell {
+                    shell::enter(&worktree, &opts.name, &[]);
+                }
                 Ok(())
             }
             SessionCmd::Adopt {
@@ -1844,6 +1889,34 @@ fn main() -> anyhow::Result<()> {
                 .resolve_or_only()?;
                 println!("{}", here.worktree);
                 Ok(())
+            }
+            SessionCmd::Shell {
+                name,
+                template,
+                command,
+            } => {
+                let here = ctx::Scope {
+                    template,
+                    session: name,
+                }
+                .resolve_or_only()?;
+                if !here.worktree.is_dir() {
+                    anyhow::bail!(
+                        "session `{0}` has no worktree at `{1}`; \
+                         `weft session end {0} --discard{2}` forgets it",
+                        here.session,
+                        here.worktree,
+                        shell::template_arg(&here.template)
+                    );
+                }
+                if command.is_empty() && !tui::interactive(false) {
+                    anyhow::bail!(
+                        "`weft session shell` without a command opens a shell and needs a \
+                         terminal; run one command there with `{} -- CMD`",
+                        shell::command_for(&here.template, &here.session)
+                    );
+                }
+                shell::enter(&here.worktree, &here.session, &command)
             }
             SessionCmd::Move {
                 name,
@@ -1961,6 +2034,7 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 let adopted = sess.session.adopted;
+                let under_shell = shell::stands_in(&sess, &here.template, &here.session);
                 sess.end(&here.template, &here.session)?;
                 eprintln!(
                     "session `{}` ended{}",
@@ -1971,6 +2045,9 @@ fn main() -> anyhow::Result<()> {
                         ""
                     }
                 );
+                if under_shell {
+                    shell::exit_hint();
+                }
                 Ok(())
             }
         },

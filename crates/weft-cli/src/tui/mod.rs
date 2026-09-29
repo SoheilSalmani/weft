@@ -8,9 +8,9 @@ pub mod widgets;
 
 use std::io::IsTerminal;
 
-/// Is a person at a terminal on both ends, and not opted out? Forms and the
-/// answers wizard read stdin and draw on stdout; inside `$(…)` or a pipe they
-/// would wait where nobody sees them.
+/// Is a person at a terminal on both ends, and not opted out? Forms, the
+/// answers wizard and an interactive `weft session shell` read stdin and draw
+/// on stdout; inside `$(…)` or a pipe they would wait where nobody sees them.
 pub fn interactive(no_tui: bool) -> bool {
     !no_tui && std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }

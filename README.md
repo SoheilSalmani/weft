@@ -107,6 +107,10 @@ cd $(weft session new makefile --template /tmp/tpl --answer "project_name=My Dem
 
 `weft session new` prints the worktree path, so `cd $(…)` puts you inside it.
 The name (`makefile`) is optional; leave it out and the session is `default`.
+To get a new shell in the worktree instead, add `--shell`; `exit` brings you
+back. `weft session shell makefile` opens one for a session that already
+exists, and `weft session shell makefile -- code .` runs a single command
+there, such as your editor.
 Edit with your normal tools — it's just files — then commit from there; weft
 finds the template by walking up, and paths are relative to where you stand:
 
