@@ -5,7 +5,7 @@ description: House conventions and the mental model for Weft, the record-based t
 
 # Weft conventions
 
-Weft is a personal project. No model has seen it in training and its documentation is not online, so nothing about it may be assumed from memory. Everything here was verified against `weft 0.1.0` on 2026-09-25, the composition facts again on 2026-09-27, after `extends` and include nodes landed, and session resolution on 2026-09-30. Where the docs and the binary disagree, the binary wins, and `weft <command> --help` is the check to run before relying on any flag. `references/cli.md` is the verified command sheet.
+Weft is a personal project. No model has seen it in training and its documentation is not online, so nothing about it may be assumed from memory. Everything here was verified against `weft 0.1.0` on 2026-09-25, the composition facts again on 2026-09-27, after `extends` and include nodes landed, and session resolution and session entry on 2026-09-30. Where the docs and the binary disagree, the binary wins, and `weft <command> --help` is the check to run before relying on any flag. `references/cli.md` is the verified command sheet.
 
 ## The model
 
@@ -38,7 +38,7 @@ These invocations, and the others in this skill, are how an agent runs weft unat
 
 Facts that shape the loop, all observed on the binary:
 
-- `weft session new` prints only the worktree path on stdout; everything else goes to stderr, so `cd $(…)` works where there is no terminal. In a terminal the answers wizard opens even when every question is answered on the command line, and inside `cd $(…)` it blocks where the person cannot see it: add `--no-wizard`, or run `weft session new` on its own and `cd` into the path it prints. `weft patch amend` prints a path relative to the template.
+- `weft session new` prints only the worktree path on stdout; everything else goes to stderr, so `cd $(…)` works with or without a terminal. `--exec` is the exception: the generator's output, and the editor a bare `--exec` opens, share that stdout, so run an `--exec` session on its own and `cd` into the path it prints last. The full-screen answers wizard opens only when stdin and stdout are both a terminal, even when every question is answered on the command line; inside `cd $(…)` it stays closed and anything missing is asked line by line on stderr. In a pseudo-terminal, `--no-wizard` or `--non-interactive` keeps it closed. `weft patch amend` prints a path relative to the template.
 - A commit that leaves nothing uncommitted ends the session and removes the worktree weft created. An adopted directory is only unlinked.
 - With changes left over, the next patch is a **sibling** by default when scripted: the base stays put and the committed content is peeled back out, so the two must commute. `--stack` builds the next patch on the one just committed. Adopted sessions always stack, and `--sibling` is refused there.
 - A patch whose `--when` is false under the session's answers cannot be committed while other changes remain. Record with answers that make the gate true, or give it its own session.

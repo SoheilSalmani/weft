@@ -8,8 +8,9 @@ pub mod widgets;
 
 use std::io::IsTerminal;
 
-/// Should a command open its completion form? Only in a real terminal and
-/// only when not explicitly disabled.
+/// Is a person at a terminal on both ends, and not opted out? Forms and the
+/// answers wizard read stdin and draw on stdout; inside `$(…)` or a pipe they
+/// would wait where nobody sees them.
 pub fn interactive(no_tui: bool) -> bool {
     !no_tui && std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }

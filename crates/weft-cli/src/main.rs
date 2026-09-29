@@ -965,8 +965,7 @@ fn main() -> anyhow::Result<()> {
                 }
             };
             if reconfigure {
-                use std::io::IsTerminal;
-                if non_interactive || !std::io::stdin().is_terminal() {
+                if !tui::interactive(non_interactive) {
                     anyhow::bail!(
                         "--reconfigure opens the answers wizard and needs a terminal; \
                          change answers with --answer ID=VALUE / --unset ID instead"
@@ -2298,9 +2297,12 @@ fn reconfigure_answers(
     Ok(())
 }
 
-/// Run the full-screen wizard when interactive (TTY, not --non-interactive,
-/// not --no-wizard) and stash its answers as the highest-precedence JSON
-/// layer. Falls through silently otherwise. Returns whether the wizard ran.
+/// Run the full-screen wizard when interactive (stdin and stdout both a
+/// terminal, not --non-interactive, not --no-wizard) and stash its answers as
+/// the highest-precedence JSON layer. Falls through silently otherwise, and
+/// missing answers are asked line by line on stderr: the wizard draws on
+/// stdout, which `cd $(weft session new)` captures, so opening it there would
+/// wait behind a blank screen. Returns whether the wizard ran.
 #[allow(clippy::too_many_arguments)]
 fn maybe_wizard(
     template_dir: &Utf8PathBuf,
@@ -2311,8 +2313,7 @@ fn maybe_wizard(
     non_interactive: bool,
     no_wizard: bool,
 ) -> anyhow::Result<bool> {
-    use std::io::IsTerminal;
-    if non_interactive || no_wizard || !std::io::stdin().is_terminal() {
+    if !tui::interactive(non_interactive || no_wizard) {
         return Ok(false);
     }
     let template = source::load_template(template_dir)?;

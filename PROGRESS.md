@@ -3,6 +3,21 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Fix — the answers wizard opened inside `$(…)`
+
+- **Bug**: `cd $(weft session new …)`, the documented way into a session,
+  hung for a person at a terminal. The wizard was gated on stdin alone and
+  draws on stdout, which `$(…)` captures, so it waited behind a blank screen
+  (in a pty: still blocked after 4 s, while `--no-wizard` returned the path
+  at once). The README's own tutorial line did this.
+- **Fix**: `maybe_wizard` and `update --reconfigure` now use
+  `tui::interactive`, the stdin-and-stdout check the forms already used.
+  Inside `$(…)` missing answers are asked line by line on stderr, as with
+  `--no-wizard`, and the capture holds only the path.
+- No regression test: the bug needs a pty and the e2e harness has none.
+  Smoke in a pty: `$(weft session new …)` returns the path with every answer
+  given and with one asked on stderr.
+
 ## Post-MVP — Worktree commands need a worktree (BREAKING)
 
 - **The reported pain, again** (the `weft add init` report under "Sessions
