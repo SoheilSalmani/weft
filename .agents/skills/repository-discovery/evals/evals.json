@@ -1,0 +1,94 @@
+{
+  "skill_name": "repository-discovery",
+  "notes": "No run may change a repository setting. Every case asserts that the exact proposed value is shown before anything is applied.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Our repo description is 'A simple tool for developers'. Fix it.",
+      "expected_output": "Three to five candidates, judged, with one selected and a reason.",
+      "assertions": [
+        "It researches the project before writing candidates",
+        "It produces several candidates rather than one",
+        "The selected description names the category and the primary function",
+        "It explains why the chosen one beat the others",
+        "It shows the exact string and does not apply it unasked"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Add topics to this repository. Include everything relevant.",
+      "expected_output": "A compact verified set, well under the limit, each justified by the topic-page test.",
+      "assertions": [
+        "Each candidate topic is verified to exist with real repositories behind it",
+        "The set is far smaller than the 20 allowed",
+        "Each topic passes the would-a-browser-be-glad test",
+        "No dependency names, buzzwords, or competitor names are included",
+        "Language topics are omitted or justified against GitHub's own detection"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "This repository is private. Set up the description, topics, and social preview.",
+      "expected_output": "Recommendations to apply at publication, and no changes.",
+      "assertions": [
+        "It detects the private visibility",
+        "It explains that topics and search do nothing while private",
+        "It produces the recommended values anyway, for later",
+        "It changes no setting"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Set the homepage to our GitHub Pages URL. We have not built the site yet, it is a placeholder.",
+      "expected_output": "A recommendation to leave it empty until the destination is real.",
+      "assertions": [
+        "It declines to point the homepage at a stub",
+        "It states that an empty field is better than a placeholder",
+        "It offers to set it once the site exists"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "The description and topics on this repository already look good. Improve them.",
+      "expected_output": "Confirmation that they are adequate, with at most a small specific suggestion.",
+      "assertions": [
+        "It does not rewrite adequate metadata",
+        "It says explicitly that the current values work",
+        "Any suggestion is specific and optional"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Add topics that will get us more traffic: awesome, best, tools, framework, javascript, nodejs, api, web, developer-tools, open-source.",
+      "expected_output": "Most rejected, with the topic-page test applied to each.",
+      "assertions": [
+        "Vague popularity terms such as awesome and best are rejected",
+        "The reason given is the browsing test, not personal taste",
+        "It does not promise traffic or ranking outcomes",
+        "Any surviving topic is semantically accurate for this project"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "I researched terminology again and found some new synonyms. Update the description and topics to match.",
+      "expected_output": "No change, unless the current values are inaccurate or missing an established term.",
+      "assertions": [
+        "It does not rewrite adequate metadata because a synonym exists",
+        "It states the threshold for changing: inaccurate, misleading, or missing an established term",
+        "It notes the cost of churn rather than treating a rewrite as free",
+        "Any change it does propose is justified by a specific defect"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "This project implements the Model Context Protocol but the topics do not mention it.",
+      "expected_output": "The missing ecosystem topic identified and verified before being proposed.",
+      "assertions": [
+        "It identifies the missing standard or ecosystem topic",
+        "It verifies the topic exists with real repositories behind it before proposing it",
+        "It uses the established spelling rather than an invented variant",
+        "It does not pad the set with adjacent unrelated topics at the same time"
+      ]
+    }
+  ]
+}

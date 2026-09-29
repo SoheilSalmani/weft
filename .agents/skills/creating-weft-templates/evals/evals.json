@@ -1,0 +1,89 @@
+{
+  "skill_name": "creating-weft-templates",
+  "notes": "Score the plan and the recording separately. A run that records everything in one patch or on latest fails even if the files are right. A run that asks which tool or which version fails. Every weft command must exist on the installed binary; check with --help. The agent must run weft check with answers after commits and scaffold once with hooks before claiming done.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Create a weft template for a FastAPI service.",
+      "expected_output": "First a check that no fastapi template already exists in the templates directory and that uv is installed. Then a written patch list (base via uv init --exec, app, ruff, pytest, ci gated on use_ci, docker gated on use_docker), a weft.toml with project_name, a computed package_name and the two use_* bools with defaults, a .weftignore covering .venv, uv.lock and caches, one session per patch with --base base, hooks verify-uv and uv-sync, a with-docker preset, AGENTS.md, and a scaffold whose import succeeds.",
+      "assertions": [
+        "Lists the patches with names, titles, gates and bases before starting a session",
+        "Records base with --exec and passes the project name to uv init explicitly",
+        "Declares no question for the package manager, linter, or Python version",
+        "Records ruff, pytest and ci with --base base rather than the default latest",
+        "Runs weft check with answers and with the preset, and scaffolds once with hooks to prove the result imports"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Bootstrap a template for Java apps. Ask the user which build tool and which Java version they want.",
+      "expected_output": "The agent declines the two questions and explains: the house build is Gradle with the Kotlin DSL and the Java version is pinned in the patch and bumped with weft patch amend so every project moves forward on weft update. It offers use_spring_boot and use_ci as the legitimate toggles and proceeds.",
+      "assertions": [
+        "Refuses to add a build_tool or java_version question, with the update-propagation reason",
+        "Still adds use_* toggles for optional features",
+        "Proceeds with the template rather than stopping at the disagreement"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Make a weft template out of my repo at ~/code/payments.",
+      "expected_output": "The agent routes to extracting-weft-templates: a real project exists, so the work is adopt, triage and promote, not a blank template.",
+      "assertions": [
+        "Does not run weft init and start recording from nothing",
+        "Names extracting-weft-templates as the right procedure and follows it"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "I already wrote the template's weft.toml and a base patch with uv init. Add the FastAPI app, linting and CI.",
+      "expected_output": "Three sessions against base (app, ruff, ci), the ci one recorded with use_ci=true and committed with --when; uv-sync hook on app with glob:pyproject.toml; weft check after each commit; nothing about base is redone.",
+      "assertions": [
+        "Does not re-record or amend base",
+        "Records the three increments as separate patches with --base base",
+        "Attaches the uv-sync hook to the patch that adds the dependency, not to base",
+        "Runs weft check with answers after committing"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Create a template for our Next.js sites where users can pick which shadcn components to install.",
+      "expected_output": "A multichoice components question, a pnpm root as base, the app as web, and one generated patch per component recorded with --exec 'pnpm dlx shadcn@latest add <name>' and committed with --when \"'<name>' in components\", because structural variation is split across gated patches rather than interpolated into one command.",
+      "assertions": [
+        "Uses a multichoice question for the components",
+        "Records one --exec patch per component with its own gate",
+        "Does not interpolate the whole list into a single generated patch",
+        "Adds node_modules/ to .weftignore before recording"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Create a fastapi template.",
+      "expected_output": "The agent finds ~/Desktop/Projects/templates/fastapi already exists and proposes extending it instead of creating a second one, listing what it lacks against the increment catalogue.",
+      "assertions": [
+        "Lists the templates directory before running weft init",
+        "Reports the existing template and does not create a duplicate",
+        "Proposes concrete increments to add to the existing one"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Set up a new Next.js project for me in ~/code/site.",
+      "expected_output": "Ordinary project setup with create-next-app, or a scaffold from an existing weft template if one fits. No template is authored; the skill does not fire.",
+      "assertions": [
+        "Does not run weft init",
+        "Either scaffolds from an existing template with weft new or sets the project up directly"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Write the weft.toml for a dbt template with a Snowflake connection.",
+      "expected_output": "A manifest with project_name, an adapter choice defaulting to duckdb or snowflake, the Snowflake DSN as a secret question sourced from env and gated on the adapter, and no question for the Python version or package manager. The agent then proposes the patch list (base, one connection patch per adapter) rather than stopping at the manifest.",
+      "assertions": [
+        "Credentials are a kind = \"secret\" question, not a string",
+        "The connection choice is one choice question, not several bools",
+        "No version or tooling question is added",
+        "The default for every optional question is set"
+      ]
+    }
+  ]
+}

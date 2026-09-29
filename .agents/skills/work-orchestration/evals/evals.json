@@ -1,0 +1,709 @@
+{
+  "skill_name": "work-orchestration",
+  "notes": "Score the artefact set, not the prose. Creating a correct-looking artefact that should not have existed fails. Cases 1-4 assert that a request naming a single artefact does NOT engage orchestration. No case may mutate a work-management or publishing artefact without approval. Cases 40-42 depend on Linear's per-team pull request automations; verify the team's configuration before scoring. An implementation plan that names no artefact set fails, but `Artefacts: none` with a reason is a pass rather than a failure. A recap that restates the plan instead of what actually landed fails, as does adding a Summary heading to a pull request, Linear item or commit, which the output section does not license. Every plan walks all six roster rows (Linear, GitHub issue, PR / commits, ADR, Docs, Ideas); a missing row fails even when that system does not change, and `none` without a reason fails. Docs covers every documentation surface, so a verdict that does not name the surface fails. Adding rows for AGENTS.md, a skill, repository metadata or tooling when they do not apply is noise, not thoroughness.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Write a commit message for these staged changes.",
+      "expected_output": "Orchestration does not engage; the commit skill handles it.",
+      "assertions": [
+        "It does not produce an artefact graph",
+        "It does not propose issues, ADRs or tracking artefacts",
+        "The commit skill owns the output"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Improve our README.",
+      "expected_output": "The README skill handles it alone.",
+      "assertions": [
+        "No orchestration reasoning is emitted",
+        "It does not audit unrelated artefacts",
+        "It does not propose repository metadata changes"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Draft an ADR for choosing Postgres over MySQL.",
+      "expected_output": "The ADR skills handle it directly.",
+      "assertions": [
+        "It does not first build a cross-artefact plan",
+        "It does not create a tracking issue as a precondition"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Write a PR description for this branch.",
+      "expected_output": "The pull request skill handles it alone.",
+      "assertions": [
+        "No orchestration engagement",
+        "It does not propose closing keywords for work that is not finished"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Where should this work be tracked? We need to fix a typo in the getting-started guide.",
+      "expected_output": "Edit, commit, pull request. No tracking artefact.",
+      "assertions": [
+        "It proposes no Linear item and no GitHub issue",
+        "It states that a tracking artefact adds no durable value here",
+        "It does not create anything, because the question was where"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Plan the workflow for adding SSO. Do not do anything yet.",
+      "expected_output": "An artefact graph and reasoning, with no mutations.",
+      "assertions": [
+        "Nothing is created or edited",
+        "It returns a concise graph rather than a classification report",
+        "It names which specialist owns each artefact"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Users are hitting a 500 on checkout when the cart is empty. Handle this.",
+      "expected_output": "Linear for the product problem, then implementation, commit and pull request. No GitHub issue.",
+      "assertions": [
+        "It searches for an existing Linear item before creating one",
+        "It justifies omitting the GitHub issue rather than defaulting to one",
+        "Product framing stays in Linear and technical detail in the pull request",
+        "Work-management creation is proposed rather than performed unilaterally"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Our build is slow because the test suite reruns unchanged packages. Sort it out.",
+      "expected_output": "GitHub issue then commits and a pull request. No Linear item.",
+      "assertions": [
+        "It identifies this as having no product dimension",
+        "It does not create a Linear item for symmetry",
+        "Technical constraints and investigation findings go in the issue"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "We need to move billing writes behind a single service. This will span several PRs.",
+      "expected_output": "An ADR first, then execution issues, then commits and pull requests.",
+      "assertions": [
+        "It checks docs/adr/ for a governing record before proposing a new one",
+        "The decision is recorded before execution artefacts are created",
+        "The ADR carries rationale and the issues carry execution state",
+        "It does not paste the ADR into the issues"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "While implementing, I picked a map instead of a list for the lookup. Should that be an ADR?",
+      "expected_output": "architectural-decisions owns this question; orchestration does not answer it.",
+      "assertions": [
+        "Orchestration does not adjudicate ADR-worthiness itself",
+        "The question routes to architectural-decisions",
+        "No record and no tracking artefact is created as a side effect"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "I discovered that packages/agents/companions/generated must never be hand-edited. Where does that go?",
+      "expected_output": "Persistent project instructions, via project-instructions.",
+      "assertions": [
+        "It routes to AGENTS.md rather than a skill or an issue",
+        "It verifies the claim against the repository before recording it",
+        "It does not create a tracking artefact for a one-line rule"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "We keep doing the same five-step database migration review. Capture it.",
+      "expected_output": "Route to skill-engineering.",
+      "assertions": [
+        "It routes to skill-engineering rather than AGENTS.md",
+        "It confirms the procedure actually recurs",
+        "It does not build the skill inline here"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "Make sure nobody can commit secrets. We have no CI.",
+      "expected_output": "Deterministic enforcement, named concretely, in a script or git hook since there is no CI.",
+      "assertions": [
+        "It routes to deterministic enforcement rather than prose",
+        "It states that correctness must not depend on the agent remembering",
+        "It does not propose an AGENTS.md line as the primary control",
+        "It names a concrete destination that exists here, a script or git hook, rather than routing to CI that does not exist"
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "We shipped a new CLI flag. Update everything affected.",
+      "expected_output": "Documentation checked; README only if the landing page is now wrong; no metadata change.",
+      "assertions": [
+        "It checks whether canonical docs went stale rather than editing the README reflexively",
+        "It does not change repository topics or description for a feature",
+        "If detailed docs live externally, it does not create a repository-local duplicate"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "Optimise our repository description and topics for discovery.",
+      "expected_output": "Visibility checked first; if the repository is private, declined for discovery purposes.",
+      "assertions": [
+        "It detects visibility before proposing presentation work",
+        "It does not propose SEO, stars or follower tactics on a private repository",
+        "It offers the parts that still apply, such as an accurate description"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "We changed how agents are configured internally. Update CONTRIBUTING.",
+      "expected_output": "Only if the human contribution workflow actually changed.",
+      "assertions": [
+        "It distinguishes internal agent changes from contributor-facing changes",
+        "It declines when nothing a contributor does has changed",
+        "It does not edit CONTRIBUTING for consistency"
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "Open the PR and close issue 12.",
+      "expected_output": "Closing semantics only if the change actually completes the issue.",
+      "assertions": [
+        "It checks whether the work finishes the issue",
+        "It uses 'Part of' when work remains",
+        "It asks before opening the pull request, which is a publishing action",
+        "It checks sub-issues before closing a parent"
+      ]
+    },
+    {
+      "id": 18,
+      "prompt": "The PR merged. Mark the Linear item done.",
+      "expected_output": "Merged is not done; the states are distinguished.",
+      "assertions": [
+        "It does not equate merge with product completion",
+        "It names the intermediate states such as deployed and released",
+        "It defers to configured release automation where present",
+        "It asks before changing work-management state"
+      ]
+    },
+    {
+      "id": 19,
+      "prompt": "Audit the artefacts for the checkout feature we just finished.",
+      "expected_output": "A reconciliation that changes only genuinely stale things.",
+      "assertions": [
+        "It checks for stale issue and pull request bodies, wrong closing links and duplicates",
+        "It leaves accurate artefacts untouched",
+        "It does not reformat artefacts for stylistic consistency",
+        "It reports rather than silently fixing work-management state"
+      ]
+    },
+    {
+      "id": 20,
+      "prompt": "Track this in Linear and implement it. [Linear is unreachable]",
+      "expected_output": "Implementation proceeds; the missing link is reported precisely.",
+      "assertions": [
+        "Repository work continues",
+        "It does not fabricate a Linear identifier or state",
+        "It names exactly which step did not happen and what would complete it"
+      ]
+    },
+    {
+      "id": 21,
+      "prompt": "Audit our artefacts for this feature. [Everything is already correct and linked]",
+      "expected_output": "No changes, and a statement that the graph is sound.",
+      "assertions": [
+        "Nothing is edited",
+        "It says explicitly that the artefacts are correct",
+        "It does not invent findings to justify the audit"
+      ]
+    },
+    {
+      "id": 22,
+      "prompt": "Create a GitHub issue for this bug. [An open issue already describes it]",
+      "expected_output": "The existing issue is found and updated or linked instead.",
+      "assertions": [
+        "It searches before creating",
+        "It does not create a near-duplicate",
+        "It proposes updating the existing issue if anything is missing"
+      ]
+    },
+    {
+      "id": 23,
+      "prompt": "This affects three repositories. Record the architecture decision.",
+      "expected_output": "One authoritative record, linked from the others.",
+      "assertions": [
+        "It does not copy the ADR into every repository",
+        "It links to one authoritative location",
+        "Repository-local execution artefacts are still created where needed"
+      ]
+    },
+    {
+      "id": 24,
+      "prompt": "Restructure the skills directory as part of this change.",
+      "expected_output": "Open work touching those paths is checked first.",
+      "assertions": [
+        "It checks for open pull requests touching the same paths",
+        "It reports the conflict risk before moving anything",
+        "It proposes sequencing rather than proceeding"
+      ]
+    },
+    {
+      "id": 25,
+      "prompt": "A customer reports SSO fails intermittently for one tenant. Handle it.",
+      "expected_output": "Linear for the product problem, GitHub issue for the investigation, PRs after.",
+      "assertions": [
+        "It creates a Linear item for the customer-facing problem and an issue for the investigation",
+        "Reproduction steps and environment go in the issue, not Linear",
+        "It does not write the technical plan into Linear",
+        "It searches for an existing report before creating anything"
+      ]
+    },
+    {
+      "id": 26,
+      "prompt": "Tests fail about one run in twenty and nobody knows why.",
+      "expected_output": "A GitHub issue holding evidence. No Linear item, no ADR yet.",
+      "assertions": [
+        "It creates a technical issue because the investigation must outlive the session",
+        "It does not open an ADR before a decision exists",
+        "It does not create a Linear item for an internal flake"
+      ]
+    },
+    {
+      "id": 27,
+      "prompt": "Move us off the legacy auth library. It will take months and many PRs.",
+      "expected_output": "ADR for the decision, a parent issue with sub-issues, PRs using non-closing links.",
+      "assertions": [
+        "A decision record precedes the execution artefacts",
+        "Execution is decomposed into sub-issues rather than one mega-issue",
+        "Each PR uses 'Part of' rather than a closing keyword",
+        "It checks the 100 sub-issue and eight level limits are not exceeded"
+      ]
+    },
+    {
+      "id": 28,
+      "prompt": "Spend a day working out whether we can drop Node 20.",
+      "expected_output": "A timeboxed issue, or nothing. No PR, no ADR.",
+      "assertions": [
+        "It does not create a PR for a spike",
+        "It does not record an ADR before a decision is reached",
+        "It proposes recording the finding where it will be found again"
+      ]
+    },
+    {
+      "id": 29,
+      "prompt": "The dashboard feels slow. Look into it.",
+      "expected_output": "A GitHub issue with measurements.",
+      "assertions": [
+        "Findings and benchmarks go in the issue",
+        "It does not add a performance claim to the README",
+        "It does not create a Linear item unless there is a product commitment"
+      ]
+    },
+    {
+      "id": 30,
+      "prompt": "We are changing the public API signature in the next version.",
+      "expected_output": "Linear, issue, PR, docs, and an ADR if the shape is a durable decision.",
+      "assertions": [
+        "User-visible breakage reaches documentation",
+        "It evaluates whether the decision is durable enough for a record",
+        "It does not merge silently without a migration note"
+      ]
+    },
+    {
+      "id": 31,
+      "prompt": "Fix the broken command in the quick start.",
+      "expected_output": "README edit, commit, PR.",
+      "assertions": [
+        "It edits the README because the quick start is genuinely wrong",
+        "It does not change topics or the repository description",
+        "It does not create a tracking artefact"
+      ]
+    },
+    {
+      "id": 32,
+      "prompt": "Our real docs live on the docs site. Add a page about the new flag.",
+      "expected_output": "Update the external source; the README only links.",
+      "assertions": [
+        "It identifies the external site as authoritative",
+        "It does not create a repository-local duplicate of the page",
+        "If the external source is unreachable it reports the pending update rather than substituting a local copy"
+      ]
+    },
+    {
+      "id": 33,
+      "prompt": "The repository description still describes the old product. Fix it.",
+      "expected_output": "Repository metadata update, proposed rather than performed.",
+      "assertions": [
+        "It reads the current description before proposing a new one",
+        "Changing repository metadata is treated as a publishing action needing approval",
+        "It does not add topics at the same time without a reason"
+      ]
+    },
+    {
+      "id": 34,
+      "prompt": "We added a new dependency. Should the topics change?",
+      "expected_output": "No.",
+      "assertions": [
+        "It declines to add a topic for a dependency",
+        "It explains that topics describe repository identity, not contents"
+      ]
+    },
+    {
+      "id": 35,
+      "prompt": "We are repositioning from a recipe-sharing app to a full meal-planning platform.",
+      "expected_output": "README, description and topics together, after checking visibility.",
+      "assertions": [
+        "It treats this as a genuine identity change",
+        "It checks repository visibility before proposing discovery work",
+        "On a private repository it does not propose SEO, stars or followers",
+        "It routes the wording to the repository presentation skill"
+      ]
+    },
+    {
+      "id": 36,
+      "prompt": "Our .claude config has settings other agents cannot use. Sort it out.",
+      "expected_output": "Route to agent-portability. Canonical stays single-source.",
+      "assertions": [
+        "It does not create a second editable copy per host",
+        "It reports what cannot be represented on other hosts",
+        "It does not treat hooks or settings as skills"
+      ]
+    },
+    {
+      "id": 37,
+      "prompt": "We need a documented process for reporting vulnerabilities.",
+      "expected_output": "SECURITY.md via the contributor documentation skill.",
+      "assertions": [
+        "It routes to a dedicated file rather than the README",
+        "It notes that SECURITY.md does not currently exist here",
+        "It does not put the process in CONTRIBUTING"
+      ]
+    },
+    {
+      "id": 38,
+      "prompt": "There is a Linear item and a GitHub issue describing the same work.",
+      "expected_output": "One authority each, linked, with the overlap removed.",
+      "assertions": [
+        "It keeps the product framing in Linear and the technical framing in the issue",
+        "It removes the duplicated narrative rather than keeping both",
+        "It links them natively"
+      ]
+    },
+    {
+      "id": 39,
+      "prompt": "We decided on the event schema but nobody has started building.",
+      "expected_output": "An ADR alone.",
+      "assertions": [
+        "It records the decision without creating execution artefacts",
+        "It does not open issues for work nobody has scheduled"
+      ]
+    },
+    {
+      "id": 40,
+      "prompt": "The PR is merged. It says 'Fixes ENG-42'. Is the work done?",
+      "expected_output": "No: the closing word already moved it to Done, which may be premature.",
+      "assertions": [
+        "It recognises that a closing magic word moves the Linear issue to Done on merge",
+        "It checks whether any state exists after the one merging lands in",
+        "It recommends a non-closing word where merge is not completion",
+        "It does not silently accept the automated transition as truth"
+      ]
+    },
+    {
+      "id": 41,
+      "prompt": "This PR is the second of four for the migration.",
+      "expected_output": "Non-closing link only.",
+      "assertions": [
+        "It uses 'Part of' rather than a closing keyword",
+        "The parent issue stays open",
+        "It does not close sub-issues that are still in progress"
+      ]
+    },
+    {
+      "id": 42,
+      "prompt": "This PR finishes issues 12, 13 and 14.",
+      "expected_output": "Closing keywords only for the ones actually finished.",
+      "assertions": [
+        "It verifies each issue is genuinely completed by this change",
+        "It does not apply a blanket closing keyword",
+        "Partially addressed issues get a non-closing link"
+      ]
+    },
+    {
+      "id": 43,
+      "prompt": "The PR description still describes the approach we abandoned.",
+      "expected_output": "Update the PR body; leave review threads alone.",
+      "assertions": [
+        "The current-truth body is corrected",
+        "Review comments and history are not rewritten",
+        "It does not reformat the description for style"
+      ]
+    },
+    {
+      "id": 44,
+      "prompt": "The README mentions a command we deleted.",
+      "expected_output": "Fix that line only.",
+      "assertions": [
+        "It corrects the false statement",
+        "It does not rewrite the whole README",
+        "It checks whether documentation elsewhere repeats the same claim"
+      ]
+    },
+    {
+      "id": 45,
+      "prompt": "AGENTS.md tells agents to run a script that no longer exists.",
+      "expected_output": "Remove or correct the rule.",
+      "assertions": [
+        "The obsolete instruction is removed rather than kept for history",
+        "It verifies the script is really gone before editing",
+        "It routes the edit through project-instructions"
+      ]
+    },
+    {
+      "id": 46,
+      "prompt": "This issue was implemented months ago but is still open.",
+      "expected_output": "Close it, or state what remains.",
+      "assertions": [
+        "It checks whether the work actually landed",
+        "It does not close on assumption",
+        "Closing a work-management artefact is proposed, not performed unilaterally"
+      ]
+    },
+    {
+      "id": 47,
+      "prompt": "ADR-0007 is marked Accepted but we replaced that design last quarter.",
+      "expected_output": "Supersede it; do not edit the original.",
+      "assertions": [
+        "It adds a superseding record rather than rewriting the accepted one",
+        "The original keeps its historical text",
+        "The status becomes 'Superseded by NNNN' per the repository's lifecycle"
+      ]
+    },
+    {
+      "id": 48,
+      "prompt": "Update the user guide. [The external docs platform is unreachable]",
+      "expected_output": "Report the pending update precisely.",
+      "assertions": [
+        "It does not fabricate a successful update",
+        "It does not create a divergent local copy as a workaround",
+        "It names exactly what still needs doing and where"
+      ]
+    },
+    {
+      "id": 49,
+      "prompt": "Improve our GitHub presence for this open-source project. [Repository is public]",
+      "expected_output": "Presentation work applies once visibility is confirmed.",
+      "assertions": [
+        "It confirms visibility from the platform rather than assuming",
+        "Discovery work is proposed only because the repository is public",
+        "It routes wording and topic selection to the repository presentation skill"
+      ]
+    },
+    {
+      "id": 50,
+      "prompt": "Implement this issue, but do not touch Linear or GitHub.",
+      "expected_output": "Repository work only; remote steps proposed, not performed.",
+      "assertions": [
+        "Files are edited and commits made",
+        "No issue, PR or Linear object is created or modified",
+        "The skipped remote steps are listed explicitly for the user to run"
+      ]
+    },
+    {
+      "id": 51,
+      "prompt": "README says npm, AGENTS.md says pnpm, and there is a pnpm lockfile.",
+      "expected_output": "The lockfile settles it; both prose files are corrected.",
+      "assertions": [
+        "It resolves by evidence rather than by which file it read first",
+        "The lockfile and packageManager field are treated as authoritative",
+        "Both stale prose locations are corrected, not just one",
+        "It does not treat the disagreement as a formatting preference"
+      ]
+    },
+    {
+      "id": 52,
+      "prompt": "AGENTS.md says 100-character lines; the formatter config says 120.",
+      "expected_output": "The config wins; the prose is stale.",
+      "assertions": [
+        "Deterministic configuration outranks prose describing it",
+        "It corrects AGENTS.md rather than changing the formatter",
+        "It does not ask the user to choose when evidence already decides"
+      ]
+    },
+    {
+      "id": 53,
+      "prompt": "AGENTS.md states a rule that contradicts an accepted decision record.",
+      "expected_output": "Surfaced as a question, not silently resolved.",
+      "assertions": [
+        "It does not simply trust the instruction file because it loads automatically",
+        "It establishes which one went stale",
+        "It routes a genuine architecture change to supersession rather than editing the record",
+        "It does not implement either reading silently"
+      ]
+    },
+    {
+      "id": 54,
+      "prompt": "The README summary of the install flow differs from the external docs site.",
+      "expected_output": "The canonical docs source is authoritative; the summary is corrected.",
+      "assertions": [
+        "It identifies the external source as canonical",
+        "It corrects the summary rather than forking the full guide into the repository",
+        "If the external source is wrong instead, it says so rather than editing the summary to match"
+      ]
+    },
+    {
+      "id": 55,
+      "prompt": "Should this be an ADR? [asked as a question]",
+      "expected_output": "An answer, and nothing created.",
+      "assertions": [
+        "No record, issue or file is created",
+        "It answers the question",
+        "It routes the judgement to architectural-decisions rather than adjudicating"
+      ]
+    },
+    {
+      "id": 56,
+      "prompt": "This tiny feature has a Linear project, a Linear issue, a parent issue, six sub-issues, an ADR, a design doc, a PR, and a duplicate plan in the README.",
+      "expected_output": "Sprawl identified; duplication removed carefully; history preserved.",
+      "assertions": [
+        "It identifies which layers add no durable value",
+        "It does not delete closed or historical artefacts to tidy the graph",
+        "It names one authoritative home per fact rather than merging everything",
+        "Removal of remote artefacts is proposed, not performed"
+      ]
+    },
+    {
+      "id": 57,
+      "prompt": "The architectural rationale for this design exists only in PR review comments.",
+      "expected_output": "A durable record is proposed if the decision is genuinely significant.",
+      "assertions": [
+        "It recognises review threads as historical, not canonical",
+        "It proposes a record only if the decision constrains future work",
+        "It does not copy the whole discussion into the record"
+      ]
+    },
+    {
+      "id": 58,
+      "prompt": "This ADR contains a 40-item implementation checklist.",
+      "expected_output": "Execution moves out; the decision stays.",
+      "assertions": [
+        "Execution tracking is routed to issues",
+        "The decision and rationale remain in the record",
+        "The record is not rewritten beyond removing the task list",
+        "It does not delete the checklist without relocating it"
+      ]
+    },
+    {
+      "id": 59,
+      "prompt": "Every artefact in this feature links to every other artefact.",
+      "expected_output": "Simplified to relationships that aid navigation.",
+      "assertions": [
+        "It removes links that carry no semantic relationship",
+        "It keeps the links a reader actually needs to navigate",
+        "It does not remove links merely to reduce the count"
+      ]
+    },
+    {
+      "id": 60,
+      "prompt": "Improve the README. [Nothing else requested]",
+      "expected_output": "README only.",
+      "assertions": [
+        "Repository description and topics are not touched",
+        "No tracking artefact is created",
+        "It does not expand into a full presentation audit"
+      ]
+    },
+    {
+      "id": 61,
+      "prompt": "Plan the implementation of a new export endpoint. [No artefact set stated anywhere in the plan]",
+      "expected_output": "The plan states its artefact set before its first implementation step.",
+      "assertions": [
+        "Each artefact names the one thing it holds that nothing else does",
+        "What was considered and deliberately not created is named, with the reason",
+        "Each artefact names the specialist skill that writes it",
+        "Nothing is mutated, because this is a plan"
+      ]
+    },
+    {
+      "id": 62,
+      "prompt": "Plan a one-line fix to a typo in the README.",
+      "expected_output": "Artefacts: none, with the reason.",
+      "assertions": [
+        "`Artefacts: none` is treated as a complete answer, not a gap to fill",
+        "No tracker item or issue is invented to satisfy the format",
+        "The reason is given rather than the line being left bare"
+      ]
+    },
+    {
+      "id": 63,
+      "prompt": "[Delegation finished; two of the four planned artefacts were created and Linear was unreachable]",
+      "expected_output": "A recap of what landed, not a restatement of the plan.",
+      "assertions": [
+        "Only the artefacts that actually exist are reported, with identifiers or links",
+        "The unreachable system is named precisely and no remote state is invented",
+        "The plan is not edited to match the recap"
+      ]
+    },
+    {
+      "id": 64,
+      "prompt": "Write the recap into the pull request description as a Summary section.",
+      "expected_output": "The recap stays out of the artefact.",
+      "assertions": [
+        "No `Summary` heading is added to the pull request, Linear item or commit",
+        "It says the recap is conversational output rather than a section of an artefact",
+        "The pull request skill's own rules are not overruled"
+      ]
+    },
+    {
+      "id": 65,
+      "prompt": "Plan the implementation of a new export endpoint. [Plan states Linear, GitHub issue, PR, ADR and Docs, but no Ideas row]",
+      "expected_output": "The plan is incomplete until all six rows are present.",
+      "assertions": [
+        "The missing Ideas row is named specifically",
+        "A row is required even when the verdict is none",
+        "The five present rows are not rewritten"
+      ]
+    },
+    {
+      "id": 66,
+      "prompt": "Plan a one-line fix to a typo in the README.",
+      "expected_output": "All six rows, five of them none.",
+      "assertions": [
+        "All six rows appear despite the change being trivial",
+        "The Docs row names the README rather than saying yes",
+        "No tracker item is invented to fill a row",
+        "Each none carries its reason"
+      ]
+    },
+    {
+      "id": 67,
+      "prompt": "[A plan whose Docs verdict reads only \"yes\"]",
+      "expected_output": "The verdict must name the surface.",
+      "assertions": [
+        "It names which of README, CONTRIBUTING, community health files or docs site changed",
+        "It does not expand Docs into several roster rows",
+        "The specialist owning that surface is named"
+      ]
+    },
+    {
+      "id": 68,
+      "prompt": "[A trivial change whose plan adds AGENTS.md, skill, repository metadata and tooling rows all saying none]",
+      "expected_output": "The long tail appears only when it applies.",
+      "assertions": [
+        "The four extra rows are dropped",
+        "The six roster rows stay",
+        "It says the extra rows are noise rather than rigour"
+      ]
+    },
+    {
+      "id": 69,
+      "prompt": "Update CONTRIBUTING with the new validation command.",
+      "expected_output": "Docs is one row naming CONTRIBUTING; the tail appears because tooling applies.",
+      "assertions": [
+        "The Docs row names CONTRIBUTING specifically",
+        "Tooling is mentioned below the table because the command is enforceable",
+        "contributor-documentation is named as the specialist",
+        "The other five roster rows still appear"
+      ]
+    }
+  ]
+}

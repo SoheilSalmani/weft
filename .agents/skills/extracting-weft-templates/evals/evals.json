@@ -1,0 +1,88 @@
+{
+  "skill_name": "extracting-weft-templates",
+  "notes": "Score triage and mechanics separately. Promoting product code, a lockfile or a .env fails. Editing the user's real project down to a skeleton fails. Adopting without --scope and committing one big patch fails. Every command must exist on the installed weft; --sibling on an adopted session is a known refusal. The coverage diff must be produced and read.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Turn ~/code/payments (a FastAPI service) into a weft template.",
+      "expected_output": "The agent checks .weft/state.toml (absent) and the templates directory, copies the project to a disposable directory, declares project_name (answer Payments), a computed package_name, use_docker and use_ci, seeds .weftignore from .gitignore plus uv.lock, adopts the copy with a scope covering pyproject.toml, main.py, README.md, .gitignore, Dockerfile and .github/**, trims pyproject.toml and main.py of stripe and the charge route, commits base, docker (--when use_docker) and ci (--when use_ci --depends-on base), adds verify-uv and uv-sync hooks from the Makefile, then renders fresh and diffs against the project, reporting src/, tests/, .env and Makefile as what stayed behind.",
+      "assertions": [
+        "Works on a copy, not on ~/code/payments itself",
+        "Passes --scope on adopt and answers the gates true",
+        "Trims product dependencies and routes before staging rather than promoting them",
+        "Uses --depends-on base to keep ci independent of docker",
+        "Does not promote .env, uv.lock, src/ or tests/",
+        "Runs the coverage diff and reads it back"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I added a nice Dockerfile to the orders project that weft scaffolded from the fastapi template. Get it into the template.",
+      "expected_output": "weft session adopt . -n docker inside the project with no further arguments, weft status showing the Dockerfile as the drift, weft add Dockerfile, weft commit --name docker --title 'Docker image' --describe ... --when use_docker --yes if the template has that gate (or adding the use_docker question first), weft check, and the session ended with --discard so the project stays untouched.",
+      "assertions": [
+        "Adopts in place with no --template or answers, because .weft/state.toml supplies them",
+        "Stages only the Dockerfile",
+        "Ends the session without deleting anything from the project",
+        "Runs weft check with the gate on"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Extract a template from this repo. Just commit everything as one patch, I'll split it later.",
+      "expected_output": "The agent pushes back: one patch of a whole project cannot be split later (no weft patch split exists; amend-and-re-record is the only path) and would carry product code and secrets. It proposes the scoped, per-concern promotion and does that. If the user insists, it still excludes secrets, lockfiles and product code and says what it left out.",
+      "assertions": [
+        "Explains that patch split does not exist and why one patch is a trap",
+        "Proposes the per-concern procedure",
+        "Never promotes .env or lockfiles even under instruction"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Promote the auth module from my scaffolded app back into the template.",
+      "expected_output": "The agent asks the triage question first: an auth module is product unless every project of this template needs the same one. If it is generic (a Better Auth wiring package), it adopts in place, stages the module's files, commits it as an auth patch gated on use_auth with a secret question for the secret key, and adds the migration hooks. If it is product-specific it says so and stops.",
+      "assertions": [
+        "Applies the generic-versus-product test before promoting",
+        "Turns any secret in the module into a kind = \"secret\" question",
+        "Gates the patch on a use_* bool and commits with --when"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Create a weft template for Python services. We don't have one yet and I have no project to start from.",
+      "expected_output": "The agent routes to creating-weft-templates: nothing to adopt, so the work is a planned list of increments recorded from generators.",
+      "assertions": [
+        "Does not run weft session adopt",
+        "Names creating-weft-templates and follows that procedure"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Copy the CI workflow from the payments repo into the orders repo.",
+      "expected_output": "A file copy between two projects. No template is involved and the skill stays quiet.",
+      "assertions": [
+        "No weft command is proposed",
+        "The file is copied or adapted directly"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "The fastapi template already has base, docker and ci patches. My new project only differs in product code. Anything to promote?",
+      "expected_output": "The agent adopts in place, reads weft status, finds only product files drifted, and reports that nothing is worth promoting. It ends the session with --discard and changes nothing.",
+      "assertions": [
+        "Runs weft status and interprets it as a drift report",
+        "Concludes there is nothing generic and records no patch",
+        "Leaves the project untouched"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Adopt ~/code/legacy-api into the svc template and promote its Makefile.",
+      "expected_output": "The agent reads the Makefile and explains that its setup targets become hooks (verify-uv, uv-sync with glob:pyproject.toml) on the patches that own the files, the deploy target becomes a deploy hook gated on an explicit bool, and the run/test targets stay in the project; the Makefile itself is not promoted unless the house ships Makefiles.",
+      "assertions": [
+        "Maps setup targets to hooks with the right phase, effect and inputs",
+        "Gates any deploy target on an explicit bool defaulting to False",
+        "Does not promote the Makefile as a file without a reason"
+      ]
+    }
+  ]
+}

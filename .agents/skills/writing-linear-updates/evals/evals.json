@@ -1,0 +1,43 @@
+{
+  "skill_name": "writing-linear-updates",
+  "notes": "Each run must produce a draft only. Posting an update also posts to any connected Slack channel, so 'does not post without approval' is an assertion, not a preference.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Write this week's update for the registry project. Since last Wednesday we finished the API work so that milestone is done, but browse is blocked because the search index needs a schema change nobody has scoped. Target is 12 September.",
+      "expected_output": "A five to eight line update opening with a health value, stating what changed with dates, saying what it means for the target date, naming the blocker, and giving the next checkpoint.",
+      "assertions": [
+        "Health is atRisk or offTrack, not onTrack, because an unscoped blocker exists",
+        "The update states what changed since the previous update rather than describing the project",
+        "It addresses the target date explicitly, either confirming it or moving it",
+        "It contains no percentage and no issue count",
+        "All dates are absolute",
+        "It does not restate the project description",
+        "It is drafted and shown, not posted without approval"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Can you post the weekly update for Billing platform foundations? I don't think much happened this week.",
+      "expected_output": "Either a recommendation to post nothing, or a two-line update naming the blocker and its age, with a health value that does not claim health.",
+      "assertions": [
+        "The response does not manufacture progress",
+        "It either recommends posting nothing or produces an update of at most a few lines",
+        "If an update is produced, health is not onTrack while a blocker is described",
+        "It does not list issues that were already completed in an earlier period",
+        "It checks the workspace for what actually changed rather than accepting the user's impression as the only input"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Give me an initiative update for the enterprise sign-in initiative. The two projects under it both posted updates this week.",
+      "expected_output": "Either a cross-project judgement, or a statement that no initiative update is warranted because it would concatenate the project updates.",
+      "assertions": [
+        "The response either supplies a cross-project judgement such as sequencing or reallocation, or explains that an initiative update is not warranted",
+        "It does not simply concatenate or summarise the two project updates",
+        "Any health value proposed is justified from the facts listed",
+        "Nothing is posted without approval"
+      ]
+    }
+  ]
+}

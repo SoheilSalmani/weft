@@ -1,0 +1,147 @@
+{
+  "skill_name": "weft-conventions",
+  "notes": "Score two things separately: whether the agent applied the house rules (one increment per patch, noun names, noun-phrase titles, sentence descriptions, no tool or version questions, hooks on the owning patch) and whether every weft command it ran or proposed exists on the installed binary. A run that invents a flag, a field, or a weft record command fails regardless of the rest. Negative cases must produce no Weft advice at all.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Add a Dockerfile to this weft template, only when the user wants one.",
+      "expected_output": "A recorded patch named docker, gated on a use_docker bool question with default False, recorded in its own session against base with a distinctive project_name answer and use_docker=true, titled 'Docker image' with a sentence description, followed by weft check under both gate values.",
+      "assertions": [
+        "Adds a [[question]] with id use_docker, kind bool, a prompt ending in ?, and default \"False\" before recording",
+        "Uses weft session new with --base base and an answer that makes the gate true, not the default latest",
+        "Commits with --name docker, --title as a noun phrase, --describe as a sentence, and --when use_docker",
+        "Runs weft check with use_docker=true and with the default answers",
+        "Does not hand-write patches/docker.json"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Rename the initialize-fastapi patch and give it a proper title and description.",
+      "expected_output": "The file is renamed to base.json, every depends_on that said initialize-fastapi is updated, the title becomes a noun phrase such as 'uv project with FastAPI', the description a third-person sentence ending with a period, applied with weft patch set, and weft check runs afterwards.",
+      "assertions": [
+        "Renames with mv and fixes depends_on references by name, stating that ids do not change",
+        "Uses weft patch set for the title and description rather than editing JSON",
+        "The proposed title is a noun phrase without a verb and without a trailing period",
+        "Runs weft check after the change"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Should I add a question for the Python version to the fastapi template?",
+      "expected_output": "No. The version is pinned in the patch (requires-python, .python-version) and bumped with weft patch amend so weft update carries every project forward; a version question freezes divergence into each project's state.",
+      "assertions": [
+        "Answers no and gives the update-propagation reason",
+        "Names weft patch amend as the way to bump the pin",
+        "Does not propose a choice or string question for the version"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "The docker and ci patches both append to README.md and weft check says they don't commute. Fix it.",
+      "expected_output": "Either one patch is re-recorded against the other (weft session new ci --base docker, or weft commit --depends-on docker) so the dependency is explicit, or the two hunks are moved at least three lines apart so they anchor on different context. The agent explains that independent patches must commute and that the context radius is two lines.",
+      "assertions": [
+        "Explains the commutation rule and why two appends to the same spot conflict",
+        "Offers the dependency fix with the correct flags (--base or --depends-on)",
+        "Offers the alternative of separating the hunks so they stay independent",
+        "Runs weft check again after the fix"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Bump the pinned Spring Boot version in the java template from 3.4 to 3.5.",
+      "expected_output": "weft patch amend spring-boot, edit build.gradle.kts in the scratch worktree, weft commit --yes, then weft check; the agent states that the spring-boot id and its descendants' ids change and that scaffolded projects pick the change up on weft update.",
+      "assertions": [
+        "Uses weft patch amend rather than recording a new patch or hand-editing ops",
+        "States that dependent patches replay and any broken anchor is reported by commit",
+        "Does not create a spring-boot-v2 patch"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Our template needs uv installed before scaffolding and should run uv sync afterwards. Wire that up.",
+      "expected_output": "Two hooks added with weft hook add and --no-tui: verify-uv as pre/check with action 'command -v uv' on the patch that introduces uv, and uv-sync as post/setup with 'uv lock && uv sync' and --input glob:pyproject.toml on the patch whose files it reads; weft hook ls to confirm order.",
+      "assertions": [
+        "Hook ids follow verify-<tool> and <tool>-<verb>",
+        "The setup hook declares an inputs glob so weft update re-fires it",
+        "Hooks are attached to the patches that own the tool and the manifest, not to an arbitrary patch",
+        "Does not edit weft.toml for hooks and does not mention a [[task]] table"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Commit my changes in this repo.",
+      "expected_output": "Ordinary git work. The skill does not fire; nothing about weft appears.",
+      "assertions": [
+        "No weft command is proposed",
+        "The response concerns git only"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Generate a project from this cookiecutter template with the defaults.",
+      "expected_output": "Cookiecutter usage. The skill stays quiet; the agent does not translate the request into weft.",
+      "assertions": [
+        "No weft command or concept is mentioned",
+        "The agent runs or explains cookiecutter"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Apply this patch file to the repo: 0001-fix-offset.patch",
+      "expected_output": "git apply or git am. 'patch' here is a git patch, not a weft patch.",
+      "assertions": [
+        "Recognises a git-format patch and does not invoke weft",
+        "Does not mention weft.toml or sessions"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Review patches/ci.json in this template.",
+      "expected_output": "A review against the house rules: one concern, noun name, noun-phrase title, sentence description, a gate only if the feature is optional, hooks on this patch if it introduces a tool, no lockfile or secret literal, and whether weft check passes with each preset. If the patch already meets them, the review says so and changes nothing.",
+      "assertions": [
+        "Checks name, title, description and gate against the conventions",
+        "Runs or asks for weft check with answers rather than reasoning about commutation from the JSON alone",
+        "If the patch is already fine, says so and does not rewrite it"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Scaffold the fastapi template into ~/code/orders for me.",
+      "expected_output": "weft describe --json first to learn the required answers, then weft new with --answers-json or --answer flags, --non-interactive, and the hooks listed with their effects so the user knows what will run; deploy hooks are pointed out before running.",
+      "assertions": [
+        "Reads the contract with weft describe --json before answering",
+        "Does not answer computed questions or secrets",
+        "Uses --non-interactive and states which hooks will run"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "Add a `{{ project_name }}` placeholder to the README in the template so it gets filled in.",
+      "expected_output": "The agent explains that weft has no template syntax: the README is edited with the concrete value in a session worktree and weft commit turns occurrences of the project_name answer into references. It performs the edit that way.",
+      "assertions": [
+        "Refuses to write {{ }} syntax into a file",
+        "Records the concrete value in a session and relies on abstraction at commit",
+        "Names the answer that will be abstracted"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "Can I put this patch that installs our agent skills into both the java and the fastapi templates?",
+      "expected_output": "Yes, as a portable patch, which is how the house shares root-level files today: if it has no depends_on and only create_file ops at paths nothing else touches, copy the JSON file into each template's patches/; it becomes a second root, keeps the same id everywhere, and weft check proves it commutes. The agent may mention that extends is the engine's mechanism for a shared base, without migrating the templates.",
+      "assertions": [
+        "States the two constraints (no depends_on, only new files at untouched paths)",
+        "Does not claim that weft has no way to share a base or to mount at the root",
+        "Runs weft check in each template after copying"
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "What does `weft record` do?",
+      "expected_output": "It no longer exists; the command is weft session new NAME, and the agent checks weft --help on the installed binary rather than trusting older docs or the usage.author lines from weft describe.",
+      "assertions": [
+        "Says weft record was replaced by weft session new",
+        "Verifies against weft --help rather than asserting from memory"
+      ]
+    }
+  ]
+}

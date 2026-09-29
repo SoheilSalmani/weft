@@ -1,0 +1,141 @@
+{
+  "skill_name": "designing-clis",
+  "notes": "Score what a caller would experience, not how much advice is given. A design or fix that lets a prompt block without a terminal, puts anything but data on stdout, exits 0 on failure, or takes a secret as a flag value fails outright. So does treating an unattended run's prompt default as consent, and relaxing a safety check because an agent was detected. A review fails if its findings are not backed by a command that was run or a path:line, if it proposes a breaking change without naming what breaks and offering an alias or asking, or if it invents findings for a CLI that already meets the bar. Adding config files, telemetry, completions or man pages to a small tool that did not ask for them is a failure of proportion. In the co-loaded case, an unattended-run flag in an example meant for people fails, as does help text and README prose that disagree; a README that points to --help rather than repeating it is fine.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Design the command-line interface for notesync, a Rust (clap) tool that syncs a local folder of Markdown notes with a remote notes service over HTTPS. Users log in with an API token, push local changes, pull remote changes, see what is out of sync, and resolve conflicts. It will be used by people at a terminal, in cron jobs, and by coding agents. Produce the spec a developer would implement; no code.",
+      "expected_output": "A spec whose streams, exit codes, prompts, secrets and machine output are all decided explicitly.",
+      "assertions": [
+        "Results go to stdout and progress, warnings, errors and prompts go to stderr",
+        "Every prompt has a flag, and without a terminal the command fails fast naming that flag instead of prompting",
+        "Deleting or overwriting notes in bulk without a terminal requires an explicit flag, in both directions; a prompt default is never taken as consent",
+        "The API token cannot be passed as a flag value; it comes from a file, stdin, a credential store or an environment variable",
+        "Exit codes are listed: 0 only for success, 2 for usage errors, and any specific codes (such as conflicts) documented and below 126",
+        "Commands that return data have --json (or an equivalent), with a rule for evolving it without breaking callers",
+        "push and pull support a dry run",
+        "Colour is disabled when not a terminal and when NO_COLOR is non-empty",
+        "Ctrl-C behaviour and safe re-running after an interruption are specified"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Judge our CLI against CLI best practices and tell me what you would change. [An existing multi-command CLI with its source and a built binary.]",
+      "expected_output": "A ranked, evidenced review from probes run against the real binary, with the compatibility cost of each change.",
+      "assertions": [
+        "It runs --help, --version, an unknown flag, a non-terminal run, NO_COLOR, --json validity and a closed-pipe probe against the binary, and lists the checks it ran",
+        "Where the CLI turns names into file paths or takes patterns, it tries a name containing ../ and an argument that matches nothing",
+        "Every finding cites a command and its observed output, or a path:line",
+        "Findings are ranked with hangs and silently wrong results for scripts and agents first",
+        "Each proposed change states what it would break for existing callers",
+        "It says what the CLI already does well",
+        "Mutating commands are run only on copies in a scratch directory"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Review this CLI before I publish it.\n\n```python\n#!/usr/bin/env python3\n\"\"\"Print the SHA-256 of each file.\"\"\"\nimport argparse\nimport hashlib\nimport os\nimport signal\nimport sys\n\n\ndef digest(stream) -> str:\n    sha = hashlib.sha256()\n    for chunk in iter(lambda: stream.read(1 << 16), b\"\"):\n        sha.update(chunk)\n    return sha.hexdigest()\n\n\ndef main() -> int:\n    parser = argparse.ArgumentParser(\n        prog=\"sha\",\n        description=\"Print the SHA-256 of each file.\",\n        epilog=\"example: sha *.tar.gz | sort\",\n    )\n    parser.add_argument(\"files\", nargs=\"+\", help=\"files to hash, or - for stdin\")\n    parser.add_argument(\"--version\", action=\"version\", version=\"sha 1.0.0\")\n    args = parser.parse_args()\n    # Write undecodable file names back out as the bytes the user passed.\n    sys.stdout.reconfigure(errors=\"surrogateescape\")\n    sys.stderr.reconfigure(errors=\"surrogateescape\")\n    status = 0\n    for name in args.files:\n        try:\n            if name == \"-\":\n                value = digest(sys.stdin.buffer)\n            else:\n                with open(name, \"rb\") as stream:\n                    value = digest(stream)\n        except OSError as err:\n            print(f\"sha: {name}: {err.strerror}\", file=sys.stderr)\n            status = 1\n            continue\n        if \"\\\\\" in name or \"\\n\" in name:\n            escaped = name.replace(\"\\\\\", \"\\\\\\\\\").replace(\"\\n\", \"\\\\n\")\n            print(f\"\\\\{value}  {escaped}\")\n        else:\n            print(f\"{value}  {name}\")\n    return status\n\n\nif __name__ == \"__main__\":\n    try:\n        sys.exit(main())\n    except BrokenPipeError:\n        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())\n        sys.exit(1)\n    except KeyboardInterrupt:\n        signal.signal(signal.SIGINT, signal.SIG_DFL)\n        os.kill(os.getpid(), signal.SIGINT)\n```",
+      "expected_output": "It already meets the bar for a small tool: no new features and no restructuring, at most an evidenced edge-case fix or an optional note.",
+      "assertions": [
+        "It proposes no config file, JSON output, colour, completions, subcommands or telemetry",
+        "It does not restructure the script",
+        "Every defect it reports is backed by a command it ran or is labelled as inference, and anything that is not a defect is marked optional",
+        "It says what already works"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Open a pull request for this branch with gh, and give it a good title.",
+      "expected_output": "The skill does not load; this is using a CLI, not designing one.",
+      "assertions": [
+        "No CLI design advice is given",
+        "The work is left to the pull request conventions"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Add a verbose flag to this 30-line backup script I run by hand from my laptop.",
+      "expected_output": "A -v/--verbose flag whose extra output goes to stderr, and nothing else added.",
+      "assertions": [
+        "The flag is -v/--verbose, and its extra output goes to stderr",
+        "No config file, JSON mode, colour handling, completions or new subcommands are added",
+        "Existing behaviour without the flag is unchanged"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Rename the --out flag to --output across our CLI; --out looks sloppy.",
+      "expected_output": "--output added, --out kept as a hidden deprecated alias, callers found.",
+      "assertions": [
+        "It searches the repository, CI and docs for uses of --out before changing it",
+        "--out keeps working, hidden from help, and prints a deprecation warning on stderr naming --output",
+        "It records the removal plan, for example in the changelog",
+        "It does not reuse --out for anything else"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Our Rust CLI panics with \"failed printing to stdout: Broken pipe\" when someone runs it into head. Fix it.",
+      "expected_output": "A clean exit when the reader goes away, without hiding other write errors.",
+      "assertions": [
+        "It explains that Rust ignores SIGPIPE so println! panics on EPIPE",
+        "The fix either handles ErrorKind::BrokenPipe from writeln! as a clean exit or restores SIGPIPE to SIG_DFL at the start of main",
+        "Other I/O errors are still reported",
+        "It verifies the fix by running the binary into head"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Coding agents keep hanging on the confirmation prompt of our deploy command. Make it work for them.",
+      "expected_output": "Prompt only with a terminal; otherwise fail fast naming --yes; no auto-approval for agents.",
+      "assertions": [
+        "Without a terminal the command fails immediately with a non-zero exit and an error naming the flag (such as --yes) that confirms",
+        "It does not make detected agents auto-confirm, and does not treat the prompt's default as consent",
+        "It adds or keeps a flag and an environment variable that disable prompts",
+        "It notes that some agent harnesses run in a pseudo-terminal, so the flag must be discoverable from --help and the error"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Add --json to `tool list` so scripts can read it.",
+      "expected_output": "Pure JSON on stdout with a stable, additive shape.",
+      "assertions": [
+        "In JSON mode stdout contains only the JSON document; progress and warnings go to stderr",
+        "Field names and types are treated as a contract, with additions only and a version for breaking changes",
+        "Timestamps are ISO 8601 with an offset, and values are not localised text",
+        "Failures still exit non-zero, and where the error goes is stated"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Make my CLI better.",
+      "expected_output": "It locates the CLI or asks which one before recommending anything.",
+      "assertions": [
+        "It finds the CLI in the repository or asks which CLI and where it lives",
+        "It does not invent commands, flags or behaviour it has not observed",
+        "Any recommendation is grounded in --help output or source it read"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Add a `remove` subcommand for templates to our CLI. [The CLI already uses `delete` for other nouns, and -f means --file everywhere.]",
+      "expected_output": "It follows the CLI's verb and flag conventions and raises the naming conflict.",
+      "assertions": [
+        "It notices that the CLI uses delete for other nouns and proposes delete, or asks, rather than silently adding a synonym",
+        "It does not give -f a second meaning such as --force",
+        "Deletion asks for confirmation on a terminal and needs an explicit flag without one"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "Write the --help text for `notesync sync` and the matching Usage section of the project README. [writing-repository-readmes loads alongside this skill.]",
+      "expected_output": "Help text and a README section that agree, written for a person, with the unattended-run flags documented but kept out of the person's examples.",
+      "assertions": [
+        "The help text opens with a usage line and a one-sentence description, then at least one example, then the flags, each with what it does and its default",
+        "No example meant for a person carries --no-input, --yes or --json, unless the example is labelled as automation such as a cron or CI job",
+        "Wherever the README and the help text both state a flag, default or exit code, they agree; the README may point to --help instead of repeating the full list",
+        "No documentation URL is invented"
+      ]
+    }
+  ]
+}

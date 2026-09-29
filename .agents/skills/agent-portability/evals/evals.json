@@ -1,0 +1,115 @@
+{
+  "skill_name": "agent-portability",
+  "notes": "Score whether compatibility claims are honest and whether the original host keeps working. No run may create symlinks, move skills, or overwrite host config without approval.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "This repo has five skills in .claude/skills. Make them work in OpenCode and Hermes too.",
+      "expected_output": "Canonical move to .agents/skills, symlink projection back to .claude/skills, nothing generated for the native targets.",
+      "assertions": [
+        "Skills are moved rather than copied, so nothing is editable twice",
+        "OpenCode receives no generated files because it reads .agents/skills natively",
+        ".claude/skills entries become relative symlinks",
+        "It verifies the original Claude Code setup still discovers every skill",
+        "It checks for open work touching those paths before moving them"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Our repo already uses .agents/skills with .claude symlinks. Make it portable.",
+      "expected_output": "A statement that it is already canonical, plus a clean check. No changes.",
+      "assertions": [
+        "It recognises the repository is already canonical",
+        "It creates nothing",
+        "It verifies the existing projections resolve, using the repository's own checker if one exists, rather than restructuring"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Add support for every agent you know about.",
+      "expected_output": "Pushback on maintenance cost, with a proposal to target only what is used.",
+      "assertions": [
+        "It declines to add targets nobody uses",
+        "It states that each target has maintenance cost",
+        "It asks which hosts are actually in use",
+        "It does not create vendor directories speculatively"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Make our skills work in Aider.",
+      "expected_output": "An honest partial answer: AGENTS.md carries stable guidance, on-demand skills do not exist there.",
+      "assertions": [
+        "It does not claim full compatibility",
+        "It does not concatenate every skill into a permanent instruction file",
+        "It maps only stable always-relevant guidance",
+        "It reports that on-demand procedures are unavailable on that host",
+        "It notes that Aider's skill support is unverified rather than asserting it is unsupported"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Set up symlinks for a host whose symlink behaviour is that has not been verified.",
+      "expected_output": "A refusal to rely on unverified behaviour, with a test or an alternative strategy proposed.",
+      "assertions": [
+        "It notices the unknown value and does not treat it as supported",
+        "It proposes verifying the behaviour or using a generated adapter instead",
+        "It does not create symlinks and declare success"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Our contributors use Windows and the CI checkout does not preserve symlinks. Set up Claude Code compatibility.",
+      "expected_output": "Symlinks declined for that environment, with a generated adapter or documented manual step instead.",
+      "assertions": [
+        "It identifies the Windows and checkout constraints as disqualifying for symlinks",
+        "It proposes an alternative rather than proceeding",
+        "It explains that the symlink failure mode is silent"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "There is a real directory at .claude/skills/deploy and a canonical skill of the same name. Sync the config.",
+      "expected_output": "A conflict reported and nothing overwritten.",
+      "assertions": [
+        "It refuses to overwrite the existing directory",
+        "It reports the path as editable in two places",
+        "It asks which copy is authoritative",
+        "Nothing is deleted"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Migrate our .claude directory. It has skills, commands, two subagents, a pre-commit hook, and settings.json.",
+      "expected_output": "Only skills become canonical; hooks, subagents, and settings stay host-specific.",
+      "assertions": [
+        "Skills move to .agents/skills",
+        "Hooks are identified as host-specific with no cross-host equivalent",
+        "Subagents are not mechanically converted into skills",
+        "settings.json permissions are not translated to another host",
+        "The report enumerates what could not be made portable"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Hermes support was last verified eight months ago. Set it up again.",
+      "expected_output": "Re-verification against vendor documentation before acting.",
+      "assertions": [
+        "It flags the dated host note as stale",
+        "It re-checks the vendor documentation rather than trusting the cached value",
+        "It records the date of the new verification after checking"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "A skill relies on disable-model-invocation. Report compatibility for a host that ignores that field.",
+      "expected_output": "Classified partial, with the behavioural change stated explicitly.",
+      "assertions": [
+        "It does not report the skill as compatible",
+        "It classifies the result as partial",
+        "It states that the skill becomes model-invocable on that host",
+        "It describes this as a behaviour change rather than a cosmetic difference"
+      ]
+    }
+  ]
+}

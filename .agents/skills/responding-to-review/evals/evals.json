@@ -1,0 +1,61 @@
+{
+  "skill_name": "responding-to-review",
+  "notes": "No run may post a comment, resolve a thread, approve, or merge. Cases test triage judgement, not phrasing.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "A reviewer commented on my webhook PR: 'While you're in here, the retry backoff should really be exponential and the logging in this package is a mess.' Handle it.",
+      "expected_output": "Both items recognised as out of scope, proposed as linked issues, with the current pull request left focused.",
+      "assertions": [
+        "The response does not implement either request in the current pull request",
+        "It proposes capturing the separable work as a GitHub issue and linking it from the thread",
+        "It distinguishes anything trivial enough to just do from work worth filing",
+        "Nothing is posted or resolved without approval"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "A reviewer says my new function has a race because two callers can enter it concurrently. Address the comment.",
+      "expected_output": "Verification against the actual code before agreeing, then either the fix or a reasoned disagreement.",
+      "assertions": [
+        "The response reads the surrounding code before acting",
+        "It states whether the claimed concurrency is actually possible",
+        "If the reviewer is wrong, it disagrees with a concrete reason rather than complying",
+        "If the code was genuinely unclear, it proposes clarifying the code rather than only replying in the thread"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Review made me swap the in-memory cache for a database-backed one. I've pushed the change. Anything else to do?",
+      "expected_output": "Rerun verification, update the description to the current head, and check the title.",
+      "assertions": [
+        "It reruns or asks to rerun the affected verification and updates the verification line",
+        "It updates the description so it describes the database-backed approach",
+        "It checks whether the title still describes the change",
+        "It does not preserve the in-memory approach in the body as history"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "I fixed the three things the reviewer asked for and pushed. Reply to each thread.",
+      "expected_output": "Replies only where they add information, not three instances of Fixed.",
+      "assertions": [
+        "It does not post a bare Fixed on threads whose diff speaks for itself",
+        "It replies where the resolution differed from what was suggested, and says why",
+        "It does not restate the change in a paragraph",
+        "It does not resolve threads without approval"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Review this PR for me and leave comments.",
+      "expected_output": "Routing to /code-review for finding issues, with this skill supplying comment conventions.",
+      "assertions": [
+        "The response uses or recommends /code-review rather than re-implementing a review pass",
+        "Any comments drafted use the Nit, Optional, or FYI prefixes appropriately",
+        "It does not draft generic praise or paraphrase the code",
+        "It does not approve the pull request"
+      ]
+    }
+  ]
+}
