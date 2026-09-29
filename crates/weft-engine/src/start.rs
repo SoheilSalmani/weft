@@ -365,7 +365,7 @@ pub fn base_leaves(template: &Template, active: &BTreeSet<PatchId>) -> Vec<Strin
 }
 
 /// Convenience for CLI: print where the worktree is, so `cd $(weft session
-/// new NAME)` drops you straight into it.
+/// new)` drops you straight into it.
 pub fn announce(name: &str, worktree: &Utf8Path) {
     println!("{worktree}");
     eprintln!(

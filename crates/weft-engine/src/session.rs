@@ -18,12 +18,13 @@ use weft_core::{AnswerId, AnswerSet, PatchId};
 
 pub const SESSIONS_DIR: &str = ".weft-sessions";
 /// The pre-multi-session layout (`.weft-record/{session.toml,worktree,stage}`),
-/// migrated to `.weft-sessions/main/` on first touch.
+/// migrated to `.weft-sessions/default/` on first touch.
 pub const LEGACY_RECORD_DIR: &str = ".weft-record";
 pub const SESSION_FILE: &str = "session.toml";
 pub const WORKTREE_DIR: &str = "worktree";
-/// The name a migrated legacy session takes.
-pub const LEGACY_SESSION_NAME: &str = "main";
+/// The session a command acts on when it was not given a name. A migrated
+/// legacy session — the single unnamed session of old — takes it too.
+pub const DEFAULT_SESSION_NAME: &str = "default";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Session {
@@ -219,7 +220,7 @@ impl Session {
     pub fn only(template_root: &Utf8Path) -> Result<String> {
         let sessions = Self::list(template_root)?;
         match sessions.len() {
-            0 => bail!("no session in `{template_root}`; run `weft session new NAME` first"),
+            0 => bail!("no session in `{template_root}`; run `weft session new` first"),
             1 => Ok(sessions.into_iter().next().unwrap().0),
             _ => bail!(
                 "several sessions in `{template_root}` ({}); \
@@ -234,14 +235,14 @@ impl Session {
     }
 }
 
-/// Move a pre-multi-session `.weft-record/` into `.weft-sessions/main/`. Runs
+/// Move a pre-multi-session `.weft-record/` into the default session. Runs
 /// at most once per template — after the move the legacy dir is gone.
 pub fn migrate_legacy(template_root: &Utf8Path) -> Result<()> {
     let legacy = template_root.join(LEGACY_RECORD_DIR);
     if !legacy.join(SESSION_FILE).exists() {
         return Ok(());
     }
-    let dest = session_dir(template_root, LEGACY_SESSION_NAME);
+    let dest = session_dir(template_root, DEFAULT_SESSION_NAME);
     if dest.exists() {
         bail!(
             "both `{legacy}` (the old single-session layout) and `{dest}` exist; \
@@ -319,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_layout_migrates_to_a_session_named_main() {
+    fn legacy_layout_migrates_to_the_default_session() {
         let tmp = tempfile::tempdir().unwrap();
         let root = Utf8Path::from_path(tmp.path()).unwrap();
         let legacy = root.join(LEGACY_RECORD_DIR);
@@ -332,11 +333,11 @@ mod tests {
 
         migrate_legacy(root).unwrap();
         assert!(!legacy.exists());
-        let moved = session_dir(root, LEGACY_SESSION_NAME);
+        let moved = session_dir(root, DEFAULT_SESSION_NAME);
         assert!(moved.join(SESSION_FILE).is_file());
         assert!(moved.join(WORKTREE_DIR).is_dir());
         // Idempotent: a second run is a no-op.
         migrate_legacy(root).unwrap();
-        assert!(Session::exists(root, LEGACY_SESSION_NAME));
+        assert!(Session::exists(root, DEFAULT_SESSION_NAME));
     }
 }

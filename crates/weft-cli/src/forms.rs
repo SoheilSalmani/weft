@@ -67,7 +67,7 @@ pub fn hook_add(
 ) -> Result<HookAddOptions> {
     let template = crate::source::load_template(root)?;
     if template.patches.is_empty() {
-        bail!("template has no patches yet; record one first (`weft session new NAME`)");
+        bail!("template has no patches yet; record one first (`weft session new`)");
     }
     let fields = vec![
         Field::select("patch", "Patch", patch_choices(&template), patch.as_deref())
@@ -185,7 +185,7 @@ pub fn patch_set(
 ) -> Result<PatchSetOptions> {
     let template = crate::source::load_template(root)?;
     if template.patches.is_empty() {
-        bail!("template has no patches yet; record one first (`weft session new NAME`)");
+        bail!("template has no patches yet; record one first (`weft session new`)");
     }
     // Prefill the current metadata of the chosen patch when it's known.
     let (title, describe, tags) = match &name {
