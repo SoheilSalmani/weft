@@ -207,6 +207,10 @@ fn update_follows_a_refined_default() {
     update(&proj, &[]).success();
 
     assert_eq!(skills(&proj), ["dbt"]);
+    assert!(
+        !proj.join(".agents/skills/sql").exists(),
+        "the update left the emptied skill directory behind"
+    );
     assert_eq!(
         stored_list(&state(&proj), "derived", "stack_skills"),
         Some(vec!["dbt".to_owned()])

@@ -543,8 +543,7 @@ pub fn run(
                 report.written += 1;
             }
             Action::Delete => {
-                std::fs::remove_file(opts.dest.join(&path))
-                    .with_context(|| format!("deleting {path}"))?;
+                fsio::remove_file(&opts.dest, &path)?;
                 report.notes.push(format!("deleted {path}"));
             }
             Action::Conflict(entry, n) => {

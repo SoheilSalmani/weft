@@ -31,6 +31,22 @@ pub fn write_file(dest: &Utf8Path, rel: &Utf8Path, entry: &FileEntry) -> Result<
     set_mode(&target, entry.mode)
 }
 
+/// Delete a file, then each directory above it, up to `dest`, that the
+/// deletion left empty, the way `git checkout` does. A directory that still
+/// holds anything (a file the user added, say) stays, and so does `dest`.
+pub fn remove_file(dest: &Utf8Path, rel: &Utf8Path) -> Result<()> {
+    std::fs::remove_file(dest.join(rel)).with_context(|| format!("deleting {rel}"))?;
+    let mut dir = rel.parent();
+    while let Some(d) = dir.filter(|d| !d.as_str().is_empty()) {
+        // Fails on a directory that isn't empty, which is where pruning stops.
+        if std::fs::remove_dir(dest.join(d)).is_err() {
+            break;
+        }
+        dir = d.parent();
+    }
+    Ok(())
+}
+
 /// Read a directory back into a `Tree`, skipping `.weft/` and `.git/`.
 /// Valid UTF-8 files become text; other files are opaque binary blobs.
 pub fn read_tree(root: &Utf8Path) -> Result<Tree> {
@@ -214,5 +230,29 @@ mod tests {
         let entry = tree.get("icon.bin".into()).unwrap();
         assert!(entry.content.is_binary());
         assert_eq!(entry.content.as_bytes(), bytes);
+    }
+
+    #[test]
+    fn remove_file_prunes_only_the_directories_it_empties() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = camino::Utf8Path::from_path(dir.path()).unwrap();
+        std::fs::create_dir_all(dest.join(".agents/skills/sql")).unwrap();
+        std::fs::create_dir_all(dest.join(".agents/skills/python")).unwrap();
+        std::fs::write(dest.join(".agents/skills/sql/SKILL.md"), "# sql\n").unwrap();
+        std::fs::write(dest.join(".agents/skills/python/SKILL.md"), "# python\n").unwrap();
+        std::fs::write(dest.join("README.md"), "# shop\n").unwrap();
+
+        remove_file(dest, ".agents/skills/sql/SKILL.md".into()).unwrap();
+        assert!(!dest.join(".agents/skills/sql").exists());
+        assert!(dest.join(".agents/skills/python/SKILL.md").exists());
+
+        remove_file(dest, ".agents/skills/python/SKILL.md".into()).unwrap();
+        assert!(
+            !dest.join(".agents").exists(),
+            "every emptied directory goes"
+        );
+
+        remove_file(dest, "README.md".into()).unwrap();
+        assert!(dest.exists(), "the project directory itself stays");
     }
 }

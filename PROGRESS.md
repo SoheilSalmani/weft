@@ -3,6 +3,22 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Fix — `weft update` prunes the directories its deletions empty
+
+- **Bug**: an update that deleted a template file left its directory
+  behind, empty. Found by the refine tutorial: handing a skill back to the
+  template deleted `.agents/skills/typescript/SKILL.md` but `ls
+  .agents/skills` still listed `typescript`, a skill directory with no
+  skill in it for anything that scans the directory (a symlink farm for
+  another agent, say). `weft instance remove` left instance directories the
+  same way.
+- **Fix**: `fsio::remove_file` deletes the file, then each directory above
+  it that the deletion emptied, stopping at the first one that still holds
+  anything and never removing the project directory, as `git checkout`
+  does. Update's `Delete` action uses it.
+- Unit test in `fsio`; e2e `refine.rs` asserts the emptied skill directory
+  is gone after the update.
+
 ## Post-MVP — Extenders refine inherited questions (`[refine]`, ADR-0002)
 
 - **The gap**: `extends` imported the base's questions as-is and
