@@ -360,7 +360,7 @@ pub fn resync(
                 report.issues.push(format!(
                     "after resyncing `{name}`, the template no longer renders: {e} — a \
                      dependent patch's context anchors moved with the regenerated \
-                     content; re-record that patch (`weft session new N --base <its name>`)"
+                     content; re-record that patch (`weft session new --base <its name>`)"
                 ));
             }
         }

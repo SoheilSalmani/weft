@@ -314,7 +314,7 @@ pub(crate) fn finish(
             bail!(
                 "a dependent patch no longer applies after the amend: {e}\n\
                  its context anchored on content that moved — re-record it \
-                 (`weft patch amend <name>` or `weft session new N --base <name>`), then \
+                 (`weft patch amend <name>` or `weft session new --base <name>`), then \
                  `weft check`. The amend to `{target}` is written; fix the dependent to \
                  finish the rebase."
             );

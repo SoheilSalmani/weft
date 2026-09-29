@@ -480,9 +480,10 @@ enum HookCmd {
 #[derive(Subcommand)]
 enum SessionCmd {
     /// Start a session: render a base state into a worktree and print its
-    /// path, so `cd $(weft session new NAME)` drops you into it.
+    /// path, so `cd $(weft session new)` drops you into it.
     New {
         /// Session name (also its directory under `.weft-sessions/`).
+        #[arg(default_value = weft_engine::session::DEFAULT_SESSION_NAME)]
         name: String,
         /// Where to put the worktree (must be empty or absent). Defaults to
         /// `<template>/.weft-sessions/<name>/worktree`.
@@ -532,7 +533,7 @@ enum SessionCmd {
         /// The directory to adopt.
         path: Utf8PathBuf,
         /// Session name.
-        #[arg(long, short = 'n')]
+        #[arg(long, short = 'n', default_value = weft_engine::session::DEFAULT_SESSION_NAME)]
         name: String,
         /// Template to record against (required unless the directory was
         /// scaffolded by weft).
@@ -1593,7 +1594,7 @@ fn main() -> anyhow::Result<()> {
         Command::Status { scope } => {
             let template = scope.template()?;
             if weft_engine::session::Session::list(&template)?.is_empty() {
-                println!("no session in `{template}` — start one with `weft session new NAME`");
+                println!("no session in `{template}` — start one with `weft session new`");
                 return Ok(());
             }
             let here = scope.resolve()?;
@@ -1789,9 +1790,7 @@ fn main() -> anyhow::Result<()> {
                 .template()?;
                 let sessions = weft_engine::session::Session::list(&template)?;
                 if sessions.is_empty() {
-                    eprintln!(
-                        "no sessions in `{template}`; start one with `weft session new NAME`"
-                    );
+                    eprintln!("no sessions in `{template}`; start one with `weft session new`");
                     return Ok(());
                 }
                 // Mark the session whose worktree we are standing in.

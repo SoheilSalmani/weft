@@ -3,6 +3,28 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Session names are optional (`default`)
+
+- **`weft session new [NAME]`** and **`weft session adopt PATH [-n NAME]`**
+  default the name to `default` (`session::DEFAULT_SESSION_NAME`). Chosen
+  over a counter (`session-NNN`): a fixed name is something a command can
+  target without listing sessions (a planned "open a shell in a session"
+  command goes to `default` when given no name), a second bare `new` stops at
+  "already exists" instead of piling up forgotten worktrees, and parallel
+  sessions get names worth typing after `--session`. Same idea as jj's and
+  terraform's `default` workspace.
+- The pre-multi-session `.weft-record/` now migrates to `default` instead of
+  `main`: it was the one unnamed session. Templates already migrated keep
+  their `main`.
+- Unchanged by decision: MCP still defaults to `agent`, so an agent's session
+  never collides with the author's `default`; `weft patch amend` still names
+  its session after the patch; `--force` on a bare `new` replaces `default`,
+  exactly as with an explicit name. Resolving the session for `add`/`commit`/…
+  (`Session::only`: the one you are in, else the only one) gets no `default`
+  fallback when several exist, so a patch-writing command never picks one
+  silently.
+- Hints that spelled `weft session new NAME` / `N --base` drop the name.
+
 ## Fix — `weft update` prunes the directories its deletions empty
 
 - **Bug**: an update that deleted a template file left its directory

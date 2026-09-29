@@ -445,7 +445,7 @@ fn declared_deps(
             bail!(
                 "--depends-on `{name}`: that patch is not in this session's base, so the \
                  recorded content was never diffed against it. Base a new session on it \
-                 (`weft session new N --base {name}`) to build on top."
+                 (`weft session new --base {name}`) to build on top."
             );
         }
         if !out.contains(name) {

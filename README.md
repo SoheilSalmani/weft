@@ -9,7 +9,7 @@ Core ideas:
 
 - **Patches store inputs, not outputs.** Rendering is deterministic:
   `render(base, answers, patches) → tree`. Same inputs, byte-identical output.
-- **Record against a clean base.** `weft session new NAME` materializes a pinned
+- **Record against a clean base.** `weft session new` materializes a pinned
   base state into a worktree; your dirty working directory never leaks in.
   Sessions work like git worktrees: several at once, each with its own staging
   index, each a directory you `cd` into.
@@ -106,6 +106,7 @@ cd $(weft session new makefile --template /tmp/tpl --answer "project_name=My Dem
 ```
 
 `weft session new` prints the worktree path, so `cd $(…)` puts you inside it.
+The name (`makefile`) is optional; leave it out and the session is `default`.
 Edit with your normal tools — it's just files — then commit from there; weft
 finds the template by walking up, and paths are relative to where you stand:
 
