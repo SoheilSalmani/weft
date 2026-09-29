@@ -241,6 +241,36 @@ my-template/
 See `fixtures/templates/hello/` for a complete example and `PLAN.md` /
 `PROGRESS.md` for the design and its implementation notes.
 
+## Slots: several patches adding to one file
+
+Two independent patches inserting after the same line do not commute, so a
+file that many patches add to (MCP server lists, `[tools]`, a Gradle
+`dependencies {}` block) declares a **slot**: a line of its own in
+`create_file` content (or a hunk's `added` lines), written by hand like an
+`expr` segment. Other patches fill it with `fill_slot`:
+
+```json
+{ "op": "create_file", "path": ".mcp.json", "omit_when_empty": ["servers"],
+  "content": ["{", "  \"mcpServers\": {", { "slot": "servers", "separator": "," }, "  }", "}"] }
+
+{ "op": "fill_slot", "path": ".mcp.json", "slot": "servers", "key": "lightdash",
+  "lines": [["    \"lightdash\": { \"url\": \"", { "answer": "lightdash_url" }, "/api/v1/mcp\" }"]] }
+```
+
+- A slot renders its contributions sorted by `key`, the separator ending
+  every one but the last; an empty slot renders nothing, and
+  `omit_when_empty` leaves the file out while all its listed slots are empty.
+- No hunk sees slot content, so patches that only fill slots commute in any
+  order; `weft check` counts such pairs as commuting by construction. Two
+  contributions with one key in one slot are an error naming both patches.
+- `weft commit` records lines added inside a slot's span as a `fill_slot`
+  keyed by the patch name. Place them where the key sorts (`weft diff` says
+  which slot they fill); hunk context never comes from slot content, or from
+  lines an `expr` rendered.
+- Slots do not nest. `weft patch amend` refuses a patch that declares one and
+  `weft patch resync` skips it, since re-recording would drop the slot: edit
+  such a patch's JSON by hand.
+
 ## Composition: extends and include nodes
 
 A template's graph is *composed*: every patch that renders when the template
