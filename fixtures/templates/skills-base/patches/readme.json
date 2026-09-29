@@ -1,0 +1,24 @@
+{
+  "description": "README with the project name and its CI.",
+  "ops": [
+    {
+      "op": "create_file",
+      "path": "README.md",
+      "content": [
+        [
+          "# ",
+          {
+            "answer": "project_name"
+          }
+        ],
+        "",
+        [
+          "CI: ",
+          {
+            "answer": "ci"
+          }
+        ]
+      ]
+    }
+  ]
+}

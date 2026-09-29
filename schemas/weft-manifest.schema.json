@@ -24,6 +24,13 @@
       "items": {
         "$ref": "#/$defs/IncludeDecl"
       }
+    },
+    "refine": {
+      "description": "`[refine.<id>]` tables: how this template narrows questions it\ninherits through `[template] extends`, keyed by question id.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/RefineDecl"
+      }
     }
   },
   "required": [
@@ -319,6 +326,80 @@
         "name",
         "template"
       ]
+    },
+    "RefineDecl": {
+      "description": "A `[refine.<id>]` table: how this template narrows a question it inherits\nthrough `[template] extends`. A refinement can reword the question,\nreplace its default, lock it, or restrict its choices; it can never widen\nwhat the base allows.",
+      "type": "object",
+      "properties": {
+        "prompt": {
+          "description": "Replaces the inherited prompt.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "description": {
+          "description": "Replaces the inherited description.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "example": {
+          "description": "Replaces the inherited example (display form, not Starlark).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "default": {
+          "description": "Replaces the inherited default (a Starlark expression that may only\nmention questions declared before this one). The answer stays\neditable.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "lock": {
+          "description": "The only value the question accepts (Starlark, same scope rules as\n`default`); it is never asked. Excludes every other value key.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "choices": {
+          "description": "Choice/multichoice allow-list: every choice not listed is blocked.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "default": null
+        },
+        "blocked": {
+          "description": "Choice/multichoice deny-list: these choices can't be picked.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "fixed": {
+          "description": "Multichoice: always selected.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

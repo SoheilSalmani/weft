@@ -78,6 +78,9 @@ pub fn run(
         }
     }
 
+    // Refinements: what load cannot see without evaluating (ADR-0002).
+    check_refinements(&template, &mut report);
+
     // Presets
     let mut preset_names = BTreeSet::new();
     for decl in &template.manifest.presets {
@@ -196,21 +199,26 @@ pub fn run(
                 weft_core::Value::String(key.to_owned()),
             );
             for (child_id, expr) in &inc.decl.bind {
-                if !inc
-                    .template
-                    .manifest
-                    .questions
-                    .iter()
-                    .any(|q| q.id.0 == *child_id)
-                {
-                    issue(
+                let child_questions = &inc.template.manifest.questions;
+                match child_questions.iter().find(|q| q.id.0 == *child_id) {
+                    None => issue(
                         &mut report,
                         format!(
                             "include `{}`: bind `{child_id}` names no question in the child \
                              template",
                             inc.decl.name
                         ),
-                    );
+                    ),
+                    Some(q) if q.narrowing.locked => issue(
+                        &mut report,
+                        format!(
+                            "include `{}`: bind `{child_id}` targets a question locked by {}; \
+                             a bind cannot answer it",
+                            inc.decl.name,
+                            q.narrowing.refiners()
+                        ),
+                    ),
+                    Some(_) => {}
                 }
                 if let Err(e) = weft_lang::parse_expr(expr.as_str()) {
                     issue(
@@ -516,6 +524,93 @@ pub fn run(
     Ok(report)
 }
 
+/// This template's own `[refine]` tables, beyond the structural rules load
+/// enforces. A refined default or lock keeps the position of the question it
+/// refines, so it may only mention earlier questions, and it has to pick
+/// among the narrowed choices; a `choice` whose inherited default the
+/// refinement blocks needs a refined default too (a multichoice default
+/// just drops blocked options).
+fn check_refinements(template: &Template, report: &mut CheckReport) {
+    let questions = &template.manifest.questions;
+    for (id, decl) in &template.manifest.refine {
+        // Load rejects a refinement of a question the template does not
+        // inherit, so the question is always there.
+        let Some(idx) = questions.iter().position(|q| q.id.0 == *id) else {
+            continue;
+        };
+        let q = &questions[idx];
+        let refined = decl.default.is_some() || decl.lock.is_some();
+        if !refined && !matches!(q.kind, AnswerKind::Choice { .. }) {
+            continue;
+        }
+        let Some(expr) = &q.default else {
+            continue;
+        };
+        if weft_lang::parse_expr(expr.as_str()).is_err() {
+            continue; // reported with the question's own default above
+        }
+        let what = if decl.lock.is_some() {
+            "lock"
+        } else {
+            "default"
+        };
+        let earlier = answers::dummy_answers(&questions[..idx]);
+        let value = match StarlarkEval.eval(expr, &earlier) {
+            Ok(value) => value,
+            // An inherited default that fails is the base's to report.
+            Err(_) if !refined => continue,
+            Err(e) => {
+                let all = answers::dummy_answers(questions);
+                report
+                    .issues
+                    .push(if StarlarkEval.eval(expr, &all).is_ok() {
+                        format!(
+                            "refine `{id}`: its {what} may only mention questions declared before \
+                         `{id}`, and inherited questions come first"
+                        )
+                    } else {
+                        format!("refine `{id}`: its {what} cannot be evaluated: {e}")
+                    });
+                continue;
+            }
+        };
+        let Some(choices) = q.kind.choices() else {
+            continue;
+        };
+        let picked: Vec<&str> = match (&q.kind, &value) {
+            (AnswerKind::Choice { .. }, weft_core::Value::String(s)) => vec![s.as_str()],
+            (AnswerKind::MultiChoice { .. }, weft_core::Value::List(items)) => items
+                .iter()
+                .filter_map(|v| match v {
+                    weft_core::Value::String(s) => Some(s.as_str()),
+                    _ => None,
+                })
+                .collect(),
+            // A value of the wrong kind fails the render check.
+            _ => continue,
+        };
+        for s in picked {
+            if q.narrowing.blocked.iter().any(|b| b == s) {
+                report.issues.push(if refined {
+                    format!(
+                        "refine `{id}`: its {what} picks {s:?}, which is blocked by {}",
+                        q.narrowing.refiners()
+                    )
+                } else {
+                    format!(
+                        "refine `{id}`: the inherited default {s:?} is blocked; refine the \
+                         default too"
+                    )
+                });
+            } else if refined && !choices.iter().any(|c| c == s) {
+                report.issues.push(format!(
+                    "refine `{id}`: its {what} picks {s:?}, which is not one of the choices"
+                ));
+            }
+        }
+    }
+}
+
 /// The static mounts of a template's includes: where each single include's
 /// files land, and the fixed prefix under which a repeat include's
 /// instances land (`connectors/{key}` → `connectors`).
@@ -787,5 +882,111 @@ pub fn finish(template_name: &str, report: &CheckReport) -> Result<()> {
             eprintln!("error: {issue}");
         }
         bail!("check failed with {} issue(s)", report.issues.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use camino::Utf8Path;
+
+    use super::*;
+    use crate::template::PathResolver;
+
+    const BASE: &str = r#"
+[template]
+name = "base"
+weft-version = "0.1"
+
+[[question]]
+id = "name"
+kind = "string"
+default = "'demo'"
+
+[[question]]
+id = "ci"
+kind = "choice"
+choices = ["github", "gitlab", "none"]
+default = "'github'"
+"#;
+
+    /// `weft check` issues about refinements of an extender `mid` of the
+    /// base, which declares its own `flavor` after the inherited questions.
+    fn refine_issues(refine: &str) -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        for (name, manifest) in [
+            ("base", BASE.to_owned()),
+            (
+                "mid",
+                format!(
+                    "[template]\nname = \"mid\"\nweft-version = \"0.1\"\nextends = \"../base\"\n\n\
+                     [[question]]\nid = \"flavor\"\nkind = \"string\"\ndefault = \"'plain'\"\n\n\
+                     {refine}"
+                ),
+            ),
+        ] {
+            std::fs::create_dir_all(root.join(name).join("patches")).unwrap();
+            std::fs::write(root.join(name).join("weft.toml"), manifest).unwrap();
+        }
+        let opts = CheckOptions {
+            template: root.join("mid"),
+            presets: vec![],
+            answers: vec![],
+            answers_file: None,
+        };
+        let report = run(&opts, &mut PathResolver).unwrap();
+        report
+            .issues
+            .into_iter()
+            .filter(|i| i.starts_with("refine "))
+            .collect()
+    }
+
+    #[test]
+    fn a_refined_default_or_lock_may_only_mention_earlier_questions() {
+        let earlier_only = |what: &str| {
+            format!(
+                "refine `name`: its {what} may only mention questions declared before `name`, \
+                 and inherited questions come first"
+            )
+        };
+        assert_eq!(
+            refine_issues("[refine.name]\ndefault = \"flavor\"\n"),
+            [earlier_only("default")]
+        );
+        assert_eq!(
+            refine_issues("[refine.name]\nlock = \"flavor + '-x'\"\n"),
+            [earlier_only("lock")]
+        );
+        assert_eq!(
+            refine_issues("[refine.ci]\ndefault = \"'none' if name else 'github'\"\n"),
+            Vec::<String>::new()
+        );
+        let undefined = refine_issues("[refine.name]\ndefault = \"nowhere\"\n");
+        let evaluating = "refine `name`: its default cannot be evaluated: ";
+        assert!(
+            matches!(&undefined[..], [one] if one.starts_with(evaluating)),
+            "{undefined:?}"
+        );
+    }
+
+    #[test]
+    fn a_refined_choice_must_not_default_to_what_it_blocks() {
+        assert_eq!(
+            refine_issues("[refine.ci]\nblocked = [\"github\"]\n"),
+            ["refine `ci`: the inherited default \"github\" is blocked; refine the default too"]
+        );
+        assert_eq!(
+            refine_issues("[refine.ci]\nblocked = [\"github\"]\ndefault = \"'github'\"\n"),
+            ["refine `ci`: its default picks \"github\", which is blocked by template `mid`"]
+        );
+        assert_eq!(
+            refine_issues("[refine.ci]\nblocked = [\"github\"]\ndefault = \"'azure'\"\n"),
+            ["refine `ci`: its default picks \"azure\", which is not one of the choices"]
+        );
+        assert_eq!(
+            refine_issues("[refine.ci]\nblocked = [\"github\"]\ndefault = \"'gitlab'\"\n"),
+            Vec::<String>::new()
+        );
     }
 }

@@ -231,7 +231,7 @@ weft check /tmp/tpl --answer project_name=x
 
 ```
 my-template/
-├── weft.toml            # [template], [[question]], [[preset]], [[include]]
+├── weft.toml            # [template], [[question]], [[preset]], [[include]], [refine.*]
 ├── weft.lock            # pinned versions/commits of remote includes
 ├── presets/*.toml       # partial answer maps; later layers win
 └── patches/*.json       # the recorded patch DAG; deps by patch name
@@ -278,6 +278,43 @@ does is a node in it, wherever that patch lives.
 `weft graph --json` and `weft describe --json` list the composed graph:
 include nodes carry `include`/`mount`, repeat nodes `opaque: true`,
 inherited patches `inherited: true`, and the document its `extends`.
+
+### Refining inherited questions
+
+An extender cannot redeclare an inherited question, but it can narrow one
+with a `[refine.<id>]` table
+([ADR-0002](docs/adr/0002-extenders-narrow-inherited-questions.md)):
+
+```toml
+[template]
+extends = "../base"
+
+[refine.stack_skills]        # a multichoice inherited from base
+choices = ["dbt", "sql"]     # keep only these (or: blocked = ["airflow"])
+fixed = ["dbt"]              # always selected, shown pinned in the wizard
+default = "['sql']"          # pre-selected, still editable
+
+[refine.use_jira]
+lock = "False"               # never asked; --answer use_jira=true errors
+
+[refine.project_name]
+description = "Its snake_case slug names the dbt project."
+```
+
+Refinements only narrow. They cannot add a choice, change a kind, touch a
+secret, or undo what a template further up the `extends` chain narrowed, so
+everything an extender renders is something its base could render. A
+refined `default` or `lock` keeps the inherited question's place in the
+answer order, so it may only mention questions declared before it.
+
+Blocked choices are gone from the wizard and from `weft describe`; picking
+one on any input layer (flag, JSON, answers file, preset) is an error that
+names the refining template. Fixed choices join whatever is selected, and a
+default that lists a blocked choice simply drops it. Answers you give are
+stored as given, fixed choices included; the template never rewrites them.
+If a template narrows further after projects exist, `weft update` stops on a
+stored answer that no longer fits and says how to change it (`--answer`) or
+hand it back to the template (`--unset`).
 
 ## Workspace layout
 

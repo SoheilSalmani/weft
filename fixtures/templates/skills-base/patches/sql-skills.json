@@ -1,0 +1,13 @@
+{
+  "description": "The sql agent skill.",
+  "when": "'sql' in stack_skills",
+  "ops": [
+    {
+      "op": "create_file",
+      "path": ".agents/skills/sql/SKILL.md",
+      "content": [
+        "# sql"
+      ]
+    }
+  ]
+}

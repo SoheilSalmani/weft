@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use camino::Utf8Path;
-use weft_core::render::ExprEval;
+use weft_core::render::{narrow, ExprEval, ValueOrigin};
 use weft_core::{AnswerKind, AnswerSet, Question, Value};
 
 use crate::interact::Interaction;
@@ -88,7 +88,7 @@ fn layered_user(
             // includes; plain keys through the parent's questions.
             let question = crate::compose::find_question(template, key)
                 .with_context(|| format!("no question with id `{key}`"))?;
-            let value = coerce(&question.kind, raw).with_context(|| {
+            let value = coerce(question, raw).with_context(|| {
                 format!(
                     "--answer {key}: invalid {} value {raw:?}",
                     question.kind.name()
@@ -111,7 +111,7 @@ pub fn parse_answer_arg(questions: &[Question], arg: &str) -> Result<(weft_core:
         .iter()
         .find(|q| q.id.0 == key)
         .with_context(|| format!("no question with id `{key}`"))?;
-    let value = coerce(&question.kind, raw).with_context(|| {
+    let value = coerce(question, raw).with_context(|| {
         format!(
             "--answer {key}: invalid {} value {raw:?}",
             question.kind.name()
@@ -120,8 +120,16 @@ pub fn parse_answer_arg(questions: &[Question], arg: &str) -> Result<(weft_core:
     Ok((question.id.clone(), value))
 }
 
-fn coerce(kind: &AnswerKind, raw: &str) -> Result<Value> {
-    Ok(match kind {
+fn coerce(question: &Question, raw: &str) -> Result<Value> {
+    // A blocked choice is gone from `choices`; say why, not just "not one of".
+    let not_offered = |choice: &str, choices: &[String]| {
+        if question.narrowing.blocked.iter().any(|b| b == choice) {
+            anyhow::anyhow!("`{choice}` is blocked by {}", question.narrowing.refiners())
+        } else {
+            anyhow::anyhow!("`{choice}` is not one of: {}", choices.join(", "))
+        }
+    };
+    Ok(match &question.kind {
         AnswerKind::String => Value::String(raw.to_owned()),
         AnswerKind::Bool => match raw.to_ascii_lowercase().as_str() {
             "true" | "yes" | "1" => Value::Bool(true),
@@ -131,7 +139,7 @@ fn coerce(kind: &AnswerKind, raw: &str) -> Result<Value> {
         AnswerKind::Int => Value::Int(raw.parse()?),
         AnswerKind::Choice { choices } => {
             if !choices.iter().any(|c| c == raw) {
-                bail!("expected one of: {}", choices.join(", "));
+                return Err(not_offered(raw, choices));
             }
             Value::String(raw.to_owned())
         }
@@ -140,7 +148,7 @@ fn coerce(kind: &AnswerKind, raw: &str) -> Result<Value> {
             let mut items = Vec::new();
             for part in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
                 if !choices.iter().any(|c| c == part) {
-                    bail!("`{part}` is not one of: {}", choices.join(", "));
+                    return Err(not_offered(part, choices));
                 }
                 items.push(Value::String(part.to_owned()));
             }
@@ -172,8 +180,11 @@ pub fn placeholder_secrets(questions: &[Question]) -> AnswerSet {
 /// Walk questions in declaration order and produce the complete answer set:
 /// `when`-gated questions are skipped, provided answers win, secrets resolve
 /// through their source, defaults evaluate, and anything left is prompted.
+/// Every value passes through its question's narrowing on the way in, so
+/// later gates and defaults see what the render will.
 ///
-/// The final set is validated once more through `resolve_answers` in core.
+/// The final set is validated once more through `resolve_answers` in core,
+/// which also holds locked questions to their lock.
 pub fn gather(
     template: &Template,
     provided: &AnswerSet,
@@ -191,10 +202,14 @@ pub fn gather(
             if !asked {
                 // Not prompted, but keep the name defined via its default so
                 // later Starlark gates/exprs don't hit an undefined name.
-                if let Some(default) = &q.default {
-                    if let Ok(value) = eval.eval(default, &resolved) {
-                        resolved.insert(q.id.clone(), value);
-                    }
+                let stand_in = match &q.default {
+                    Some(default) => eval.eval(default, &resolved).ok(),
+                    None if q.nothing_to_choose() => Some(Value::List(Vec::new())),
+                    None => None,
+                };
+                if let Some(value) = stand_in.and_then(|v| narrow(q, v, ValueOrigin::Default).ok())
+                {
+                    resolved.insert(q.id.clone(), value);
                 }
                 continue;
             }
@@ -217,17 +232,19 @@ pub fn gather(
             resolved.insert(q.id.clone(), Value::Secret(value));
             continue;
         }
-        if let Some(v) = provided.get(&q.id) {
-            resolved.insert(q.id.clone(), v.clone());
+        let value = if let Some(v) = provided.get(&q.id) {
+            narrow(q, v.clone(), ValueOrigin::Input)?
         } else if let Some(default) = &q.default {
             let value = eval
                 .eval(default, &resolved)
                 .with_context(|| format!("evaluating default of question `{}`", q.id))?;
-            resolved.insert(q.id.clone(), value);
+            narrow(q, value, ValueOrigin::Default)?
+        } else if q.nothing_to_choose() {
+            narrow(q, Value::List(Vec::new()), ValueOrigin::Default)?
         } else {
-            let value = interaction.ask(q, None)?;
-            resolved.insert(q.id.clone(), value);
-        }
+            narrow(q, interaction.ask(q, None)?, ValueOrigin::Input)?
+        };
+        resolved.insert(q.id.clone(), value);
     }
     let validated = weft_core::render::resolve_answers(questions, &resolved, eval)?;
     Ok(validated)
@@ -283,7 +300,7 @@ pub fn provenance(
             continue;
         }
         let Some(v) = value else { continue };
-        let prompted = open && !q.computed && q.default.is_none() && !seeded.contains(&q.id);
+        let prompted = open && q.is_promptable() && q.default.is_none() && !seeded.contains(&q.id);
         if prompted {
             given.insert(q.id.clone(), v.clone());
         } else {
@@ -441,6 +458,7 @@ mod tests {
             when: when.map(|w| StarlarkExpr(w.to_owned())),
             computed: false,
             section: None,
+            narrowing: Default::default(),
         }
     }
 

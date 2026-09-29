@@ -1,0 +1,25 @@
+[template]
+name = "skills-dbt"
+weft-version = "0.1"
+description = "A dbt project on skills-base: dbt skills always on, SQL pre-selected, no Jira, no GitLab."
+extends = "../skills-base"
+
+[[question]]
+id = "package_name"
+kind = "string"
+computed = true
+default = "project_name.lower().replace(' ', '_')"
+
+[refine.project_name]
+description = "Human-facing name; its snake_case slug names the dbt project."
+
+[refine.stack_skills]
+choices = ["dbt", "sql"]
+fixed = ["dbt"]
+default = "['sql']"
+
+[refine.use_jira]
+lock = "False"
+
+[refine.ci]
+blocked = ["gitlab"]

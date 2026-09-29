@@ -1,0 +1,20 @@
+{
+  "description": "The dbt project file.",
+  "depends_on": [
+    "readme"
+  ],
+  "ops": [
+    {
+      "op": "create_file",
+      "path": "dbt_project.yml",
+      "content": [
+        [
+          "name: ",
+          {
+            "answer": "package_name"
+          }
+        ]
+      ]
+    }
+  ]
+}

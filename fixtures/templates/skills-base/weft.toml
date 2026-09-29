@@ -1,0 +1,31 @@
+[template]
+name = "skills-base"
+weft-version = "0.1"
+description = "A base every stack extends: a README, CI, and the agent skills a stack may pick."
+
+[[question]]
+id = "project_name"
+kind = "string"
+prompt = "Project name"
+description = "Human-facing name; becomes the README title."
+example = "Demo"
+
+[[question]]
+id = "ci"
+kind = "choice"
+choices = ["github", "gitlab", "none"]
+prompt = "CI provider"
+default = "'github'"
+
+[[question]]
+id = "use_jira"
+kind = "bool"
+prompt = "Track work in Jira?"
+default = "False"
+
+[[question]]
+id = "stack_skills"
+kind = "multichoice"
+choices = ["dbt", "sql", "airflow"]
+prompt = "Stack skills"
+default = "[]"

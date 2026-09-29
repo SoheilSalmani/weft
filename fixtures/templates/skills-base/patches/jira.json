@@ -1,0 +1,13 @@
+{
+  "description": "The Jira agent skill.",
+  "when": "use_jira",
+  "ops": [
+    {
+      "op": "create_file",
+      "path": ".agents/skills/jira/SKILL.md",
+      "content": [
+        "# jira"
+      ]
+    }
+  ]
+}

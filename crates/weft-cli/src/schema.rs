@@ -366,6 +366,42 @@ pub struct IncludeDecl {
     pub bind: std::collections::BTreeMap<String, String>,
 }
 
+/// A `[refine.<id>]` table: how this template narrows a question it inherits
+/// through `[template] extends`. A refinement can reword the question,
+/// replace its default, lock it, or restrict its choices; it can never widen
+/// what the base allows.
+#[derive(JsonSchema, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RefineDecl {
+    /// Replaces the inherited prompt.
+    #[serde(default)]
+    pub prompt: Option<String>,
+    /// Replaces the inherited description.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Replaces the inherited example (display form, not Starlark).
+    #[serde(default)]
+    pub example: Option<String>,
+    /// Replaces the inherited default (a Starlark expression that may only
+    /// mention questions declared before this one). The answer stays
+    /// editable.
+    #[serde(default)]
+    pub default: Option<String>,
+    /// The only value the question accepts (Starlark, same scope rules as
+    /// `default`); it is never asked. Excludes every other value key.
+    #[serde(default)]
+    pub lock: Option<String>,
+    /// Choice/multichoice allow-list: every choice not listed is blocked.
+    #[serde(default)]
+    pub choices: Option<Vec<String>>,
+    /// Choice/multichoice deny-list: these choices can't be picked.
+    #[serde(default)]
+    pub blocked: Vec<String>,
+    /// Multichoice: always selected.
+    #[serde(default)]
+    pub fixed: Vec<String>,
+}
+
 /// The weft template manifest (`weft.toml`). Side-effects live on patches
 /// (`patches/<name>.json` `hooks`), not here.
 #[derive(JsonSchema, Deserialize)]
@@ -378,6 +414,10 @@ pub struct Manifest {
     pub presets: Vec<PresetDecl>,
     #[serde(default, rename = "include")]
     pub includes: Vec<IncludeDecl>,
+    /// `[refine.<id>]` tables: how this template narrows questions it
+    /// inherits through `[template] extends`, keyed by question id.
+    #[serde(default)]
+    pub refine: std::collections::BTreeMap<String, RefineDecl>,
 }
 
 /// Generate both schemas into `out` (created if needed).

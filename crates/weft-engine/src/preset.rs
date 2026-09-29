@@ -12,7 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use weft_core::{AnswerId, AnswerKind, AnswerSet, Value};
 
 use crate::template::Template;
@@ -155,6 +155,22 @@ impl PresetSpec {
                         self.sources.get(id).map(String::as_str).unwrap_or("?")
                     )
                 })?;
+            // A question an extending template narrowed (ADR-0002): its
+            // choices already exclude what the template blocks.
+            let narrowing = &question.narrowing;
+            if narrowing.locked {
+                bail!(
+                    "`{id}` is locked by {}; a preset cannot answer it",
+                    narrowing.refiners()
+                );
+            }
+            let undeclared = |c: &String| {
+                if narrowing.blocked.contains(c) {
+                    anyhow!("`{id}`: {c:?} is blocked by {}", narrowing.refiners())
+                } else {
+                    anyhow!("`{id}`: {c:?} is not one of the declared choices")
+                }
+            };
             match (&question.kind, entry) {
                 (AnswerKind::Secret { .. }, _) => {
                     bail!("`{id}` is a secret; secrets can never appear in presets")
@@ -163,10 +179,22 @@ impl PresetSpec {
                     AnswerKind::MultiChoice { choices },
                     PresetEntry::Constraint { fixed, blocked },
                 ) => {
-                    for c in fixed.iter().chain(blocked) {
-                        if !choices.contains(c) {
-                            bail!("`{id}`: {c:?} is not one of the declared choices");
-                        }
+                    if let Some(c) = fixed.iter().find(|c| !choices.contains(c)) {
+                        return Err(undeclared(c));
+                    }
+                    // Blocking what the template already blocks changes
+                    // nothing.
+                    if let Some(c) = blocked
+                        .iter()
+                        .find(|c| !choices.contains(c) && !narrowing.blocked.contains(c))
+                    {
+                        return Err(undeclared(c));
+                    }
+                    if let Some(c) = blocked.iter().find(|c| narrowing.fixed.contains(c)) {
+                        bail!(
+                            "`{id}`: {c:?} is fixed by {}; a preset cannot block it",
+                            narrowing.refiners()
+                        );
                     }
                     if let Some(c) = fixed.iter().find(|c| blocked.contains(c)) {
                         bail!("`{id}`: choice {c:?} is both fixed and blocked");
@@ -192,7 +220,7 @@ impl PresetSpec {
                     }
                     if let (AnswerKind::Choice { choices }, Value::String(s)) = (kind, value) {
                         if !choices.contains(s) {
-                            bail!("`{id}`: {s:?} is not one of the declared choices");
+                            return Err(undeclared(s));
                         }
                     }
                     if let (AnswerKind::MultiChoice { choices }, Value::List(items)) = (kind, value)
@@ -200,7 +228,7 @@ impl PresetSpec {
                         for item in items {
                             if let Value::String(s) = item {
                                 if !choices.contains(s) {
-                                    bail!("`{id}`: {s:?} is not one of the declared choices");
+                                    return Err(undeclared(s));
                                 }
                             }
                         }
@@ -566,5 +594,59 @@ mod tests {
         let out = s.to_toml().unwrap();
         let back = PresetSpec::parse("corp", &out).unwrap();
         assert_eq!(back.entries, s.entries);
+    }
+
+    #[test]
+    fn presets_cannot_undo_what_an_extending_template_narrowed() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let base = "[template]\nname = \"base\"\nweft-version = \"0.1\"\n\n\
+                    [[question]]\nid = \"use_jira\"\nkind = \"bool\"\ndefault = \"False\"\n\n\
+                    [[question]]\nid = \"skills\"\nkind = \"multichoice\"\n\
+                    choices = [\"dbt\", \"sql\", \"airflow\"]\ndefault = \"[]\"\n";
+        let dbt = "[template]\nname = \"dbt\"\nweft-version = \"0.1\"\nextends = \"../base\"\n\n\
+                   [refine.use_jira]\nlock = \"False\"\n\n\
+                   [refine.skills]\nblocked = [\"airflow\"]\nfixed = [\"dbt\"]\n";
+        for (name, manifest) in [("base", base), ("dbt", dbt)] {
+            std::fs::create_dir_all(root.join(name).join("patches")).unwrap();
+            std::fs::write(root.join(name).join("weft.toml"), manifest).unwrap();
+        }
+        let template = Template::load(&root.join("dbt")).unwrap();
+        let validate = |src: &str| {
+            spec("p", src)
+                .validate(&template)
+                .map_err(|e| format!("{e:#}"))
+        };
+
+        for (src, expected) in [
+            (
+                "use_jira = false\n",
+                "`use_jira` is locked by template `dbt`; a preset cannot answer it",
+            ),
+            (
+                "[skills]\nblocked = [\"dbt\"]\n",
+                "`skills`: \"dbt\" is fixed by template `dbt`; a preset cannot block it",
+            ),
+            (
+                "[skills]\nfixed = [\"airflow\"]\n",
+                "`skills`: \"airflow\" is blocked by template `dbt`",
+            ),
+            (
+                "skills = [\"sql\", \"airflow\"]\n",
+                "`skills`: \"airflow\" is blocked by template `dbt`",
+            ),
+            (
+                "[skills]\nfixed = [\"rust\"]\n",
+                "`skills`: \"rust\" is not one of the declared choices",
+            ),
+        ] {
+            assert_eq!(validate(src), Err(expected.to_owned()), "{src}");
+        }
+        // Fixing what the template fixes, or blocking what it blocks,
+        // changes nothing and is fine.
+        assert_eq!(
+            validate("[skills]\nfixed = [\"dbt\", \"sql\"]\nblocked = [\"airflow\"]\n"),
+            Ok(())
+        );
     }
 }

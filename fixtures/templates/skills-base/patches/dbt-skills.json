@@ -1,0 +1,13 @@
+{
+  "description": "The dbt agent skill.",
+  "when": "'dbt' in stack_skills",
+  "ops": [
+    {
+      "op": "create_file",
+      "path": ".agents/skills/dbt/SKILL.md",
+      "content": [
+        "# dbt"
+      ]
+    }
+  ]
+}

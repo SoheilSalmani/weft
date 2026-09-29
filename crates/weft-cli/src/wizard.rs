@@ -16,7 +16,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, List, ListItem, Paragraph, Wrap};
 
 use crate::tui::theme::Theme;
-use weft_core::render::ExprEval;
+use weft_core::render::{narrow, ExprEval, ValueOrigin};
 use weft_core::{AnswerId, AnswerKind, AnswerSet, Question, Value};
 
 /// Where a row's current value comes from (display only).
@@ -28,6 +28,10 @@ enum Source {
     Unset,
     Secret,
 }
+
+/// One active question as [`WizardState::resolve`] sees it: its index, its
+/// effective value, and where that value comes from.
+type Resolved = (usize, Option<Value>, Source);
 
 struct Row {
     label: String,
@@ -171,28 +175,46 @@ impl<'a> WizardState<'a> {
         }
     }
 
-    /// Per-visible-choice "pinned by preset" flags (fixed choices).
+    /// Per-visible-choice "pinned" flags: choices fixed by the preset or by
+    /// the template's narrowing (ADR-0002).
     fn fixed_flags(&self, q: &Question) -> Vec<bool> {
-        let visible = self.visible_choices(q);
-        match self.constraint_for(&q.id) {
-            Some((fixed, _)) => visible.iter().map(|c| fixed.contains(c)).collect(),
-            None => vec![false; visible.len()],
-        }
+        let preset: &[String] = self
+            .constraint_for(&q.id)
+            .map(|(fixed, _)| fixed.as_slice())
+            .unwrap_or_default();
+        self.visible_choices(q)
+            .iter()
+            .map(|c| preset.contains(c) || q.narrowing.fixed.contains(c))
+            .collect()
     }
 
     /// Resolve as rendering would: declaration order, gates against the
     /// answers so far (entered > provided > default; a cleared id skips
     /// provided). Returns the active questions with their effective
     /// value/source.
-    fn resolve(&self) -> Vec<(usize, Option<Value>, Source)> {
+    fn resolve(&self) -> Vec<Resolved> {
+        self.resolve_checked().0
+    }
+
+    /// The first value a template narrowing rejected (e.g. a provided answer
+    /// picking a blocked choice), as the user should see it.
+    fn narrowing_error(&self) -> Option<String> {
+        self.resolve_checked().1
+    }
+
+    /// [`resolve`](Self::resolve), plus the first error a template narrowing
+    /// raised. Every value passes through [`narrow`]; a rejected one is kept
+    /// as is so its row still shows it.
+    fn resolve_checked(&self) -> (Vec<Resolved>, Option<String>) {
         if self.authoring {
             // A preset may answer any question (even gated ones), so show
-            // them all; only secrets and computed questions are off-limits.
-            return self
+            // them all; only questions nobody is asked (secret, computed,
+            // decided by the template) are off-limits.
+            let rows = self
                 .questions
                 .iter()
                 .enumerate()
-                .filter(|(_, q)| !q.computed && !matches!(q.kind, AnswerKind::Secret { .. }))
+                .filter(|(_, q)| q.is_promptable())
                 .map(|(i, q)| {
                     let value = self.entered.get(&q.id).cloned();
                     let source = if value.is_some() || self.authored.contains_key(&q.id) {
@@ -203,9 +225,11 @@ impl<'a> WizardState<'a> {
                     (i, value, source)
                 })
                 .collect();
+            return (rows, None);
         }
         let mut resolved = AnswerSet::new();
         let mut rows = Vec::new();
+        let mut error = None;
         for (i, q) in self.questions.iter().enumerate() {
             if let Some(when) = &q.when {
                 if !self.eval.eval_bool(when, &resolved).unwrap_or(false) {
@@ -213,6 +237,7 @@ impl<'a> WizardState<'a> {
                     // resolve as they will at render time.
                     if let Some(default) = &q.default {
                         if let Ok(v) = self.eval.eval(default, &resolved) {
+                            let v = narrowed(q, v, ValueOrigin::Default, &mut error);
                             resolved.insert(q.id.clone(), v);
                         }
                     }
@@ -223,7 +248,8 @@ impl<'a> WizardState<'a> {
             // value in scope so later gates/defaults resolve. Never clearable.
             if self.locks.locked.contains(&q.id) {
                 if let Some(v) = self.provided.get(&q.id) {
-                    resolved.insert(q.id.clone(), v.clone());
+                    let v = narrowed(q, v.clone(), ValueOrigin::Input, &mut error);
+                    resolved.insert(q.id.clone(), v);
                 }
                 continue;
             }
@@ -233,14 +259,29 @@ impl<'a> WizardState<'a> {
                 let value = self
                     .entered
                     .get(&q.id)
-                    .cloned()
-                    .or_else(|| self.provided_value(&q.id).cloned())
+                    .or_else(|| self.provided_value(&q.id))
+                    .map(|v| narrowed(q, v.clone(), ValueOrigin::Input, &mut error))
                     .or_else(|| {
                         q.default
                             .as_ref()
                             .and_then(|d| self.eval.eval(d, &resolved).ok())
+                            .map(|v| narrowed(q, v, ValueOrigin::Default, &mut error))
                     });
                 if let Some(v) = value {
+                    resolved.insert(q.id.clone(), v);
+                }
+                continue;
+            }
+            // Decided by the template (locked, or every choice left is fixed):
+            // like a computed question, no row, but its value stays in scope.
+            if !q.is_promptable() && !matches!(q.kind, AnswerKind::Secret { .. }) {
+                let value = match &q.default {
+                    Some(d) => self.eval.eval(d, &resolved).ok(),
+                    None if q.nothing_to_choose() => Some(Value::List(vec![])),
+                    None => None,
+                };
+                if let Some(v) = value {
+                    let v = narrowed(q, v, ValueOrigin::Default, &mut error);
                     resolved.insert(q.id.clone(), v);
                 }
                 continue;
@@ -250,11 +291,18 @@ impl<'a> WizardState<'a> {
                 continue;
             }
             let (value, source) = if let Some(v) = self.entered.get(&q.id) {
-                (Some(v.clone()), Source::You)
+                let v = narrowed(q, v.clone(), ValueOrigin::Input, &mut error);
+                (Some(v), Source::You)
             } else if let Some(v) = self.provided_value(&q.id) {
-                (Some(v.clone()), Source::Provided)
+                let v = narrowed(q, v.clone(), ValueOrigin::Input, &mut error);
+                (Some(v), Source::Provided)
             } else if let Some(default) = &q.default {
-                (self.eval.eval(default, &resolved).ok(), Source::Default)
+                let v = self
+                    .eval
+                    .eval(default, &resolved)
+                    .ok()
+                    .map(|v| narrowed(q, v, ValueOrigin::Default, &mut error));
+                (v, Source::Default)
             } else {
                 (None, Source::Unset)
             };
@@ -263,7 +311,7 @@ impl<'a> WizardState<'a> {
             }
             rows.push((i, value, source));
         }
-        rows
+        (rows, error)
     }
 
     fn rows(&self) -> Vec<Row> {
@@ -311,8 +359,9 @@ impl<'a> WizardState<'a> {
     }
 
     /// Ids of active, non-secret questions that still have no value.
-    /// A preset is allowed to stay partial, so nothing is required when
-    /// authoring.
+    /// Questions the template decides (locked, or nothing left to choose)
+    /// have no row, so they never count. A preset is allowed to stay
+    /// partial, so nothing is required when authoring.
     pub fn missing(&self) -> Vec<AnswerId> {
         if self.authoring {
             return vec![];
@@ -324,8 +373,10 @@ impl<'a> WizardState<'a> {
             .collect()
     }
 
+    /// Every required question answered, and no answer a template narrowing
+    /// rejects (it would fail the run right after the wizard).
     pub fn ready(&self) -> bool {
-        self.missing().is_empty()
+        self.missing().is_empty() && self.narrowing_error().is_none()
     }
 
     fn selected_question(&self) -> Option<&Question> {
@@ -365,15 +416,22 @@ impl<'a> WizardState<'a> {
                     return;
                 }
             },
-            // Comma-separated entry, validated against the declared choices
-            // and the preset constraint (blocked rejected, fixed unioned in).
+            // Comma-separated entry, validated against the declared choices,
+            // the template's narrowing and the preset constraint (blocked
+            // rejected, fixed unioned in).
             AnswerKind::MultiChoice { choices } => {
-                let (fixed, blocked) = self
+                let (mut fixed, blocked) = self
                     .constraint_for(&id)
                     .cloned()
                     .unwrap_or((vec![], vec![]));
+                fixed.extend(q.narrowing.fixed.iter().cloned());
                 let mut picked = Vec::new();
                 for part in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                    if q.narrowing.blocked.iter().any(|b| b == part) {
+                        let by = q.narrowing.refiners();
+                        self.error = Some(format!("`{part}` is blocked by {by}"));
+                        return;
+                    }
                     if !choices.iter().any(|c| c == part) {
                         self.error = Some(format!("`{part}` is not one of the choices"));
                         return;
@@ -390,6 +448,18 @@ impl<'a> WizardState<'a> {
                     }
                 }
                 Value::List(picked.into_iter().map(Value::String).collect())
+            }
+            AnswerKind::Choice { choices } => {
+                if q.narrowing.blocked.iter().any(|b| b == raw) {
+                    let by = q.narrowing.refiners();
+                    self.error = Some(format!("`{raw}` is blocked by {by}"));
+                    return;
+                }
+                if !choices.iter().any(|c| c == raw) {
+                    self.error = Some(format!("`{raw}` is not one of the choices"));
+                    return;
+                }
+                Value::String(raw.to_owned())
             }
             _ => Value::String(raw.to_owned()),
         };
@@ -415,12 +485,14 @@ impl<'a> WizardState<'a> {
                     .unwrap_or(false);
                 self.entered.insert(id, Value::Bool(!current));
             }
-            AnswerKind::Choice { choices } => {
+            AnswerKind::Choice { .. } => {
+                // The popup lists the visible choices; index into those.
+                let visible = self.visible_choices(&q);
                 let rows = self.resolve();
                 let current = rows.get(self.selected).and_then(|(_, v, _)| v.clone());
                 let idx = current
                     .and_then(|v| match v {
-                        Value::String(s) => choices.iter().position(|c| *c == s),
+                        Value::String(s) => visible.iter().position(|c| *c == s),
                         _ => None,
                     })
                     .unwrap_or(0);
@@ -486,6 +558,32 @@ impl<'a> WizardState<'a> {
                 let cursor = current.chars().count();
                 self.editing = Some((current, cursor));
             }
+        }
+    }
+
+    /// Space in an open multichoice popup: toggle the choice under the cursor
+    /// (cycle free → fixed → blocked when authoring). A choice the preset or
+    /// the template fixes is pinned and doesn't move.
+    fn toggle_mark(&mut self) {
+        let Some(q) = self.selected_question() else {
+            return;
+        };
+        let fixed = self.fixed_flags(q);
+        let authoring = self.authoring;
+        let Some((cursor, Some(marks))) = &mut self.choosing else {
+            return;
+        };
+        if fixed.get(*cursor).copied().unwrap_or(false) {
+            return;
+        }
+        if let Some(m) = marks.get_mut(*cursor) {
+            *m = if authoring {
+                (*m + 1) % 3
+            } else if *m == MARK_ON {
+                MARK_OFF
+            } else {
+                MARK_ON
+            };
         }
     }
 
@@ -637,9 +735,9 @@ fn event_loop(
         // indices here are over the visible list; fixed ones can't toggle off.
         if state.choosing.is_some() {
             let qi = selected_question_index(state);
-            let (choices, fixed) = match state.questions.get(qi) {
-                Some(q) => (state.visible_choices(q), state.fixed_flags(q)),
-                None => (vec![], vec![]),
+            let choices = match state.questions.get(qi) {
+                Some(q) => state.visible_choices(q),
+                None => vec![],
             };
             let Some((cursor, multi)) = &mut state.choosing else {
                 continue;
@@ -649,18 +747,7 @@ fn event_loop(
                 KeyCode::Up | KeyCode::Char('k') => *cursor = (*cursor + len - 1) % len,
                 KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => *cursor = (*cursor + 1) % len,
                 KeyCode::Char(' ') => match multi {
-                    Some(marks) => {
-                        if state.authoring {
-                            // Cycle free → fixed → blocked.
-                            if let Some(m) = marks.get_mut(*cursor) {
-                                *m = (*m + 1) % 3;
-                            }
-                        } else if !fixed.get(*cursor).copied().unwrap_or(false) {
-                            if let Some(m) = marks.get_mut(*cursor) {
-                                *m = if *m == MARK_ON { MARK_OFF } else { MARK_ON };
-                            }
-                        }
-                    }
+                    Some(_) => state.toggle_mark(),
                     None => {
                         commit_choice(state, &choices);
                     }
@@ -726,6 +813,24 @@ fn event_loop(
             }
             KeyCode::Esc | KeyCode::Char('q') => bail!("cancelled"),
             _ => {}
+        }
+    }
+}
+
+/// A candidate value with the question's template narrowing (ADR-0002)
+/// applied. A value the narrowing rejects is kept as is, and the first such
+/// error is recorded for the user to see.
+fn narrowed(q: &Question, value: Value, origin: ValueOrigin, error: &mut Option<String>) -> Value {
+    if q.narrowing.is_empty() {
+        return value;
+    }
+    match narrow(q, value.clone(), origin) {
+        Ok(v) => v,
+        Err(e) => {
+            if error.is_none() {
+                *error = Some(e.to_string());
+            }
+            value
         }
     }
 }
@@ -902,6 +1007,7 @@ fn draw(frame: &mut ratatui::Frame, state: &WizardState, template_name: &str) {
     let detail = state
         .error
         .clone()
+        .or_else(|| state.narrowing_error())
         .map(|e| Line::from(Span::styled(format!("✗ {e}"), Theme::error())))
         .or_else(|| {
             rows.get(state.selected).map(|row| {
@@ -1094,6 +1200,7 @@ mod tests {
             when: when.map(StarlarkExpr::from),
             computed: false,
             section: None,
+            narrowing: Default::default(),
         }
     }
 
@@ -1252,6 +1359,74 @@ mod tests {
             Some(&Value::List(vec![
                 Value::String("ci".into()),
                 Value::String("lint".into()),
+            ]))
+        );
+    }
+
+    #[test]
+    fn template_locked_question_is_hidden_but_feeds_gates() {
+        let mut use_docker = question("use_docker", AnswerKind::Bool, Some("True"), None);
+        use_docker.narrowing.locked = true;
+        use_docker.narrowing.by = vec!["docker".into()];
+        let questions = vec![
+            use_docker,
+            question("registry", AnswerKind::String, None, Some("use_docker")),
+        ];
+        let provided = AnswerSet::new();
+        let locks = no_locks();
+        let state = WizardState::new(&questions, &provided, &locks, &StubEval);
+
+        // No row for the lock, but it opened the registry gate.
+        let ids: Vec<_> = state
+            .resolve()
+            .iter()
+            .map(|(i, _, _)| questions[*i].id.clone())
+            .collect();
+        assert_eq!(ids, vec![AnswerId::from("registry")]);
+        assert_eq!(state.missing(), vec![AnswerId::from("registry")]);
+    }
+
+    #[test]
+    fn template_fixed_choice_starts_checked_and_cannot_be_unchecked() {
+        let mut skills = question(
+            "skills",
+            AnswerKind::MultiChoice {
+                choices: vec!["dbt".into(), "sql".into()],
+            },
+            None,
+            None,
+        );
+        skills.narrowing.fixed = vec!["dbt".into()];
+        skills.narrowing.blocked = vec!["airflow".into()];
+        skills.narrowing.by = vec!["dbt-stack".into()];
+        let questions = vec![skills];
+        let provided = AnswerSet::new();
+        let locks = no_locks();
+        let mut state = WizardState::new(&questions, &provided, &locks, &StubEval);
+
+        state.activate();
+        assert_eq!(state.choosing, Some((0, Some(vec![MARK_ON, MARK_OFF]))));
+        state.toggle_mark(); // cursor on `dbt`: pinned
+        assert_eq!(state.choosing, Some((0, Some(vec![MARK_ON, MARK_OFF]))));
+        if let Some((cursor, _)) = &mut state.choosing {
+            *cursor = 1;
+        }
+        state.toggle_mark(); // `sql` is free
+        assert_eq!(state.choosing, Some((1, Some(vec![MARK_ON, MARK_ON]))));
+
+        // Typed entry: a blocked choice names the template; fixed joins in.
+        state.choosing = None;
+        state.commit_text("airflow");
+        assert_eq!(
+            state.error.as_deref(),
+            Some("`airflow` is blocked by template `dbt-stack`")
+        );
+        state.commit_text("sql");
+        assert_eq!(
+            row_value(&state, 0).0,
+            Some(Value::List(vec![
+                Value::String("sql".into()),
+                Value::String("dbt".into()),
             ]))
         );
     }

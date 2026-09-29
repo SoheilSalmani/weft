@@ -129,7 +129,7 @@ impl Drop for LspClient {
     }
 }
 
-fn copy_fixture(to: &Path) -> PathBuf {
+fn copy_fixture(to: &Path, name: &str) -> PathBuf {
     fn copy_dir(src: &Path, dst: &Path) {
         std::fs::create_dir_all(dst).unwrap();
         for entry in std::fs::read_dir(src).unwrap() {
@@ -142,16 +142,41 @@ fn copy_fixture(to: &Path) -> PathBuf {
             }
         }
     }
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/templates/hello");
-    let dst = to.join("hello");
+    let src = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/templates")
+        .join(name);
+    let dst = to.join(name);
     copy_dir(&src, &dst);
     dst
+}
+
+/// `skills-dbt` next to the `skills-base` it extends (`../skills-base`).
+fn copy_skills(to: &Path) -> PathBuf {
+    copy_fixture(to, "skills-base");
+    copy_fixture(to, "skills-dbt")
+}
+
+/// The 0-based line and column where `needle` first occurs in `text`.
+fn position_of(text: &str, needle: &str) -> (usize, usize) {
+    text.lines()
+        .enumerate()
+        .find_map(|(i, l)| l.find(needle).map(|c| (i, c)))
+        .unwrap_or_else(|| panic!("`{needle}` not in text"))
+}
+
+fn labels(completion: &serde_json::Value) -> Vec<&str> {
+    completion
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["label"].as_str().unwrap())
+        .collect()
 }
 
 #[test]
 fn lsp_diagnostics_for_broken_patch() {
     let tmp = tempfile::tempdir().unwrap();
-    let template = copy_fixture(tmp.path());
+    let template = copy_fixture(tmp.path(), "hello");
     // Break the docker patch: reference an unknown answer.
     let patch_path = template.join("patches/docker.json");
     let broken = std::fs::read_to_string(&patch_path)
@@ -184,7 +209,7 @@ fn lsp_diagnostics_for_broken_patch() {
 #[test]
 fn lsp_hover_and_definition_and_completion() {
     let tmp = tempfile::tempdir().unwrap();
-    let template = copy_fixture(tmp.path());
+    let template = copy_fixture(tmp.path(), "hello");
     let patch_path = template.join("patches/docker.json");
     let text = std::fs::read_to_string(&patch_path).unwrap();
 
@@ -228,7 +253,7 @@ fn lsp_hover_and_definition_and_completion() {
 #[test]
 fn lsp_inlay_hints_preview_rendered_values() {
     let tmp = tempfile::tempdir().unwrap();
-    let template = copy_fixture(tmp.path());
+    let template = copy_fixture(tmp.path(), "hello");
     let patch_path = template.join("patches/docker.json");
     let text = std::fs::read_to_string(&patch_path).unwrap();
 
@@ -258,5 +283,130 @@ fn lsp_inlay_hints_preview_rendered_values() {
     assert!(
         labels.iter().any(|l| l.contains("my-demo")),
         "expected a rendered preview hint, got {labels:?}"
+    );
+}
+
+#[test]
+fn lsp_refine_completion_offers_keys_and_inherited_ids() {
+    let tmp = tempfile::tempdir().unwrap();
+    let template = copy_skills(tmp.path());
+    let manifest_path = template.join("weft.toml");
+    // Unsaved edits: a key being typed inside `[refine.stack_skills]`, and a
+    // new `[refine.` header at the end.
+    let text = std::fs::read_to_string(&manifest_path)
+        .unwrap()
+        .replace("[refine.stack_skills]\n", "[refine.stack_skills]\nlo\n")
+        + "\n[refine.";
+
+    let mut client = LspClient::spawn();
+    client.initialize();
+    client.did_open(&manifest_path, "toml", &text);
+    let uri = format!("file://{}", manifest_path.display());
+
+    let key_line = text.lines().position(|l| l == "lo").unwrap();
+    let keys = client.request(
+        "textDocument/completion",
+        serde_json::json!({
+            "textDocument": {"uri": uri},
+            "position": {"line": key_line, "character": 2},
+        }),
+    );
+    let keys = labels(&keys);
+    for key in [
+        "prompt",
+        "description",
+        "example",
+        "default",
+        "lock",
+        "choices",
+        "blocked",
+        "fixed",
+    ] {
+        assert!(keys.contains(&key), "missing refine key {key}: {keys:?}");
+    }
+
+    let header_line = text.lines().count() - 1;
+    let ids = client.request(
+        "textDocument/completion",
+        serde_json::json!({
+            "textDocument": {"uri": uri},
+            "position": {"line": header_line, "character": "[refine.".len()},
+        }),
+    );
+    let ids = labels(&ids);
+    for inherited in ["project_name", "ci", "use_jira", "stack_skills"] {
+        assert!(ids.contains(&inherited), "missing {inherited}: {ids:?}");
+    }
+    // skills-dbt's own question is not inherited, so it cannot be refined
+    assert!(!ids.contains(&"package_name"), "{ids:?}");
+}
+
+#[test]
+fn lsp_refine_header_goes_to_the_inherited_question() {
+    let tmp = tempfile::tempdir().unwrap();
+    let template = copy_skills(tmp.path());
+    let manifest_path = template.join("weft.toml");
+    let text = std::fs::read_to_string(&manifest_path).unwrap();
+
+    let mut client = LspClient::spawn();
+    client.initialize();
+    client.did_open(&manifest_path, "toml", &text);
+
+    let (line, col) = position_of(&text, "[refine.stack_skills]");
+    let pos = serde_json::json!({
+        "textDocument": {"uri": format!("file://{}", manifest_path.display())},
+        "position": {"line": line, "character": col + "[refine.".len() + 2},
+    });
+
+    let definition = client.request("textDocument/definition", pos.clone());
+    let target = definition["uri"].as_str().unwrap();
+    assert!(target.ends_with("skills-base/weft.toml"), "{target}");
+    let base_text = std::fs::read_to_string(tmp.path().join("skills-base/weft.toml")).unwrap();
+    let (id_line, _) = position_of(&base_text, "id = \"stack_skills\"");
+    assert_eq!(
+        definition["range"]["start"]["line"].as_u64().unwrap(),
+        id_line as u64
+    );
+
+    // hover shows the effective question: who narrowed it, and what is gone
+    let hover = client.request("textDocument/hover", pos);
+    let hover = hover["contents"]["value"].as_str().unwrap();
+    assert!(hover.contains("template `skills-dbt`"), "{hover}");
+    assert!(hover.contains("`airflow`"), "{hover}");
+}
+
+#[test]
+fn lsp_refine_error_anchors_on_its_table() {
+    let tmp = tempfile::tempdir().unwrap();
+    let template = copy_skills(tmp.path());
+    let manifest_path = template.join("weft.toml");
+    // `project_name` is a string: it has no choices to block. Its id also
+    // appears earlier, in `package_name`'s default.
+    let broken = std::fs::read_to_string(&manifest_path).unwrap().replace(
+        "[refine.project_name]\n",
+        "[refine.project_name]\nblocked = [\"x\"]\n",
+    );
+    std::fs::write(&manifest_path, &broken).unwrap();
+
+    let mut client = LspClient::spawn();
+    client.initialize();
+    client.did_open(&manifest_path, "toml", &broken);
+
+    let params = client.await_diagnostics("skills-dbt/weft.toml");
+    let diagnostic = params["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| {
+            d["message"]
+                .as_str()
+                .unwrap()
+                .starts_with("refine `project_name`:")
+        })
+        .unwrap_or_else(|| panic!("no refine error: {params}"));
+    let (header_line, _) = position_of(&broken, "[refine.project_name]");
+    assert_eq!(
+        diagnostic["range"]["start"]["line"].as_u64().unwrap(),
+        header_line as u64
     );
 }

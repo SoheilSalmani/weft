@@ -54,6 +54,18 @@ pub enum RenderError {
     },
     #[error("answer `{id}` value {value:?} is not one of the declared choices")]
     InvalidChoice { id: AnswerId, value: String },
+    #[error("answer `{id}`: {value:?} is blocked by {by}")]
+    Blocked {
+        id: AnswerId,
+        value: String,
+        by: String,
+    },
+    #[error("answer `{id}` is locked to {value} by {by}; drop the explicit answer")]
+    Locked {
+        id: AnswerId,
+        value: String,
+        by: String,
+    },
     #[error(
         "answer/expression `{0}` is a list; project it with an expression \
          (e.g. `', '.join(x)`) before using it in a path or content segment"
@@ -106,7 +118,9 @@ pub enum RenderError {
 
 /// Resolve the full answer set for `questions` from layered `provided`
 /// answers: evaluate `when` gates in declaration order, type-check provided
-/// values, evaluate `default` expressions for the rest.
+/// values, evaluate `default` expressions for the rest. Every value passes
+/// through its question's narrowing ([`narrow`]), and a locked question
+/// accepts a provided value only when it equals the lock.
 ///
 /// A question whose `when` is false is not prompted, but if it has a
 /// `default` it still resolves to that default so its name stays defined for
@@ -136,7 +150,31 @@ pub fn resolve_answers(
         // decided it doesn't apply); its default, if any, still stands in.
         if !gated_off {
             if let Some(value) = provided.get(&q.id) {
-                let value = check_type(&q.id, &q.kind, value.clone())?;
+                let value = check_type(
+                    &q.id,
+                    &q.kind,
+                    narrow(q, value.clone(), ValueOrigin::Input)?,
+                )?;
+                let value = match &q.default {
+                    Some(lock) if q.narrowing.locked => {
+                        let lock = eval.eval(lock, &resolved).map_err(|e| RenderError::Eval {
+                            expr: lock.0.clone(),
+                            context: format!("lock of question `{}`", q.id),
+                            source: e,
+                        })?;
+                        let lock =
+                            check_type(&q.id, &q.kind, narrow(q, lock, ValueOrigin::Default)?)?;
+                        if !same_answer(&value, &lock) {
+                            return Err(RenderError::Locked {
+                                id: q.id.clone(),
+                                value: display_value(&lock),
+                                by: q.narrowing.refiners(),
+                            });
+                        }
+                        lock
+                    }
+                    _ => value,
+                };
                 resolved.insert(q.id.clone(), value);
                 continue;
             }
@@ -144,7 +182,8 @@ pub fn resolve_answers(
         if let Some(default) = &q.default {
             match eval.eval(default, &resolved) {
                 Ok(value) => {
-                    let value = check_type(&q.id, &q.kind, value)?;
+                    let value =
+                        check_type(&q.id, &q.kind, narrow(q, value, ValueOrigin::Default)?)?;
                     resolved.insert(q.id.clone(), value);
                 }
                 // A gated-off question's default is a best-effort convenience
@@ -159,11 +198,99 @@ pub fn resolve_answers(
                     })
                 }
             }
+        } else if q.nothing_to_choose() {
+            // Narrowed down to its fixed choices: decided without asking.
+            let value = narrow(q, Value::List(Vec::new()), ValueOrigin::Default)?;
+            resolved.insert(q.id.clone(), value);
         } else if !gated_off {
             return Err(RenderError::Unanswered(q.id.clone()));
         }
     }
     Ok(resolved)
+}
+
+/// Where a candidate value for a question came from (see [`narrow`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ValueOrigin {
+    /// Supplied from outside: a flag, an answers file or JSON, the wizard, a
+    /// prompt, a preset, a bind, or an answer the project stored.
+    Input,
+    /// The question's default (or lock) expression.
+    Default,
+}
+
+/// Apply an inherited question's narrowing (ADR-0002) to a candidate value,
+/// before it is type-checked:
+///
+/// - an input may not pick a blocked choice;
+/// - a default drops blocked multichoice options (a blocked `choice` default
+///   is still an error: there is nothing to fall back to);
+/// - a multichoice gains its fixed choices, appended in declared order after
+///   the selection, whose own order is kept.
+///
+/// A value of the wrong kind passes through untouched for the type check.
+pub fn narrow(q: &Question, value: Value, origin: ValueOrigin) -> Result<Value, RenderError> {
+    let n = &q.narrowing;
+    if n.blocked.is_empty() && n.fixed.is_empty() {
+        return Ok(value);
+    }
+    let blocked = |id: &AnswerId, s: &str| RenderError::Blocked {
+        id: id.clone(),
+        value: s.to_owned(),
+        by: n.refiners(),
+    };
+    match (&q.kind, value) {
+        (AnswerKind::Choice { .. }, Value::String(s)) => {
+            if n.blocked.contains(&s) {
+                return Err(blocked(&q.id, &s));
+            }
+            Ok(Value::String(s))
+        }
+        (AnswerKind::MultiChoice { .. }, Value::List(items)) => {
+            let mut out = Vec::with_capacity(items.len() + n.fixed.len());
+            for item in items {
+                if let Value::String(s) = &item {
+                    if n.blocked.contains(s) {
+                        match origin {
+                            ValueOrigin::Input => return Err(blocked(&q.id, s)),
+                            ValueOrigin::Default => continue,
+                        }
+                    }
+                }
+                out.push(item);
+            }
+            for f in &n.fixed {
+                if !out.iter().any(|v| matches!(v, Value::String(s) if s == f)) {
+                    out.push(Value::String(f.clone()));
+                }
+            }
+            Ok(Value::List(out))
+        }
+        (_, value) => Ok(value),
+    }
+}
+
+/// Equal answers; a multichoice compares as a set, since the order of a
+/// selection means nothing to a lock.
+fn same_answer(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::List(x), Value::List(y)) => {
+            x.iter().all(|v| y.contains(v)) && y.iter().all(|v| x.contains(v))
+        }
+        _ => a == b,
+    }
+}
+
+/// A value as an error message shows it: strings quoted, lists bracketed.
+fn display_value(value: &Value) -> String {
+    match value {
+        Value::String(s) => format!("{s:?}"),
+        Value::List(items) => {
+            let items: Vec<String> = items.iter().map(display_value).collect();
+            format!("[{}]", items.join(", "))
+        }
+        other => other.render_text(),
+    }
 }
 
 fn check_type(id: &AnswerId, kind: &AnswerKind, value: Value) -> Result<Value, RenderError> {
@@ -933,6 +1060,7 @@ mod tests {
                 when: None,
                 computed: false,
                 section: None,
+                narrowing: Default::default(),
             },
             Question {
                 id: "registry".into(),
@@ -944,6 +1072,7 @@ mod tests {
                 when: Some(StarlarkExpr::from("use_docker")),
                 computed: false,
                 section: None,
+                narrowing: Default::default(),
             },
         ];
         // Gated question unanswered -> error while gate is open
@@ -953,6 +1082,176 @@ mod tests {
         let provided = answers(&[("use_docker", Value::Bool(false))]);
         let resolved = resolve_answers(&questions, &provided, &StubEval).unwrap();
         assert!(!resolved.contains(&"registry".into()));
+    }
+
+    /// Evaluates the expressions in its table; anything else falls through
+    /// to [`StubEval`].
+    struct TableEval(Vec<(&'static str, Value)>);
+
+    impl ExprEval for TableEval {
+        fn eval(&self, expr: &StarlarkExpr, answers: &AnswerSet) -> Result<Value, EvalError> {
+            match self.0.iter().find(|(e, _)| *e == expr.as_str()) {
+                Some((_, v)) => Ok(v.clone()),
+                None => StubEval.eval(expr, answers),
+            }
+        }
+    }
+
+    fn list(items: &[&str]) -> Value {
+        Value::List(items.iter().map(|s| Value::String((*s).into())).collect())
+    }
+
+    fn strings(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    /// `skills`, declared with github/linear/airflow/dbt and narrowed by a
+    /// `dbt` template: airflow blocked (so gone from `choices`), dbt fixed.
+    fn skills(default: Option<&str>) -> Question {
+        Question {
+            id: "skills".into(),
+            kind: AnswerKind::MultiChoice {
+                choices: strings(&["github", "linear", "dbt"]),
+            },
+            prompt: None,
+            description: None,
+            example: None,
+            default: default.map(StarlarkExpr::from),
+            when: None,
+            computed: false,
+            section: None,
+            narrowing: crate::question::Narrowing {
+                locked: false,
+                fixed: strings(&["dbt"]),
+                blocked: strings(&["airflow"]),
+                by: strings(&["dbt"]),
+            },
+        }
+    }
+
+    #[test]
+    fn narrowed_default_drops_blocked_choices_and_gains_fixed_ones() {
+        let eval = TableEval(vec![("base_skills", list(&["github", "airflow"]))]);
+        let resolved =
+            resolve_answers(&[skills(Some("base_skills"))], &AnswerSet::new(), &eval).unwrap();
+        assert_eq!(
+            resolved.get(&"skills".into()),
+            Some(&list(&["github", "dbt"]))
+        );
+    }
+
+    #[test]
+    fn narrowed_input_keeps_its_order_and_gains_fixed_choices() {
+        let provided = answers(&[("skills", list(&["linear", "github"]))]);
+        let resolved = resolve_answers(&[skills(None)], &provided, &StubEval).unwrap();
+        assert_eq!(
+            resolved.get(&"skills".into()),
+            Some(&list(&["linear", "github", "dbt"]))
+        );
+    }
+
+    #[test]
+    fn picking_a_blocked_choice_names_the_refining_template() {
+        let provided = answers(&[("skills", list(&["github", "airflow"]))]);
+        let err = resolve_answers(&[skills(None)], &provided, &StubEval).unwrap_err();
+        assert!(matches!(&err, RenderError::Blocked { value, .. } if value == "airflow"));
+        assert_eq!(
+            err.to_string(),
+            "answer `skills`: \"airflow\" is blocked by template `dbt`"
+        );
+    }
+
+    #[test]
+    fn a_multichoice_with_only_fixed_choices_left_resolves_without_an_answer() {
+        let mut q = skills(None);
+        q.kind = AnswerKind::MultiChoice {
+            choices: strings(&["dbt"]),
+        };
+        assert!(!q.is_promptable());
+        let resolved = resolve_answers(&[q], &AnswerSet::new(), &StubEval).unwrap();
+        assert_eq!(resolved.get(&"skills".into()), Some(&list(&["dbt"])));
+    }
+
+    #[test]
+    fn a_blocked_choice_default_is_an_error() {
+        let q = Question {
+            id: "adapter".into(),
+            kind: AnswerKind::Choice {
+                choices: strings(&["postgres"]),
+            },
+            prompt: None,
+            description: None,
+            example: None,
+            default: Some(StarlarkExpr::from("base_adapter")),
+            when: None,
+            computed: false,
+            section: None,
+            narrowing: crate::question::Narrowing {
+                blocked: strings(&["duckdb"]),
+                by: strings(&["dbt"]),
+                ..Default::default()
+            },
+        };
+        let eval = TableEval(vec![("base_adapter", Value::String("duckdb".into()))]);
+        let err = resolve_answers(&[q], &AnswerSet::new(), &eval).unwrap_err();
+        assert!(matches!(err, RenderError::Blocked { value, .. } if value == "duckdb"));
+    }
+
+    #[test]
+    fn a_locked_question_accepts_only_its_lock_value() {
+        let q = Question {
+            id: "use_jira".into(),
+            kind: AnswerKind::Bool,
+            prompt: None,
+            description: None,
+            example: None,
+            default: Some(StarlarkExpr::from("False")),
+            when: None,
+            computed: false,
+            section: None,
+            narrowing: crate::question::Narrowing {
+                locked: true,
+                by: strings(&["dbt"]),
+                ..Default::default()
+            },
+        };
+        assert!(!q.is_promptable());
+        let questions = [q];
+        let unanswered = resolve_answers(&questions, &AnswerSet::new(), &StubEval).unwrap();
+        assert_eq!(
+            unanswered.get(&"use_jira".into()),
+            Some(&Value::Bool(false))
+        );
+        let same = answers(&[("use_jira", Value::Bool(false))]);
+        assert!(resolve_answers(&questions, &same, &StubEval).is_ok());
+        let other = answers(&[("use_jira", Value::Bool(true))]);
+        let err = resolve_answers(&questions, &other, &StubEval).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "answer `use_jira` is locked to False by template `dbt`; drop the explicit answer"
+        );
+    }
+
+    #[test]
+    fn a_locked_multichoice_compares_as_a_set() {
+        let mut q = skills(Some("lock"));
+        q.narrowing = crate::question::Narrowing {
+            locked: true,
+            by: strings(&["dbt"]),
+            ..Default::default()
+        };
+        let eval = TableEval(vec![("lock", list(&["github", "dbt"]))]);
+        let reordered = answers(&[("skills", list(&["dbt", "github"]))]);
+        let resolved = resolve_answers(&[q.clone()], &reordered, &eval).unwrap();
+        assert_eq!(
+            resolved.get(&"skills".into()),
+            Some(&list(&["github", "dbt"]))
+        );
+        let fewer = answers(&[("skills", list(&["dbt"]))]);
+        assert!(matches!(
+            resolve_answers(&[q], &fewer, &eval),
+            Err(RenderError::Locked { .. })
+        ));
     }
 
     #[test]

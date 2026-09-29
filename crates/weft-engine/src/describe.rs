@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use serde::Serialize;
-use weft_core::render::ExprEval;
+use weft_core::render::{narrow, ExprEval, ValueOrigin};
 use weft_core::{AnswerKind, AnswerSet, Value};
 
 use crate::graph;
@@ -65,7 +65,7 @@ pub struct TemplateDescription {
 #[derive(Serialize)]
 pub struct QuestionDescription {
     pub id: String,
-    /// `string` | `bool` | `int` | `choice` | `secret`
+    /// `string` | `bool` | `int` | `choice` | `multichoice` | `secret`
     pub kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub choices: Option<Vec<String>>,
@@ -85,7 +85,8 @@ pub struct QuestionDescription {
     /// Asked only when this Starlark gate is truthy (earlier answers in scope).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub when: Option<String>,
-    /// Must be supplied by the caller: no default and not a secret.
+    /// Must be supplied by the caller: no default, and asked (not computed,
+    /// secret, or locked).
     pub required: bool,
     /// A derived value: computed from other answers, never prompted or
     /// supplied. Agents should not provide it.
@@ -97,6 +98,21 @@ pub struct QuestionDescription {
     /// Secrets resolve through this source, never through supplied answers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secret_source: Option<String>,
+    /// An extending template locked the answer to its default: it is never
+    /// asked, and an explicit answer that differs is an error.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub locked: bool,
+    /// Multichoice options always selected, whatever else is picked.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fixed: Vec<String>,
+    /// Options an extending template blocked; they are already left out of
+    /// `choices`, and picking one is an error.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub blocked: Vec<String>,
+    /// The extending templates whose `[refine]` tables changed this
+    /// question, base-most first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub refined_by: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -195,12 +211,19 @@ fn question_descriptions(
     questions
         .iter()
         .map(|q| {
-            let default_preview = q.default.as_ref().and_then(|expr| {
-                // Scope: earlier questions only, mirroring resolution order.
-                let idx = questions.iter().position(|o| o.id == q.id).unwrap_or(0);
-                let scope: AnswerSet = crate::answers::dummy_answers(&questions[..idx]);
-                eval.eval(expr, &scope).ok().map(|v| v.render_text())
-            });
+            // Scope: earlier questions only, mirroring resolution order. The
+            // preview is the value resolution would use: narrowed, so it
+            // shows fixed choices and drops blocked ones.
+            let idx = questions.iter().position(|o| o.id == q.id).unwrap_or(0);
+            let scope: AnswerSet = crate::answers::dummy_answers(&questions[..idx]);
+            let default = match &q.default {
+                Some(expr) => eval.eval(expr, &scope).ok(),
+                None if q.nothing_to_choose() => Some(Value::List(Vec::new())),
+                None => None,
+            };
+            let default_preview = default
+                .and_then(|v| narrow(q, v, ValueOrigin::Default).ok())
+                .map(|v| v.render_text());
             let (kind, choices, secret_source) = match &q.kind {
                 AnswerKind::String => ("string", None, None),
                 AnswerKind::Bool => ("bool", None, None),
@@ -219,12 +242,14 @@ fn question_descriptions(
                 default_expr: q.default.as_ref().map(|e| e.as_str().to_owned()),
                 default_preview,
                 when: q.when.as_ref().map(|e| e.as_str().to_owned()),
-                required: q.default.is_none()
-                    && !q.computed
-                    && !matches!(q.kind, AnswerKind::Secret { .. }),
+                required: q.default.is_none() && q.is_promptable(),
                 computed: q.computed,
                 section: q.section.clone(),
                 secret_source,
+                locked: q.narrowing.locked,
+                fixed: q.narrowing.fixed.clone(),
+                blocked: q.narrowing.blocked.clone(),
+                refined_by: q.narrowing.by.clone(),
             }
         })
         .collect()
@@ -580,11 +605,14 @@ pub fn agents_md(doc: &DescribeDoc) -> String {
     w("| id | kind | required | default | description |");
     w("| --- | --- | --- | --- | --- |");
     for q in &doc.questions {
-        let kind = match (&q.choices, &q.secret_source) {
+        let mut kind = match (&q.choices, &q.secret_source) {
             (Some(choices), _) => format!("choice: {}", choices.join(" / ")),
             (_, Some(source)) => format!("secret ({source})"),
             _ => q.kind.to_owned(),
         };
+        if !q.fixed.is_empty() {
+            kind = format!("{kind} (fixed: {})", q.fixed.join(", "));
+        }
         let default = q
             .default_preview
             .clone()
@@ -601,11 +629,18 @@ pub fn agents_md(doc: &DescribeDoc) -> String {
         if let Some(when) = &q.when {
             desc = format!("{desc} — only asked when `{when}`");
         }
+        let required = if q.locked {
+            "locked"
+        } else if q.required {
+            "**yes**"
+        } else {
+            "no"
+        };
         w(&format!(
             "| `{}` | {} | {} | {} | {} |",
             q.id,
             kind,
-            if q.required { "**yes**" } else { "no" },
+            required,
             default,
             desc.trim()
         ));
@@ -613,6 +648,14 @@ pub fn agents_md(doc: &DescribeDoc) -> String {
     w("");
     w("Secrets are never passed as answers — they resolve from their source");
     w("(`env:`/`cmd:`/`prompt`) at render time.");
+    if doc
+        .questions
+        .iter()
+        .any(|q| q.locked || !q.fixed.is_empty())
+    {
+        w("A locked answer is set by the template, and an explicit `--answer` that");
+        w("differs from it errors; fixed choices are always selected.");
+    }
     w("");
 
     if !doc.presets.is_empty() {

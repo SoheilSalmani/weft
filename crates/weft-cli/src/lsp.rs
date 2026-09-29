@@ -1,6 +1,8 @@
 //! `weft lsp`: a language server for template authoring — live `weft check`
-//! diagnostics, answer-id completion, hover with question/patch metadata,
-//! and go-to-definition between answer references and their questions.
+//! diagnostics, answer-id and `[refine]` completion, hover with
+//! question/patch metadata (narrowing included), and go-to-definition between
+//! answer references (or `[refine.<id>]` headers) and the questions they
+//! name, up the `extends` chain.
 //!
 //! Position features are line-heuristic (find the identifier under the
 //! cursor, decide from the surrounding line whether it's an answer or a
@@ -178,6 +180,167 @@ fn quoted_tokens(issue: &str) -> Vec<String> {
     out
 }
 
+/// The keys of a `[refine.<id>]` table, with their one-line docs.
+const REFINE_KEYS: [(&str, &str); 8] = [
+    ("prompt", "Replaces the inherited prompt."),
+    ("description", "Replaces the inherited description."),
+    (
+        "example",
+        "Replaces the inherited example (display form, not Starlark).",
+    ),
+    (
+        "default",
+        "Replaces the inherited default (Starlark over earlier questions); the answer stays \
+         editable.",
+    ),
+    (
+        "lock",
+        "The only value the question accepts (Starlark); it is never asked. Excludes every \
+         other value key.",
+    ),
+    (
+        "choices",
+        "Choice/multichoice allow-list: every choice not listed is blocked.",
+    ),
+    (
+        "blocked",
+        "Choice/multichoice deny-list: these choices can't be picked.",
+    ),
+    ("fixed", "Multichoice: always selected."),
+];
+
+/// The question id of a `[refine.<id>]` table header line (bare or quoted
+/// key), if the line is one.
+fn refine_header_id(line: &str) -> Option<&str> {
+    let (key, _) = line.trim().strip_prefix("[refine.")?.split_once(']')?;
+    let key = key.trim().trim_matches('"');
+    (!key.is_empty()).then_some(key)
+}
+
+/// The `[refine.<id>]` header line of `text`, as a range over the id.
+fn refine_header_range(text: &str, id: &str) -> Option<Range> {
+    text.lines().enumerate().find_map(|(i, line)| {
+        if refine_header_id(line) != Some(id) {
+            return None;
+        }
+        let after = line.find("[refine.")? + "[refine.".len();
+        let col = after + line[after..].find(id)?;
+        Some(Range {
+            start: Position::new(i as u32, col as u32),
+            end: Position::new(i as u32, (col + id.len()) as u32),
+        })
+    })
+}
+
+/// The header of the TOML table line `line_no` belongs to: the nearest
+/// `[...]` line at or above it, trimmed.
+fn toml_table_at(text: &str, line_no: usize) -> Option<&str> {
+    text.lines()
+        .take(line_no + 1)
+        .map(str::trim)
+        .filter(|l| l.starts_with('['))
+        .last()
+}
+
+/// The ids a manifest declares in its own `[[question]]` tables (not the
+/// ones it inherits). Line-based, so it works on a half-edited document.
+fn declared_question_ids(manifest_src: &str) -> Vec<String> {
+    let mut in_question = false;
+    let mut ids = Vec::new();
+    for line in manifest_src.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_question = line.starts_with("[[question]]");
+            continue;
+        }
+        if !in_question {
+            continue;
+        }
+        let Some(value) = line
+            .strip_prefix("id")
+            .and_then(|rest| rest.trim_start().strip_prefix('='))
+            .and_then(|rest| rest.trim_start().strip_prefix('"'))
+        else {
+            continue;
+        };
+        if let Some((id, _)) = value.split_once('"') {
+            ids.push(id.to_owned());
+        }
+    }
+    ids
+}
+
+/// The root of the template `root` extends, per its manifest's
+/// `[template] extends`.
+fn extends_root(root: &Utf8Path, manifest_src: &str) -> Option<Utf8PathBuf> {
+    use weft_engine::template::IncludeResolver;
+    let manifest: toml::Table = toml::from_str(manifest_src).ok()?;
+    let decl = manifest
+        .get("template")?
+        .get("extends")?
+        .clone()
+        .try_into::<weft_engine::manifest::ExtendsDecl>()
+        .ok()?;
+    editor_resolver().resolve(root, &decl.as_include()).ok()
+}
+
+/// The root of the template whose own `[[question]]` declares `id`: `root`
+/// itself, or the base up the `extends` chain the question is inherited
+/// from.
+fn question_home(docs: &HashMap<Url, String>, root: &Utf8Path, id: &str) -> Option<Utf8PathBuf> {
+    let mut root = root.to_owned();
+    // Bounded: an `extends` cycle is a load error, reported as a diagnostic.
+    for _ in 0..32 {
+        let src = read_file(docs, &root.join("weft.toml"))?;
+        if declared_question_ids(&src).iter().any(|q| q == id) {
+            return Some(root);
+        }
+        root = extends_root(&root, &src)?;
+    }
+    None
+}
+
+/// Backticked, comma-separated values for hover text.
+fn backticked(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|v| format!("`{v}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// A completion item for a question id.
+fn question_item(q: &weft_core::Question) -> CompletionItem {
+    CompletionItem {
+        label: q.id.0.clone(),
+        kind: Some(CompletionItemKind::VARIABLE),
+        detail: Some(q.kind.name().to_owned()),
+        documentation: q.description.clone().map(Documentation::String),
+        ..Default::default()
+    }
+}
+
+/// The questions the template at `root` inherits through `extends`, which
+/// its `[refine.<id>]` tables may name: the loaded template's questions
+/// minus those `manifest_src` declares itself — or, while the template does
+/// not load (a half-written `[refine]` table), the base's questions.
+fn inherited_questions(root: &Utf8Path, manifest_src: &str) -> Vec<weft_core::Question> {
+    match load_template(root) {
+        Ok(template) => {
+            let own = declared_question_ids(manifest_src);
+            template
+                .manifest
+                .questions
+                .into_iter()
+                .filter(|q| !own.contains(&q.id.0))
+                .collect()
+        }
+        Err(_) => extends_root(root, manifest_src)
+            .and_then(|base| load_template(&base).ok())
+            .map(|base| base.manifest.questions)
+            .unwrap_or_default(),
+    }
+}
+
 impl Backend {
     /// Run `weft check` on the file's template and publish diagnostics to
     /// the files each issue points at.
@@ -225,6 +388,7 @@ impl Backend {
             let tokens = quoted_tokens(issue);
             // Locate the issue: a mentioned patch name places it in that
             // patch file; otherwise weft.toml; the range anchors on the
+            // `[refine.<id>]` header a refine error names, else on the
             // first mentioned token found in the file.
             let mut target = root.join("weft.toml");
             for token in &tokens {
@@ -235,9 +399,12 @@ impl Backend {
                 }
             }
             let text = read_file(&docs, &target).unwrap_or_default();
-            let range = tokens
-                .iter()
-                .find_map(|t| find_range(&text, t))
+            let refine_header = tokens
+                .first()
+                .filter(|_| issue.starts_with("refine `"))
+                .and_then(|id| refine_header_range(&text, id));
+            let range = refine_header
+                .or_else(|| tokens.iter().find_map(|t| find_range(&text, t)))
                 .unwrap_or_default();
             per_file.entry(target).or_default().push(Diagnostic {
                 range,
@@ -258,10 +425,16 @@ impl Backend {
         }
     }
 
-    async fn line_at(&self, url: &Url, position: Position) -> Option<(String, Utf8PathBuf)> {
+    /// The full text of an open (or on-disk) document.
+    async fn document(&self, url: &Url) -> Option<(String, Utf8PathBuf)> {
         let path = url_to_path(url)?;
         let docs = self.docs.lock().await;
         let text = read_file(&docs, &path)?;
+        Some((text, path))
+    }
+
+    async fn line_at(&self, url: &Url, position: Position) -> Option<(String, Utf8PathBuf)> {
+        let (text, path) = self.document(url).await?;
         let line = text.lines().nth(position.line as usize)?.to_owned();
         Some((line, path))
     }
@@ -408,18 +581,53 @@ impl LanguageServer for Backend {
     async fn completion(&self, params: CompletionParams) -> LspResult<Option<CompletionResponse>> {
         let position = params.text_document_position.position;
         let uri = params.text_document_position.text_document.uri;
-        let Some((line, path)) = self.line_at(&uri, position).await else {
+        let Some((text, path)) = self.document(&uri).await else {
             return Ok(None);
         };
+        let line = text.lines().nth(position.line as usize).unwrap_or_default();
         let Some(root) = template_root(&path) else {
             return Ok(None);
         };
+        let before = &line[..(position.character as usize).min(line.len())];
+        let is_patch_json = path.extension() == Some("json");
+
+        if !is_patch_json {
+            // `[refine.` header: the questions this template inherits.
+            if let Some(partial) = before.trim_start().strip_prefix("[refine.") {
+                if !partial.contains(']') {
+                    let items = inherited_questions(&root, &text)
+                        .iter()
+                        .map(question_item)
+                        .collect();
+                    return Ok(Some(CompletionResponse::Array(items)));
+                }
+            }
+            // Keys of a `[refine.<id>]` table, where a key is being typed.
+            let in_refine = toml_table_at(&text, position.line as usize)
+                .and_then(refine_header_id)
+                .is_some();
+            let typing_key = before
+                .trim_start()
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_');
+            if in_refine && typing_key {
+                let items = REFINE_KEYS
+                    .iter()
+                    .map(|(key, doc)| CompletionItem {
+                        label: (*key).into(),
+                        kind: Some(CompletionItemKind::PROPERTY),
+                        detail: Some("refine".into()),
+                        documentation: Some(Documentation::String((*doc).into())),
+                        ..Default::default()
+                    })
+                    .collect();
+                return Ok(Some(CompletionResponse::Array(items)));
+            }
+        }
+
         let Ok(template) = load_template(&root) else {
             return Ok(None);
         };
-
-        let before = &line[..(position.character as usize).min(line.len())];
-        let is_patch_json = path.extension() == Some("json");
 
         // Dependency names inside `"depends_on": [...` (patch files).
         if is_patch_json && line.contains("depends_on") {
@@ -436,24 +644,20 @@ impl LanguageServer for Backend {
             return Ok(Some(CompletionResponse::Array(items)));
         }
 
-        // Answer ids: `"answer": "…`, `"when": "…`, `when = "…`, `default = "…`.
+        // Answer ids: `"answer": "…`, `"when": "…`, `when = "…`, `default = "…`,
+        // `lock = "…`.
         let answer_context = before.contains("\"answer\"")
             || before.contains("\"when\"")
             || before.contains("when = \"")
             || before.contains("default = \"")
+            || before.contains("lock = \"")
             || before.contains("\"expr\"");
         if answer_context {
             let items = template
                 .manifest
                 .questions
                 .iter()
-                .map(|q| CompletionItem {
-                    label: q.id.0.clone(),
-                    kind: Some(CompletionItemKind::VARIABLE),
-                    detail: Some(q.kind.name().to_owned()),
-                    documentation: q.description.clone().map(Documentation::String),
-                    ..Default::default()
-                })
+                .map(question_item)
                 .collect();
             return Ok(Some(CompletionResponse::Array(items)));
         }
@@ -490,20 +694,50 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        // Question hover.
+        // Question hover (also on a `[refine.<id>]` header): the effective
+        // question, narrowing included, and the base it is inherited from.
         if let Some(q) = template.manifest.questions.iter().find(|q| q.id.0 == word) {
             let mut md = format!("**{}** · `{}`", q.id, q.kind.name());
             if let Some(desc) = &q.description {
                 md.push_str(&format!("\n\n{desc}"));
             }
+            if let Some(choices) = q.kind.choices() {
+                md.push_str(&format!("\n\nchoices: {}", backticked(choices)));
+            }
             if let Some(default) = &q.default {
-                md.push_str(&format!("\n\ndefault: `{}`", default.as_str()));
+                let label = if q.narrowing.locked {
+                    "locked to"
+                } else {
+                    "default"
+                };
+                md.push_str(&format!("\n\n{label}: `{}`", default.as_str()));
+            }
+            if !q.narrowing.fixed.is_empty() {
+                md.push_str(&format!(
+                    "\n\nalways selected: {}",
+                    backticked(&q.narrowing.fixed)
+                ));
+            }
+            if !q.narrowing.blocked.is_empty() {
+                md.push_str(&format!(
+                    "\n\nblocked: {}",
+                    backticked(&q.narrowing.blocked)
+                ));
+            }
+            if !q.narrowing.by.is_empty() {
+                md.push_str(&format!("\n\nrefined by {}", q.narrowing.refiners()));
             }
             if let Some(when) = &q.when {
                 md.push_str(&format!("\n\nasked when: `{}`", when.as_str()));
             }
             if let Some(example) = &q.example {
                 md.push_str(&format!("\n\ne.g. `{example}`"));
+            }
+            let docs = self.docs.lock().await;
+            let home = question_home(&docs, &root, &word);
+            drop(docs);
+            if let Some(home) = home.filter(|home| *home != root) {
+                md.push_str(&format!("\n\ninherited from `{home}`"));
             }
             return Ok(Some(Hover {
                 contents: HoverContents::Markup(MarkupContent {
@@ -577,14 +811,20 @@ impl LanguageServer for Backend {
         let Some(root) = template_root(&path) else {
             return Ok(None);
         };
-        let Ok(template) = load_template(&root) else {
-            return Ok(None);
-        };
+        let loaded = load_template(&root);
         let docs = self.docs.lock().await;
 
-        // Answer id -> its [[question]] in weft.toml.
-        if template.manifest.questions.iter().any(|q| q.id.0 == word) {
-            let manifest_path = root.join("weft.toml");
+        // Answer id -> its [[question]] in the weft.toml that declares it:
+        // this template's, or the base's up the `extends` chain for an
+        // inherited question. A `[refine.<id>]` header resolves even while
+        // the template does not load (the refinement may be what breaks it).
+        let is_question = refine_header_id(&line) == Some(word.as_str())
+            || loaded
+                .as_ref()
+                .is_ok_and(|t| t.manifest.questions.iter().any(|q| q.id.0 == word));
+        if is_question {
+            let home = question_home(&docs, &root, &word).unwrap_or_else(|| root.clone());
+            let manifest_path = home.join("weft.toml");
             let text = read_file(&docs, &manifest_path).unwrap_or_default();
             let range = find_range(&text, &format!("id = \"{word}\"")).unwrap_or_default();
             if let Some(url) = path_to_url(&manifest_path) {
@@ -594,6 +834,10 @@ impl LanguageServer for Backend {
                 })));
             }
         }
+
+        let Ok(template) = loaded else {
+            return Ok(None);
+        };
 
         // Node name -> the patch file that defines it (in the owning template).
         if let Some((_, node)) = node_at(&template, &line, position.character as usize) {

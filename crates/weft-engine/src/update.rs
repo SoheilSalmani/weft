@@ -14,7 +14,7 @@ use anyhow::{bail, Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
 use weft_core::merge::merge3;
-use weft_core::render::ExprEval;
+use weft_core::render::{narrow, ExprEval, RenderError, ValueOrigin};
 use weft_core::{AnswerId, AnswerSet, FileEntry, Question, Value};
 use weft_lang::StarlarkEval;
 
@@ -196,7 +196,8 @@ pub fn run(
     // New side: the given answers plus this run's changes are the inputs;
     // derived values re-derive, new questions get defaults or prompts.
     let given = requested.root.apply(&state.answers);
-    let new_answers = answers::gather(&template, &given, &presolved_secrets, &eval, interaction)?;
+    let new_answers = answers::gather(&template, &given, &presolved_secrets, &eval, interaction)
+        .map_err(|e| stored_answer_hint(e, &requested.root.set, |id| id.to_string()))?;
     let root_answers = answers::provenance(
         &template.manifest.questions,
         &given,
@@ -222,7 +223,8 @@ pub fn run(
             &requested.root.set,
             |q, new_side| {
                 let scope = if new_side { &new_answers } else { &old_answers };
-                q.default.as_ref().and_then(|d| eval.eval(d, scope).ok())
+                let default = q.default.as_ref().and_then(|d| eval.eval(d, scope).ok())?;
+                narrow(q, default, ValueOrigin::Default).ok()
             },
             root_id,
         ),
@@ -320,7 +322,8 @@ pub fn run(
             &child_secrets,
             &eval,
             interaction,
-        )?;
+        )
+        .map_err(|e| stored_answer_hint(e, &changes.set, |id| inst.flat_id(inc.decl.repeat, id)))?;
         let binds = compose::bind_ids(&template, &inst.include);
         let child_answers = answers::provenance(
             &inc.template.manifest.questions,
@@ -356,14 +359,16 @@ pub fn run(
                 |q, new_side| match inc.decl.bind.get(&q.id.0) {
                     Some(bind) => eval
                         .eval(bind, if new_side { &new_scope } else { &old_scope })
-                        .ok(),
+                        .ok()
+                        .and_then(|v| narrow(q, v, ValueOrigin::Input).ok()),
                     None => q.default.as_ref().and_then(|d| {
                         let scope = if new_side {
                             &new_child_answers
                         } else {
                             &old_child_answers
                         };
-                        eval.eval(d, scope).ok()
+                        let default = eval.eval(d, scope).ok()?;
+                        narrow(q, default, ValueOrigin::Default).ok()
                     }),
                 },
                 flat,
@@ -777,6 +782,35 @@ fn frame_changes(
     out
 }
 
+/// A stored answer the template no longer allows (a choice it now blocks,
+/// or a value other than a lock it added) stops the update; say how to
+/// change it. An answer set on this run explains itself.
+fn stored_answer_hint(
+    err: anyhow::Error,
+    set_now: &AnswerSet,
+    flat_id: impl Fn(&AnswerId) -> String,
+) -> anyhow::Error {
+    let hint = match err.downcast_ref::<RenderError>() {
+        Some(RenderError::Blocked { id, .. }) if !set_now.contains(id) => {
+            let flat = flat_id(id);
+            format!(
+                "the answer this project stored for `{flat}` is no longer allowed; set \
+                 another with `weft update --answer {flat}=…`, or hand it back to the \
+                 template with `weft update --unset {flat}`"
+            )
+        }
+        Some(RenderError::Locked { id, .. }) if !set_now.contains(id) => {
+            let flat = flat_id(id);
+            format!(
+                "the template now locks `{flat}`; drop the answer this project stored \
+                 with `weft update --unset {flat}`"
+            )
+        }
+        _ => return err,
+    };
+    err.context(hint)
+}
+
 /// Given answers (not set on this run) that matched what their default —
 /// or bind — produced before, and no longer match it: after a rename they
 /// are the values that look stale. `expected(question, new_side)` evaluates
@@ -1162,6 +1196,7 @@ fn synthetic_secret_question(id: &AnswerId, spec: &weft_core::SecretSpec) -> Que
         when: None,
         computed: false,
         section: None,
+        narrowing: Default::default(),
     }
 }
 

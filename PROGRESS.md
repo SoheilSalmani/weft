@@ -3,6 +3,67 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Extenders refine inherited questions (`[refine]`, ADR-0002)
+
+- **The gap**: `extends` imported the base's questions as-is and
+  redeclaring one was a load error, so a stack template could not
+  pre-select its own skills, require one, or hide another. Template
+  families copied the base's patches and questions instead.
+- **`[refine.<id>]`** in an extender, per inherited question: `prompt` /
+  `description` / `example` (reword), `default` (soft), `lock` (the only
+  value; never asked), `choices` (allow-list) or `blocked` (deny-list) for
+  choice/multichoice, `fixed` for multichoice. Only narrowing: no new
+  choices, no kind change, no secrets, nothing a template higher up the
+  chain narrowed can be undone (`blocked`/`fixed` accumulate, the nearest
+  `default` wins, a lock is final). Structural mistakes are load errors
+  (`refine::apply`), all starting ``refine `<id>`:``.
+- **Representation**: applied once at load in the `extends` branch of
+  `Template::load_inner`, so every reader of `manifest.questions` sees the
+  effective question — choices already narrowed, default replaced (a lock
+  is the default plus `narrowing.locked`) — and a new
+  `Question.narrowing { locked, fixed, blocked, by }` (never read from
+  `[[question]]`). No new plumbing for describe/graph/MCP/LSP/update.
+- **Enforcement**: core `render::narrow(q, value, ValueOrigin::Input |
+  Default)` — an input picking a blocked choice is `RenderError::Blocked`,
+  a default drops blocked multichoice options (a blocked `choice` default
+  errors), fixed choices are appended after the selection (its order kept,
+  so no answer is ever reordered). `resolve_answers` narrows every value and
+  holds locked questions to their lock (`RenderError::Locked`; a
+  multichoice compares as a set). `answers::gather` narrows on the way in
+  so later gates see the render's values. Presets were the wrong substrate
+  (one-shot per command, not stored, never applied to defaults) and are
+  unchanged.
+- **Decided (ADR-0002)**: answers the user gives stay given, fixed choices
+  included — the template never rewrites `[answers]`, so relaxing `fixed`
+  never removes anything from a project that answered. A stored answer the
+  template no longer allows stops `weft update` with a hint (`--answer`, or
+  `--unset` back to the template's value), like a removed choice already
+  did. `provenance` only changed `prompted` to `is_promptable()` (a
+  multichoice whose every choice is fixed is decided, not asked).
+- **Surfaces**: `describe --json` adds `locked`/`fixed`/`blocked`/
+  `refined_by`, previews the narrowed default, and never marks a locked
+  question required; AGENTS.md shows `locked` and `(fixed: …)`. The wizard
+  hides template-decided questions (still in scope for gates), pins fixed
+  choices, names the template when a typed choice is blocked, and refuses
+  to continue on a provided answer the narrowing rejects; the choice popup
+  cursor now indexes visible choices. The sequential prompt offers only
+  free choices ("always included: …"). `weft check` reports refined
+  defaults/locks that mention later questions or pick blocked choices, an
+  inherited `choice` default a refinement blocks, and binds onto locked
+  questions; `PresetSpec::validate` rejects presets answering locked
+  questions, fixing blocked choices, or blocking fixed ones. LSP: `[refine.`
+  completes inherited ids, keys complete inside the table, hover shows the
+  narrowing and where the question is inherited from, goto follows the
+  `extends` chain, and refine errors anchor on their table. Schemas
+  regenerated (both copies).
+- Fixtures `skills-base` + `skills-dbt`; tests: core narrowing (7), load
+  rules and chains (4), check (2), preset validation (1), wizard (2), e2e
+  `refine.rs` (8) and LSP (3).
+- Not done (by decision): refining questions of includes (binds still only
+  seed); ordering an extender's hook before an inherited one (`before`), a
+  prerequisite for moving template families that end in a final commit
+  hook onto `extends`.
+
 ## Post-MVP — Change a project's answers (`weft update --answer`)
 
 - **Provenance**: `.weft/state.toml` now splits answers into `[answers]`

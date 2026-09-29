@@ -116,16 +116,25 @@ impl Interaction for TerminalInteraction {
                 Value::String(choices[idx].clone())
             }
             AnswerKind::MultiChoice { choices } => {
+                // Template-fixed choices are always selected: they aren't
+                // offered, only named, and join the answer after the pick.
+                let fixed = &question.narrowing.fixed;
+                let free: Vec<&String> = choices.iter().filter(|c| !fixed.contains(c)).collect();
+                let prompt = if fixed.is_empty() {
+                    prompt
+                } else {
+                    format!("{prompt} (always included: {})", fixed.join(", "))
+                };
                 let mut ms = dialoguer::MultiSelect::new()
                     .with_prompt(prompt)
-                    .items(choices);
+                    .items(&free);
                 if let Some(Value::List(items)) = default {
-                    let checked: Vec<bool> = choices
+                    let checked: Vec<bool> = free
                         .iter()
                         .map(|c| {
                             items
                                 .iter()
-                                .any(|v| matches!(v, Value::String(s) if s == c))
+                                .any(|v| matches!(v, Value::String(s) if s == *c))
                         })
                         .collect();
                     ms = ms.defaults(&checked);
@@ -133,7 +142,8 @@ impl Interaction for TerminalInteraction {
                 let idxs = ms.interact()?;
                 Value::List(
                     idxs.into_iter()
-                        .map(|i| Value::String(choices[i].clone()))
+                        .map(|i| Value::String(free[i].clone()))
+                        .chain(fixed.iter().map(|f| Value::String(f.clone())))
                         .collect(),
                 )
             }

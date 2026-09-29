@@ -64,7 +64,8 @@ pub struct PatchFile {
 pub struct Template {
     pub root: Utf8PathBuf,
     /// Questions and includes are merged with the extended template's
-    /// (base first); presets are this template's own.
+    /// (base first), and inherited questions carry this template's
+    /// `[refine]` narrowing; presets are this template's own.
     pub manifest: Manifest,
     /// Root-frame patches in name-resolution (topological) order.
     pub patches: Vec<Patch>,
@@ -240,8 +241,15 @@ impl Template {
                     );
                 }
             }
+            let inherited_questions = questions.len();
             questions.append(&mut manifest.questions);
             manifest.questions = questions;
+            crate::refine::apply(
+                &manifest.template.name,
+                &mut manifest.questions,
+                inherited_questions,
+                &manifest.refine,
+            )?;
             let inherited: std::collections::BTreeSet<String> = base
                 .patches
                 .iter()
@@ -260,6 +268,15 @@ impl Template {
             });
             patches = base.patches;
             includes = base.includes;
+        }
+        if manifest.template.extends.is_none() {
+            if let Some(id) = manifest.refine.keys().next() {
+                bail!(
+                    "refine `{id}`: `[refine]` narrows questions inherited through \
+                     `[template] extends`, and template `{}` extends nothing",
+                    manifest.template.name
+                );
+            }
         }
 
         // Own includes, recursively loaded; cycles are detected through the

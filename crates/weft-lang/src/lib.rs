@@ -221,6 +221,7 @@ mod tests {
             when: when.map(StarlarkExpr::from),
             computed: false,
             section: None,
+            narrowing: Default::default(),
         };
         let questions = vec![
             Question {
@@ -233,6 +234,7 @@ mod tests {
                 when: None,
                 computed: false,
                 section: None,
+                narrowing: Default::default(),
             },
             // gated off (use_ui is False) but still defaults to 'none'
             q("registries", "'none'", Some("use_ui")),

@@ -1,0 +1,13 @@
+{
+  "description": "The airflow agent skill.",
+  "when": "'airflow' in stack_skills",
+  "ops": [
+    {
+      "op": "create_file",
+      "path": ".agents/skills/airflow/SKILL.md",
+      "content": [
+        "# airflow"
+      ]
+    }
+  ]
+}

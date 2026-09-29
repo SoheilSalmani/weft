@@ -17,6 +17,43 @@ pub struct Manifest {
     pub presets: Vec<PresetDecl>,
     #[serde(default, rename = "include", skip_serializing_if = "Vec::is_empty")]
     pub includes: Vec<IncludeDecl>,
+    /// `[refine.<id>]` tables: how this template narrows questions it
+    /// inherits through `[template] extends` (see [`RefineDecl`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub refine: BTreeMap<String, RefineDecl>,
+}
+
+/// One `[refine.<id>]` table (ADR-0002). A refinement can reword an
+/// inherited question, change its default, lock it, or restrict its choices;
+/// it can never widen what the base allows. Applied at load by
+/// [`crate::refine::apply`].
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RefineDecl {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub example: Option<String>,
+    /// Replaces the inherited default (a Starlark expression that may only
+    /// mention questions declared before this one). The answer stays
+    /// editable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<StarlarkExpr>,
+    /// The only value the question accepts (Starlark, same scope rules as
+    /// `default`); it is never asked. Excludes every other value key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock: Option<StarlarkExpr>,
+    /// Choice/multichoice allow-list: every choice not listed is blocked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choices: Option<Vec<String>>,
+    /// Choice/multichoice deny-list: these choices can't be picked.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked: Vec<String>,
+    /// Multichoice: always selected.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fixed: Vec<String>,
 }
 
 /// A child template mounted at a path prefix. The child is an ordinary,

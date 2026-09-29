@@ -795,6 +795,7 @@ mod tests {
             when: None,
             computed: false,
             section: None,
+            narrowing: Default::default(),
         }
     }
 

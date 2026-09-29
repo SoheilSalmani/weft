@@ -55,13 +55,74 @@ pub struct Question {
     /// presentation metadata — no effect on resolution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
+    /// How extending templates narrowed this inherited question (their
+    /// `[refine.<id>]` tables, applied at load). Empty for a question as its
+    /// own template declared it; never read from `[[question]]`.
+    #[serde(
+        default,
+        skip_deserializing,
+        skip_serializing_if = "Narrowing::is_empty"
+    )]
+    pub narrowing: Narrowing,
 }
 
 impl Question {
     /// Whether this question is presented to a human/agent for answering.
-    /// Computed and secret questions are resolved without prompting.
+    /// Computed, secret, and locked questions resolve without prompting, and
+    /// so does a multichoice whose every remaining choice is fixed.
     pub fn is_promptable(&self) -> bool {
-        !self.computed && !matches!(self.kind, AnswerKind::Secret { .. })
+        !self.computed
+            && !matches!(self.kind, AnswerKind::Secret { .. })
+            && !self.narrowing.locked
+            && !self.nothing_to_choose()
+    }
+
+    /// A multichoice narrowed so far that every choice left is fixed (or
+    /// none is left): its value is decided without asking.
+    pub fn nothing_to_choose(&self) -> bool {
+        match &self.kind {
+            AnswerKind::MultiChoice { choices } if !self.narrowing.is_empty() => {
+                choices.iter().all(|c| self.narrowing.fixed.contains(c))
+            }
+            _ => false,
+        }
+    }
+}
+
+/// How extending templates narrowed an inherited question (ADR-0002). The
+/// question's `choices` already exclude `blocked`, and its `default` is the
+/// refined one: the lock value when `locked`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Narrowing {
+    /// The value is always the default; an explicit answer must equal it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub locked: bool,
+    /// Multichoice: always selected. In declared order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fixed: Vec<String>,
+    /// Choices removed from `choices`, kept so that picking one is reported
+    /// as blocked rather than undeclared. In the order they were blocked.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub blocked: Vec<String>,
+    /// The templates whose `[refine]` tables touched this question,
+    /// base-most first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub by: Vec<String>,
+}
+
+impl Narrowing {
+    pub fn is_empty(&self) -> bool {
+        !self.locked && self.fixed.is_empty() && self.blocked.is_empty() && self.by.is_empty()
+    }
+
+    /// Who narrowed the question, for messages: ``template `dbt` `` or
+    /// ``templates `dbt`, `dbt-x` ``.
+    pub fn refiners(&self) -> String {
+        let names: Vec<String> = self.by.iter().map(|t| format!("`{t}`")).collect();
+        match names.len() {
+            1 => format!("template {}", names[0]),
+            _ => format!("templates {}", names.join(", ")),
+        }
     }
 }
 

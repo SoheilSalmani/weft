@@ -2366,6 +2366,7 @@ fn offer_preset_capture(
         when: None,
         computed: false,
         section: None,
+        narrowing: Default::default(),
     };
     let name = match interaction.ask(&name_question, None)? {
         weft_core::Value::String(s) => s,
