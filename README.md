@@ -12,7 +12,7 @@ Core ideas:
 - **Record against a clean base.** `weft session new` materializes a pinned
   base state into a worktree; your dirty working directory never leaks in.
   Sessions work like git worktrees: several at once, each with its own staging
-  index, each a directory you `cd` into.
+  index and its own directory, which `weft session shell` opens a shell in.
 - **Abstraction happens at commit.** You edit concrete files ("My Demo");
   `weft commit` proposes which literals correspond to which answers and stores
   `{"answer": "project_name"}` segments instead.
@@ -98,26 +98,32 @@ ls /tmp/demo2          # no Dockerfile
 ### Evolve the template by recording
 
 Copy the fixture somewhere writable, then record a change against a rendered
-base state:
+base state. `--shell` opens a new shell in the session's worktree once it is
+rendered. The answers form opens first, with your answer filled in; press `s`
+to continue:
 
 ```sh
 cp -r fixtures/templates/hello /tmp/tpl
-cd $(weft session new makefile --template /tmp/tpl --answer "project_name=My Demo")
+weft session new makefile --template /tmp/tpl --answer "project_name=My Demo" --shell
 ```
 
-`weft session new` prints the worktree path, so `cd $(…)` puts you inside it.
 The name (`makefile`) is optional; leave it out and the session is `default`.
-To get a new shell in the worktree instead, add `--shell`; `exit` brings you
-back. `weft session shell makefile` opens one for a session that already
-exists, and `weft session shell makefile -- code .` runs a single command
-there, such as your editor.
-Edit with your normal tools — it's just files — then commit from there; weft
-finds the template by walking up, and paths are relative to where you stand:
+The worktree is just files, so edit it with your normal tools. In your editor,
+create `Makefile` in the worktree:
+
+```make title="Makefile"
+serve-my-demo:
+	echo My Demo
+```
+
+Commit from the worktree; weft finds the template by walking up, and paths are
+relative to where you stand. The commit takes the whole worktree, so it ends the
+session and removes the worktree, and `exit` returns you to where you started:
 
 ```sh
-echo "serve-my-demo:\n\techo My Demo" > Makefile
 weft add Makefile
 weft commit --name makefile --yes
+exit
 ```
 
 Commit diffed the worktree against the base, noticed `my-demo` and `My Demo`

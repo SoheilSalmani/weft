@@ -36,6 +36,10 @@ deviations from the plan.
   instead of `cd "$(weft session path NAME)"`. A commit or `session end` that
   deletes the worktree its own session shell stands in says that `exit`
   returns to where the shell was opened.
+- **Docs**: the README tutorial records through `weft session new --shell`
+  and leaves with `exit`; weft-cloud's pages for people do the same, and its
+  tutorial replay runs `--shell` and `weft session shell` in a pty with a
+  stand-in shell.
 - **Decided against**: an "open a shell?" prompt after `session new` (a
   preference, not missing input, so a flag or an alias holds it; and a new
   trailing prompt is one more place for an agent in a pty to block); an
