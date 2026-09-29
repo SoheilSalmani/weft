@@ -37,6 +37,7 @@ fn scaffold_template(dir: &Path) {
     .unwrap();
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(dir)
         .arg("--name")
@@ -243,6 +244,7 @@ fn commit_without_name_still_defaults_without_a_tty() {
     // No --name, no TTY: the historical auto-name (patch-NNN) still applies.
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--yes")
@@ -287,6 +289,7 @@ fn diff_previews_candidates_and_keep_literal_survives_renames() {
     // The piped diff shows ⟨…⟩ spans and the legend.
     weft()
         .arg("diff")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .assert()
@@ -295,7 +298,7 @@ fn diff_previews_candidates_and_keep_literal_survives_renames() {
         .stdout(predicates::str::contains("3 occurrence(s)"));
     // Abstracted view shows the stored form.
     weft()
-        .args(["diff", "--abstracted"])
+        .args(["diff", "--session", "main", "--abstracted"])
         .arg("--template")
         .arg(&tpl)
         .assert()
@@ -305,6 +308,7 @@ fn diff_previews_candidates_and_keep_literal_survives_renames() {
     // Keep the prose occurrence (line 4) literal; commit the rest.
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .args([

@@ -244,6 +244,7 @@ fn record_foreach_authors_an_integration_patch() {
     std::fs::write(&readme, content).unwrap();
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(&parent)
         .arg("--name")

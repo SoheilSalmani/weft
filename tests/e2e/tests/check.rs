@@ -182,7 +182,15 @@ fn commit_keeps_expression_output_out_of_hunk_context() {
     )
     .unwrap();
     weft()
-        .args(["commit", "--name", "mine", "--yes", "--no-tui"])
+        .args([
+            "commit",
+            "--session",
+            "default",
+            "--name",
+            "mine",
+            "--yes",
+            "--no-tui",
+        ])
         .arg("--template")
         .arg(root)
         .assert()
@@ -215,7 +223,15 @@ fn commit_refuses_a_change_with_only_expression_lines_around_it() {
     )
     .unwrap();
     weft()
-        .args(["commit", "--name", "mine", "--yes", "--no-tui"])
+        .args([
+            "commit",
+            "--session",
+            "default",
+            "--name",
+            "mine",
+            "--yes",
+            "--no-tui",
+        ])
         .arg("--template")
         .arg(root)
         .assert()

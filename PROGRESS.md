@@ -3,6 +3,54 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Worktree commands need a worktree (BREAKING)
+
+- **The reported pain, again** (the `weft add init` report under "Sessions
+  are git-style worktrees" never fully went away): at the template root with
+  one session, `weft status` worked and `weft add README.md` staged the
+  *worktree's* README while the shell completed the *template's*. A
+  tab-completed `.weft-sessions/default/worktree/x.txt` matched nothing,
+  printed `staged 0 path(s)`, exited 0, and the next `weft commit` took the
+  whole worktree (an empty stage means "commit everything"). The same
+  `status` failed once a second session existed.
+- **Rule** (`weft-cli/src/ctx.rs`): `status`, `add`, `reset`, `diff` and
+  `commit` act on `--session NAME` or the worktree you stand in;
+  `Scope::resolve` no longer falls back to `Session::only`, not even with one
+  session. With `--session` from outside the worktree, paths are relative to
+  the worktree root (git's `--work-tree`). The error lists every session and
+  its worktree and ends with `cd "$(weft session path NAME)"` /
+  `--session NAME` (the real name when there is one session). The template
+  root is weft's bare repository; git refuses `git status` in one too.
+- **Unchanged**: `weft session scope|refresh|path|end` still take the only
+  session (`Scope::resolve_or_only`): they manage sessions from the template,
+  take no paths, and `session refresh` right after editing `weft.toml` at the
+  root is the natural flow. Staging was already per session
+  (`.weft-sessions/<name>/stage/`, the layout of git's
+  `.git/worktrees/<name>/index`). MCP passes session names explicitly.
+- **A pattern that matches nothing is an error** (`stage::unmatched`,
+  `ctx::refuse_unmatched`): `weft add PATTERN…` (and `-p PATTERN`) and
+  `weft reset PATTERN…` fail before touching the stage and name each dead
+  pattern; one that matches only a base path still stages a deletion. The
+  hint names the likely cause: from outside the worktree paths are
+  root-relative; an adopted session's scope needs `weft session scope --add`.
+  `-A`, bare `-p`, bare `reset` and `.` are exempt.
+- `weft status` outside a worktree no longer prints "no session" and exits 0.
+  `weft describe`'s `usage.author` still said the removed `weft record` and
+  `weft commit --template DIR`; it now enters the worktree with
+  `cd "$(weft session new <patch> --template DIR … --no-wizard)"` and commits
+  from there.
+- e2e: 73 invocations in 14 files name their session; `worktree.rs` gains
+  `the_template_root_never_implies_a_session` (old behaviour: `status` at the
+  root with one session succeeded) and
+  `a_pattern_that_matches_nothing_changes_nothing`; a stage unit test pins
+  that a deletion counts as a match. ADR-0004 (Accepted) records the rule.
+  Gate green: `cargo fmt --all --check && cargo clippy --workspace
+  --all-targets -- -D warnings && cargo test --workspace`.
+- Known limit: a session pins its base patch ids, so amending a patch another
+  open session builds on strands that session (`status` and `session refresh`
+  both say "pinned base patch … no longer exists"). New patches from parallel
+  sessions are fine.
+
 ## Post-MVP — Slots: several patches adding to one file (`fill_slot`)
 
 - **The gap**: only one patch could create a file, and siblings inserting

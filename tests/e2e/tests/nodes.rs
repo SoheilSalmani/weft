@@ -185,7 +185,7 @@ fn commit_infers_include_dependencies_from_edited_paths() {
     std::fs::write(&pkg, edited).unwrap();
     std::fs::write(worktree.join("turbo.json"), "{ \"pipeline\": {} }\n").unwrap();
     weft()
-        .arg("commit")
+        .args(["commit", "--session", "main"])
         .arg("--template")
         .arg(&monorepo)
         .arg("--name")
@@ -280,7 +280,7 @@ fn update_reconstructs_amended_child_bodies_from_the_snapshot() {
     );
     std::fs::write(wt.join("next.config.ts"), cfg).unwrap();
     weft()
-        .arg("commit")
+        .args(["commit", "--session", "app"])
         .arg("--template")
         .arg(&app)
         .arg("--yes")

@@ -42,7 +42,7 @@ fn with_generator(src: &Path) -> (tempfile::TempDir, PathBuf) {
         .assert()
         .success();
     weft()
-        .arg("commit")
+        .args(["commit", "--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--name")
@@ -206,7 +206,7 @@ fn amend_commit_applies_title_and_description() {
     copy_dir(&hello_template(), &tpl);
     amend_base_with_edit(&tpl);
     weft()
-        .args(["commit", "--yes", "--no-tui"])
+        .args(["commit", "--session", "base", "--yes", "--no-tui"])
         .args(["--describe", "New words.", "--title", "New title"])
         .arg("--template")
         .arg(&tpl)
@@ -230,7 +230,15 @@ fn amend_commit_refuses_when() {
     amend_base_with_edit(&tpl);
     let before = read(&tpl, "patches/base.json");
     weft()
-        .args(["commit", "--yes", "--no-tui", "--when", "x"])
+        .args([
+            "commit",
+            "--session",
+            "base",
+            "--yes",
+            "--no-tui",
+            "--when",
+            "x",
+        ])
         .arg("--template")
         .arg(&tpl)
         .assert()
@@ -261,7 +269,7 @@ fn amend_rewrites_a_leaf_patch_in_place() {
     )
     .unwrap();
     weft()
-        .arg("commit")
+        .args(["commit", "--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--name")
@@ -295,7 +303,7 @@ fn amend_rewrites_a_leaf_patch_in_place() {
     );
     std::fs::write(worktree.join("note.txt"), "hello from Demo — updated\n").unwrap();
     weft()
-        .arg("commit")
+        .args(["commit", "--session", "note"])
         .arg("--template")
         .arg(&tpl)
         .arg("--yes")
@@ -356,7 +364,7 @@ fn stacked_template() -> (tempfile::TempDir, PathBuf) {
         .success();
     std::fs::write(tpl.join(".weft-sessions/main/worktree/config.txt"), base).unwrap();
     weft()
-        .arg("commit")
+        .args(["commit", "--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--name")
@@ -381,7 +389,7 @@ fn stacked_template() -> (tempfile::TempDir, PathBuf) {
     )
     .unwrap();
     weft()
-        .arg("commit")
+        .args(["commit", "--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--name")
@@ -415,7 +423,7 @@ fn amend_descendant_still_applies() {
     )
     .unwrap();
     weft()
-        .arg("commit")
+        .args(["commit", "--session", "p1"])
         .arg("--template")
         .arg(&tpl)
         .arg("--yes")
@@ -464,7 +472,7 @@ fn amend_reports_broken_descendant() {
     )
     .unwrap();
     weft()
-        .arg("commit")
+        .args(["commit", "--session", "p1"])
         .arg("--template")
         .arg(&tpl)
         .arg("--yes")
@@ -495,7 +503,7 @@ fn squash_combines_a_chain() {
         .success();
     std::fs::write(tpl.join(".weft-sessions/main/worktree/x.txt"), "ex\n").unwrap();
     weft()
-        .arg("commit")
+        .args(["commit", "--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--name")
@@ -515,7 +523,7 @@ fn squash_combines_a_chain() {
         .success();
     std::fs::write(tpl.join(".weft-sessions/main/worktree/y.txt"), "why\n").unwrap();
     weft()
-        .arg("commit")
+        .args(["commit", "--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--name")

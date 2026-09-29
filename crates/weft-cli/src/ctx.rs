@@ -1,11 +1,14 @@
 //! Working out which template and session a command applies to.
 //!
-//! Session commands are meant to be run from *inside* a worktree, the way git
-//! is run from inside a checkout: the template is found by walking up, path
-//! arguments are relative to where you stand, and shell completion therefore
-//! just works. `--template` / `--session` stay as explicit overrides.
+//! The worktree commands (`status`, `add`, `reset`, `diff`, `commit`) act on
+//! the worktree you stand in, the way git is run from inside a checkout, or
+//! on the session `--session` names. They never pick one by counting: the
+//! template root is weft's bare repository, not a checkout, and a path typed
+//! there would name a template file while weft read it in the worktree.
+//! `weft session …` subcommands manage sessions from anywhere in the
+//! template and also accept the template's only session.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use weft_engine::discover::{self, WorktreeLink};
 use weft_engine::session::Session;
@@ -22,7 +25,7 @@ pub struct Scope {
     #[arg(long)]
     pub template: Option<Utf8PathBuf>,
     /// Session to act on. Defaults to the session whose worktree you are
-    /// standing in, or the template's only session.
+    /// standing in.
     #[arg(long, short = 's')]
     pub session: Option<String>,
 }
@@ -34,9 +37,12 @@ pub struct Resolved {
     pub session: String,
     pub worktree: Utf8PathBuf,
     /// Where the command was run, relative to the worktree root. Path
-    /// arguments are resolved against this; empty at the root (or when the
-    /// command was run from the template rather than the worktree).
+    /// arguments are resolved against this; empty at the root, and when
+    /// `--session` names the session from outside its worktree (paths are
+    /// then relative to the worktree root, like git's `--work-tree`).
     pub prefix: Utf8PathBuf,
+    /// Whether the command was run inside the worktree.
+    pub inside: bool,
 }
 
 impl Scope {
@@ -55,8 +61,19 @@ impl Scope {
         }
     }
 
-    /// The template plus the session to act on.
+    /// The session a worktree command acts on: `--session`, else the
+    /// worktree you are standing in.
     pub fn resolve(&self) -> Result<Resolved> {
+        self.resolve_with(|template| Err(not_in_worktree(template)))
+    }
+
+    /// For `weft session …` subcommands: like [`Scope::resolve`], but outside
+    /// a worktree the template's only session will do.
+    pub fn resolve_or_only(&self) -> Result<Resolved> {
+        self.resolve_with(Session::only)
+    }
+
+    fn resolve_with(&self, outside: impl FnOnce(&Utf8Path) -> Result<String>) -> Result<Resolved> {
         let cwd = discover::cwd()?;
         let loc = discover::locate(&cwd);
         let template = match &self.template {
@@ -71,32 +88,97 @@ impl Scope {
         };
 
         // Standing inside a worktree names the session, unless overridden.
-        let inside = loc
+        let standing_in = loc
             .as_ref()
             .filter(|l| l.template_root == template)
             .and_then(|l| l.session.clone());
-        let session = match (&self.session, inside) {
+        let session = match (&self.session, standing_in) {
             (Some(name), _) => name.clone(),
             (None, Some(name)) => name,
-            (None, None) => Session::only(&template)?,
+            (None, None) => outside(&template)?,
         };
 
         let sess = Session::load(&template, &session)?;
         let recorded = sess.worktree(&template, &session);
         let worktree = heal(&template, &session, &sess, &loc, &recorded)?;
 
-        // Empty unless the command was run inside the worktree.
-        let prefix = cwd
-            .strip_prefix(discover::absolute(&worktree))
-            .map(|p| p.to_owned())
-            .unwrap_or_default();
+        let (prefix, inside) = match cwd.strip_prefix(discover::absolute(&worktree)) {
+            Ok(p) => (p.to_owned(), true),
+            Err(_) => (Utf8PathBuf::new(), false),
+        };
         Ok(Resolved {
             template,
             session,
             worktree,
             prefix,
+            inside,
         })
     }
+}
+
+/// Why a worktree command has no session to act on, ending with what to run.
+fn not_in_worktree(template: &Utf8Path) -> anyhow::Error {
+    let sessions = match Session::list(template) {
+        Ok(sessions) => sessions,
+        Err(e) => return e,
+    };
+    if sessions.is_empty() {
+        return anyhow!(
+            "not inside a session worktree, and `{template}` has no sessions\n\
+             start one with `weft session new NAME`"
+        );
+    }
+    let rows: Vec<String> = sessions
+        .iter()
+        .map(|(name, sess)| format!("  {name}\t{}", sess.worktree(template, name)))
+        .collect();
+    let name = match sessions.as_slice() {
+        [(only, _)] => only.as_str(),
+        _ => "NAME",
+    };
+    anyhow!(
+        "not inside a session worktree of `{template}`; its sessions:\n{}\n\
+         run this inside one (cd \"$(weft session path {name})\"), or pass --session {name}",
+        rows.join("\n")
+    )
+}
+
+/// Refuse the `weft add`/`weft reset` patterns at `missing` (indices into
+/// `typed`, the patterns as the user typed them). `.` is exempt: "here and
+/// below" is never a typo, even where nothing is left to stage.
+pub fn refuse_unmatched(
+    here: &Resolved,
+    typed: &[String],
+    missing: &[usize],
+    scope: &[String],
+) -> Result<()> {
+    let named: Vec<String> = missing
+        .iter()
+        .map(|&i| typed[i].as_str())
+        .filter(|p| !matches!(*p, "." | "./"))
+        .map(|p| format!("`{p}`"))
+        .collect();
+    if named.is_empty() {
+        return Ok(());
+    }
+    let hint = if !here.inside {
+        format!(
+            "from outside the worktree, paths are relative to its root: {}",
+            here.worktree
+        )
+    } else if !scope.is_empty() {
+        format!(
+            "this session only looks at {}; widen it with `weft session scope --add GLOB`",
+            scope.join(", ")
+        )
+    } else {
+        "paths are relative to where you stand; `dir/**` covers a directory".to_owned()
+    };
+    bail!(
+        "{} matched no file in session `{}`; nothing changed\n{hint}",
+        named.join(", "),
+        here.session
+    )
 }
 
 /// If a worktree was moved with `mv` rather than `weft session move`, the

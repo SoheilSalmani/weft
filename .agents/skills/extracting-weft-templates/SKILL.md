@@ -37,6 +37,7 @@ weft session adopt /tmp/proj-extract -n base --template ~/Desktop/Projects/templ
   --answer "project_name=Payments" --answer use_docker=true --answer use_ci=true \
   --scope pyproject.toml --scope main.py --scope README.md --scope .gitignore \
   --scope Dockerfile --scope '.github/**'
+cd /tmp/proj-extract
 weft status
 ```
 

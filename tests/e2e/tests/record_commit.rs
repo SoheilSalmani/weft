@@ -71,7 +71,7 @@ fn record_commit_new_round_trip() {
 
     // 3. commit with value abstraction (non-interactive => accept proposals)
     weft()
-        .arg("commit")
+        .args(["commit", "--session", "main"])
         .arg("--template")
         .arg(&template)
         .arg("--name")
@@ -153,7 +153,7 @@ fn commit_without_changes_fails() {
         .assert()
         .success();
     weft()
-        .arg("commit")
+        .args(["commit", "--session", "main"])
         .arg("--template")
         .arg(&template)
         .arg("--yes")

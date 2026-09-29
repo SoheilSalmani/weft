@@ -46,6 +46,7 @@ fn scaffolded(note_body: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
     std::fs::write(tpl.join(".weft-sessions/main/worktree/note.txt"), note_body).unwrap();
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--name")
@@ -87,6 +88,7 @@ fn amend_note(tpl: &Path, new_body: &str) {
     std::fs::write(tpl.join(".weft-sessions/note/worktree/note.txt"), new_body).unwrap();
     weft()
         .arg("commit")
+        .args(["--session", "note"])
         .arg("--template")
         .arg(tpl)
         .arg("--yes")
@@ -162,6 +164,7 @@ fn squash_update_is_a_noop() {
     std::fs::write(tpl.join(".weft-sessions/main/worktree/a.txt"), "aaa\n").unwrap();
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--name")
@@ -182,6 +185,7 @@ fn squash_update_is_a_noop() {
     std::fs::write(tpl.join(".weft-sessions/main/worktree/b.txt"), "bbb\n").unwrap();
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--name")

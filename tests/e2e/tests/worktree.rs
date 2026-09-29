@@ -124,26 +124,99 @@ fn two_sessions_keep_separate_stages() {
 }
 
 #[test]
-fn several_sessions_force_an_explicit_choice_from_the_template_root() {
+fn the_template_root_never_implies_a_session() {
     let tmp = tempfile::tempdir().unwrap();
     let tpl = init_template(tmp.path());
-    new_session(&tpl, "alpha");
-    new_session(&tpl, "beta");
+    let wt = new_session(&tpl, "alpha");
+    // At the template root `README.md` names the template's own README, while
+    // weft would read the worktree's.
+    fs::write(tpl.join("README.md"), "template readme\n").unwrap();
+    fs::write(wt.join("README.md"), "project readme\n").unwrap();
 
+    // A single session is still not picked: the root is not a worktree.
     weft()
         .arg("status")
         .current_dir(&tpl)
         .assert()
         .failure()
-        .stderr(contains("--session"))
-        .stderr(contains("alpha, beta"));
+        .stderr(contains("alpha"));
+    weft()
+        .args(["add", "README.md"])
+        .current_dir(&tpl)
+        .assert()
+        .failure();
 
+    // Naming the session works from anywhere, with paths relative to the
+    // worktree root (git's --work-tree); the refused add staged nothing.
     weft()
         .args(["status", "--session", "alpha"])
         .current_dir(&tpl)
         .assert()
         .success()
-        .stdout(contains("session `alpha`"));
+        .stdout(contains("no staged changes"));
+    weft()
+        .args(["add", "README.md", "--session", "alpha"])
+        .current_dir(&tpl)
+        .assert()
+        .success();
+    weft()
+        .args(["diff", "--staged", "--session", "alpha"])
+        .current_dir(&tpl)
+        .assert()
+        .success()
+        .stdout(contains("project readme"));
+}
+
+#[test]
+fn a_pattern_that_matches_nothing_changes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tpl = init_template(tmp.path());
+    let wt = new_session(&tpl, "alpha");
+    fs::write(wt.join("wanted.txt"), "keep\n").unwrap();
+    fs::write(wt.join("scratch.txt"), "not this\n").unwrap();
+
+    // A typo beside a real path refuses the whole add: an empty stage would
+    // make the next commit take the whole worktree.
+    weft()
+        .args(["add", "wanted.txt", "wantd.txt"])
+        .current_dir(&wt)
+        .assert()
+        .failure()
+        .stderr(contains("wantd.txt"));
+    weft()
+        .arg("status")
+        .current_dir(&wt)
+        .assert()
+        .success()
+        .stdout(contains("no staged changes"));
+
+    // What a shell completes at the template root is not a worktree path.
+    weft()
+        .args(["add", ".weft-sessions/alpha/worktree/wanted.txt"])
+        .args(["--session", "alpha"])
+        .current_dir(&tpl)
+        .assert()
+        .failure();
+
+    // Unstaging a path that matches nothing leaves the stage as it was.
+    weft()
+        .args(["add", "wanted.txt"])
+        .current_dir(&wt)
+        .assert()
+        .success();
+    weft()
+        .args(["reset", "wantd.txt"])
+        .current_dir(&wt)
+        .assert()
+        .failure()
+        .stderr(contains("wantd.txt"));
+    weft()
+        .args(["diff", "--staged"])
+        .current_dir(&wt)
+        .assert()
+        .success()
+        .stdout(contains("wanted.txt"))
+        .stdout(contains("scratch.txt").not());
 }
 
 #[test]

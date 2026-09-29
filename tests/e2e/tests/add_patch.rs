@@ -32,7 +32,7 @@ fn session_with_base_file(dir: &Path) -> (PathBuf, PathBuf) {
     let wt = tpl.join(".weft-sessions/main/worktree");
     fs::write(wt.join("f.txt"), BEFORE).unwrap();
     weft()
-        .args(["commit", "--template"])
+        .args(["commit", "--session", "main", "--template"])
         .arg(&tpl)
         .args(["--name", "base", "--yes"])
         .assert()
@@ -55,7 +55,7 @@ fn keys_stage_one_hunk_and_leave_the_other_unstaged() {
 
     // Take the first hunk, skip the second.
     weft()
-        .args(["add", "-p", "--template"])
+        .args(["add", "-p", "--session", "main", "--template"])
         .arg(&tpl)
         .write_stdin("y\nn\n")
         .assert()
@@ -67,7 +67,7 @@ fn keys_stage_one_hunk_and_leave_the_other_unstaged() {
 
     // The stage holds only the first edit…
     weft()
-        .args(["diff", "--staged", "--template"])
+        .args(["diff", "--staged", "--session", "main", "--template"])
         .arg(&tpl)
         .assert()
         .success()
@@ -76,7 +76,7 @@ fn keys_stage_one_hunk_and_leave_the_other_unstaged() {
 
     // …and the second is still sitting unstaged in the worktree.
     weft()
-        .args(["status", "--template"])
+        .args(["status", "--session", "main", "--template"])
         .arg(&tpl)
         .assert()
         .success()
@@ -85,7 +85,7 @@ fn keys_stage_one_hunk_and_leave_the_other_unstaged() {
 
     // Committing writes a patch with just the staged hunk.
     weft()
-        .args(["commit", "--template"])
+        .args(["commit", "--session", "main", "--template"])
         .arg(&tpl)
         .args(["--name", "first", "--stack", "--yes"])
         .assert()
@@ -96,7 +96,7 @@ fn keys_stage_one_hunk_and_leave_the_other_unstaged() {
 
     // The leftover edit survives into the next commit.
     weft()
-        .args(["diff", "--template"])
+        .args(["diff", "--session", "main", "--template"])
         .arg(&tpl)
         .assert()
         .success()
@@ -110,7 +110,7 @@ fn a_stages_every_remaining_hunk_in_the_file() {
     fs::write(wt.join("f.txt"), AFTER).unwrap();
 
     weft()
-        .args(["add", "-p", "--template"])
+        .args(["add", "-p", "--session", "main", "--template"])
         .arg(&tpl)
         .write_stdin("a\n")
         .assert()
@@ -118,7 +118,7 @@ fn a_stages_every_remaining_hunk_in_the_file() {
         .stderr(contains("staged 1 path(s)"));
 
     weft()
-        .args(["status", "--template"])
+        .args(["status", "--session", "main", "--template"])
         .arg(&tpl)
         .assert()
         .success()
@@ -133,7 +133,7 @@ fn s_splits_a_merged_hunk_into_separately_stageable_pieces() {
     fs::write(wt.join("f.txt"), "1\nTWO\n3\nFOUR\n5\n6\n7\n8\n9\n10\n").unwrap();
 
     weft()
-        .args(["add", "-p", "--template"])
+        .args(["add", "-p", "--session", "main", "--template"])
         .arg(&tpl)
         .write_stdin("s\ny\nn\n")
         .assert()
@@ -141,7 +141,7 @@ fn s_splits_a_merged_hunk_into_separately_stageable_pieces() {
         .stdout(contains("split into 2 hunks"));
 
     weft()
-        .args(["diff", "--staged", "--template"])
+        .args(["diff", "--staged", "--session", "main", "--template"])
         .arg(&tpl)
         .assert()
         .success()
@@ -156,7 +156,7 @@ fn declining_everything_stages_nothing() {
     fs::write(wt.join("f.txt"), AFTER).unwrap();
 
     weft()
-        .args(["add", "-p", "--template"])
+        .args(["add", "-p", "--session", "main", "--template"])
         .arg(&tpl)
         .write_stdin("n\nn\n")
         .assert()
@@ -164,7 +164,7 @@ fn declining_everything_stages_nothing() {
         .stderr(contains("staged 0 path(s)"));
 
     weft()
-        .args(["diff", "--staged", "--template"])
+        .args(["diff", "--staged", "--session", "main", "--template"])
         .arg(&tpl)
         .assert()
         .success()
@@ -176,7 +176,7 @@ fn nothing_to_stage_is_reported_not_prompted() {
     let tmp = tempfile::tempdir().unwrap();
     let (tpl, _wt) = session_with_base_file(tmp.path());
     weft()
-        .args(["add", "-p", "--template"])
+        .args(["add", "-p", "--session", "main", "--template"])
         .arg(&tpl)
         .assert()
         .success()

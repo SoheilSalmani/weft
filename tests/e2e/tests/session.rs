@@ -55,12 +55,12 @@ fn staged_commits_default_to_independent_siblings() {
 
     // Stage only A. Status shows A staged and B unstaged.
     weft()
-        .args(["add", "A.txt", "--template"])
+        .args(["add", "A.txt", "--session", "main", "--template"])
         .arg(&tpl)
         .assert()
         .success();
     weft()
-        .args(["status", "--template"])
+        .args(["status", "--session", "main", "--template"])
         .arg(&tpl)
         .assert()
         .success()
@@ -73,7 +73,7 @@ fn staged_commits_default_to_independent_siblings() {
     // Commit the staged subset. Non-interactive defaults to sibling: A is
     // peeled out and B remains.
     weft()
-        .args(["commit", "--template"])
+        .args(["commit", "--session", "main", "--template"])
         .arg(&tpl)
         .args(["--name", "a", "--yes"])
         .assert()
@@ -82,7 +82,7 @@ fn staged_commits_default_to_independent_siblings() {
 
     // Commit the rest (whole worktree, since nothing is staged now).
     weft()
-        .args(["commit", "--template"])
+        .args(["commit", "--session", "main", "--template"])
         .arg(&tpl)
         .args(["--name", "b", "--yes"])
         .assert()
@@ -104,11 +104,11 @@ fn staged_commits_default_to_independent_siblings() {
 
     // The session ended once everything was committed.
     weft()
-        .args(["status", "--template"])
+        .args(["session", "list", "--template"])
         .arg(&tpl)
         .assert()
         .success()
-        .stdout(predicates::str::contains("no session in"));
+        .stdout(predicates::str::is_empty());
 }
 
 #[test]
@@ -121,19 +121,19 @@ fn stack_makes_the_next_patch_depend_on_the_committed_one() {
     fs::write(wt.join("A.txt"), "a\n").unwrap();
     fs::write(wt.join("B.txt"), "b\n").unwrap();
     weft()
-        .args(["add", "A.txt", "--template"])
+        .args(["add", "A.txt", "--session", "main", "--template"])
         .arg(&tpl)
         .assert()
         .success();
     weft()
-        .args(["commit", "--template"])
+        .args(["commit", "--session", "main", "--template"])
         .arg(&tpl)
         .args(["--name", "a", "--stack", "--yes"])
         .assert()
         .success()
         .stderr(predicates::str::contains("building on it"));
     weft()
-        .args(["commit", "--template"])
+        .args(["commit", "--session", "main", "--template"])
         .arg(&tpl)
         .args(["--name", "b", "--yes"])
         .assert()
@@ -156,18 +156,18 @@ fn plain_commit_still_commits_everything_and_ends_the_session() {
     fs::write(wt.join("README.md"), "# Demo\n").unwrap();
     // No staging: the classic one-shot flow commits the whole worktree.
     weft()
-        .args(["commit", "--template"])
+        .args(["commit", "--session", "main", "--template"])
         .arg(&tpl)
         .args(["--name", "base", "--yes"])
         .assert()
         .success();
     assert!(tpl.join("patches/base.json").exists());
     weft()
-        .args(["status", "--template"])
+        .args(["session", "list", "--template"])
         .arg(&tpl)
         .assert()
         .success()
-        .stdout(predicates::str::contains("no session in"));
+        .stdout(predicates::str::is_empty());
 }
 
 #[test]
@@ -196,7 +196,7 @@ fn session_end_guards_dirty_worktree_and_discards() {
     // A fresh session starts with no --force needed.
     record(&tpl, "project_name=B");
     weft()
-        .args(["status", "--template"])
+        .args(["status", "--session", "main", "--template"])
         .arg(&tpl)
         .assert()
         .success()
@@ -223,7 +223,7 @@ fn refresh_picks_up_a_new_question_for_abstraction() {
 
     fs::write(wt.join("README.md"), "# Demo\nLicense: MIT\n").unwrap();
     weft()
-        .args(["commit", "--template"])
+        .args(["commit", "--session", "main", "--template"])
         .arg(&tpl)
         .args(["--name", "doc", "--yes"])
         .assert()
@@ -247,7 +247,7 @@ fn refresh_merges_an_answer_change_onto_worktree_edits() {
     fs::write(wt.join("README.md"), "# Demo\n").unwrap();
     fs::write(wt.join("NOTES.md"), "notes\n").unwrap();
     weft()
-        .args(["commit", "--template"])
+        .args(["commit", "--session", "main", "--template"])
         .arg(&tpl)
         .args(["--name", "base", "--yes"])
         .assert()
@@ -286,14 +286,14 @@ fn diff_staged_shows_only_the_staged_changes() {
     fs::write(wt.join("A.txt"), "a\n").unwrap();
     fs::write(wt.join("B.txt"), "b\n").unwrap();
     weft()
-        .args(["add", "A.txt", "--template"])
+        .args(["add", "A.txt", "--session", "main", "--template"])
         .arg(&tpl)
         .assert()
         .success();
 
     // The whole-worktree diff lists both files.
     let whole = weft()
-        .args(["diff", "--template"])
+        .args(["diff", "--session", "main", "--template"])
         .arg(&tpl)
         .arg("--json")
         .output()
@@ -306,7 +306,7 @@ fn diff_staged_shows_only_the_staged_changes() {
 
     // The staged diff lists only the staged file.
     let staged = weft()
-        .args(["diff", "--template"])
+        .args(["diff", "--session", "main", "--template"])
         .arg(&tpl)
         .args(["--staged", "--json"])
         .output()

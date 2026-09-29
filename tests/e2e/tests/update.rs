@@ -56,6 +56,7 @@ fn evolve(template: &Path, name: &str, edit: impl FnOnce(&Path)) {
     edit(&template.join(".weft-sessions/main/worktree"));
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(template)
         .arg("--name")

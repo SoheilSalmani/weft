@@ -159,6 +159,7 @@ fn commit_metadata_lands_in_describe() {
     .unwrap();
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(&template)
         .arg("--name")

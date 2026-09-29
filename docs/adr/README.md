@@ -10,6 +10,7 @@ Records are numbered permanently. Numbers are never reused, including for reject
 | [ADR-0001](0001-project-side-agent-guide.md): Write the project-side agent guide into the state directory | Rejected | Rejected: every option assumed per-project content, which cannot reach an agent uniformly |
 | [ADR-0002](0002-extenders-narrow-inherited-questions.md): Let an extending template narrow the questions it inherits | Accepted | An extender can re-default, lock, and restrict the choices of inherited questions, never widen them |
 | [ADR-0003](0003-independent-patches-fill-named-slots.md): Let independent patches add lines to one file through named slots | Proposed | A file can declare slots that other patches fill; contributions render sorted by key, so fill-only patches commute |
+| [ADR-0004](0004-worktree-commands-name-their-session.md): Take a worktree command's session from where it runs or from its name | Accepted | Status, add, reset, diff and commit act on the worktree they run in or on a named session, never on a template's only session |
 
 ADR-0000 is a baseline rather than a decision. It describes the starting architecture so later records have a historical reference point, and it may be cited as evidence of what existed on that date, never as evidence that any of it was chosen deliberately. Decision records begin at ADR-0001.
 

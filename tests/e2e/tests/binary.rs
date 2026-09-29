@@ -48,6 +48,7 @@ fn record_icon_patch(tpl: &Path, src: &Path) {
         .success();
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(tpl)
         .arg("--name")
@@ -129,6 +130,7 @@ fn diff_shows_binary_opaque() {
         .success();
     weft()
         .arg("diff")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .assert()
@@ -195,6 +197,7 @@ fn modifying_a_binary_records_delete_plus_create() {
     std::fs::write(tpl.join(".weft-sessions/main/worktree/app/favicon.ico"), V2).unwrap();
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--name")
@@ -244,6 +247,7 @@ fn add_icon_patch(tpl: &Path, name: &str, bytes: &[u8]) {
     .unwrap();
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(tpl)
         .arg("--name")

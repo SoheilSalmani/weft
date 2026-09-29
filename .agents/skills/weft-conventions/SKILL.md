@@ -5,7 +5,7 @@ description: House conventions and the mental model for Weft, the record-based t
 
 # Weft conventions
 
-Weft is a personal project. No model has seen it in training and its documentation is not online, so nothing about it may be assumed from memory. Everything here was verified against `weft 0.1.0` on 2026-09-25, and the composition facts again on 2026-09-27, after `extends` and include nodes landed. Where the docs and the binary disagree, the binary wins, and `weft <command> --help` is the check to run before relying on any flag. `references/cli.md` is the verified command sheet.
+Weft is a personal project. No model has seen it in training and its documentation is not online, so nothing about it may be assumed from memory. Everything here was verified against `weft 0.1.0` on 2026-09-25, the composition facts again on 2026-09-27, after `extends` and include nodes landed, and session resolution on 2026-09-30. Where the docs and the binary disagree, the binary wins, and `weft <command> --help` is the check to run before relying on any flag. `references/cli.md` is the verified command sheet.
 
 ## The model
 
@@ -43,6 +43,7 @@ Facts that shape the loop, all observed on the binary:
 - With changes left over, the next patch is a **sibling** by default when scripted: the base stays put and the committed content is peeled back out, so the two must commute. `--stack` builds the next patch on the one just committed. Adopted sessions always stack, and `--sibling` is refused there.
 - A patch whose `--when` is false under the session's answers cannot be committed while other changes remain. Record with answers that make the gate true, or give it its own session.
 - After a failed commit the staged set is still staged. Run `weft status` and `weft reset` before staging the next piece, or the next commit takes both.
+- `status`, `add`, `reset`, `diff` and `commit` act on the worktree you stand in. Anywhere else, the template root included, they need `-s NAME` even when only one session exists, and their paths are then relative to the worktree root. A pattern that matches no file is an error that stages nothing, never an empty stage the next commit would read as the whole worktree.
 - Record with distinctive answer values (`Demo Service`, not `test`) and check `weft diff --abstracted` before committing. A generator that names the project after its directory writes the literal `worktree` into files; pass the name explicitly (`uv init --name ${package_name}`) or the answer is never used and every project inherits the leak.
 
 ## One patch is one increment
@@ -111,7 +112,7 @@ Patches are mutable. Projects survive because they carry their own base.
 
 | Want | Do | Ids |
 | --- | --- | --- |
-| different behaviour | `weft patch amend NAME`, edit the scratch worktree, `weft commit --yes` | patch and descendants change; dependents replay, a broken one is named |
+| different behaviour | `weft patch amend NAME`, edit the scratch worktree, `weft commit --yes` inside it | patch and descendants change; dependents replay, a broken one is named |
 | better words | `weft patch set NAME --title … --describe …` | unchanged |
 | two patches that always travel together | `weft patch squash A B --into A --title …` | one new id |
 | a generated patch, regenerated | `weft patch resync NAME` or `weft patch set-command NAME "…" --resync` | changes |
@@ -134,7 +135,7 @@ Never fork a `docker-v2`. Run `weft check` after every one of these: amend, re-p
 - Op types beyond `create_file`, `create_binary_file`, `modify_file`, `delete_file`, `rename_path`, `set_mode`; line-numbered hunks; fuzzy matching.
 - Question kinds beyond `string`, `bool`, `int`, `choice`, `multichoice`, `secret`; validation keys; secret sources beyond `env:`, `cmd:`, `prompt`.
 - Hooks in `weft.toml`, a `[[task]]` table, hook fields such as `cwd` or `env`, phases or effects beyond the three named.
-- `weft record` (now `weft session new`), `weft patch split`, `rebase`, `rename`, `gate`, `weft question add`, `weft reset -p`, or `layers` in `weft.toml`. `weft describe --json` still prints `weft record` under `usage.author`; it is stale.
+- `weft record` (now `weft session new`), `weft patch split`, `rebase`, `rename`, `gate`, `weft question add`, `weft reset -p`, or `layers` in `weft.toml`.
 - Abstraction of ints or bools, or a question weft proposed on its own. It never does.
 - A live documentation URL. The docs are the `docs/` directory of the weft-cloud repository; `weft --help`, `weft <cmd> --help` and `weft describe --json` are what is reachable from a shell.
 

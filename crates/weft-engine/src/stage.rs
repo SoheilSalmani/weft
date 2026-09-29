@@ -31,6 +31,28 @@ pub fn globset(patterns: &[String]) -> Result<GlobSet> {
     builder.build().context("building path glob set")
 }
 
+/// Indices of the patterns in `globs` that match no path in any of `trees`.
+/// `weft add` and `weft reset` refuse those, as git refuses a pathspec that
+/// matches nothing: staging nothing and succeeding would let the next
+/// `weft commit` take the whole worktree.
+pub fn unmatched(globs: &GlobSet, trees: &[&Tree]) -> Vec<usize> {
+    let mut hit = vec![false; globs.len()];
+    let mut left = globs.len();
+    let mut found = Vec::new();
+    for path in trees.iter().flat_map(|tree| tree.paths()) {
+        if left == 0 {
+            break;
+        }
+        globs.matches_into(path.as_str(), &mut found);
+        for &i in &found {
+            if !std::mem::replace(&mut hit[i], true) {
+                left -= 1;
+            }
+        }
+    }
+    (0..hit.len()).filter(|&i| !hit[i]).collect()
+}
+
 pub fn stage_dir(root: &Utf8Path, session: &str) -> Utf8PathBuf {
     session_dir(root, session).join(STAGE_DIR)
 }
@@ -144,4 +166,27 @@ pub fn in_scope(tree: &Tree, scope: &GlobSet, unrestricted: bool) -> Tree {
         .filter(|(path, _)| scope.is_match(path.as_str()))
         .map(|(path, entry)| (path.clone(), entry.clone()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use weft_core::FileEntry;
+
+    use super::*;
+
+    fn tree(paths: &[&str]) -> Tree {
+        paths
+            .iter()
+            .map(|p| (Utf8PathBuf::from(*p), FileEntry::text("x\n")))
+            .collect()
+    }
+
+    #[test]
+    fn a_deleted_file_is_matched_but_a_typo_is_not() {
+        // `gone.txt` exists only in the base: adding it stages a deletion.
+        let base = tree(&["gone.txt"]);
+        let work = tree(&["src/app.rs"]);
+        let globs = globset(&["gone.txt".into(), "gnoe.txt".into(), "src/**".into()]).unwrap();
+        assert_eq!(unmatched(&globs, &[&base, &work]), vec![1]);
+    }
 }

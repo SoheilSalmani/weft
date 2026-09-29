@@ -260,7 +260,8 @@ enum Command {
     /// Stage worktree changes into the session index (like `git add`). The
     /// next `weft commit` commits only what is staged.
     Add {
-        /// Path globs to stage, relative to the directory you run this in.
+        /// Path globs to stage, relative to the directory you run this in (to
+        /// the worktree root when `--session` names it from outside).
         patterns: Vec<String>,
         #[command(flatten)]
         scope: ctx::Scope,
@@ -274,7 +275,8 @@ enum Command {
     /// Unstage paths from the session index (like `git reset`). No paths
     /// unstages everything.
     Reset {
-        /// Path globs to unstage, relative to the directory you run this in.
+        /// Path globs to unstage, relative to the directory you run this in
+        /// (to the worktree root when `--session` names it from outside).
         patterns: Vec<String>,
         #[command(flatten)]
         scope: ctx::Scope,
@@ -564,7 +566,8 @@ enum SessionCmd {
         #[arg(long)]
         non_interactive: bool,
     },
-    /// Show or change which paths an adopted session looks at.
+    /// Show or change which paths an adopted session looks at. Outside a
+    /// worktree, `--session` defaults to the template's only session.
     Scope {
         #[command(flatten)]
         scope: ctx::Scope,
@@ -603,7 +606,8 @@ enum SessionCmd {
     },
     /// Re-read weft.toml, re-resolve answers, re-render the base, and 3-way
     /// merge it onto the worktree (preserving your edits). Use after editing
-    /// the manifest or to change answers mid-session.
+    /// the manifest or to change answers mid-session. Outside a worktree,
+    /// `--session` defaults to the template's only session.
     Refresh {
         #[command(flatten)]
         scope: ctx::Scope,
@@ -1547,6 +1551,13 @@ fn main() -> anyhow::Result<()> {
                 &tpl.ignore,
                 &trees.base_tree,
             )?;
+            if !all && !patterns.is_empty() {
+                let missing = weft_engine::stage::unmatched(
+                    &globs,
+                    &[&trees.base_tree, &staged, &trees.work_tree],
+                );
+                ctx::refuse_unmatched(&here, &patterns, &missing, &trees.sess.session.scope)?;
+            }
             let n = if patch {
                 let paths: Vec<_> = weft_engine::stage::changed_paths(&staged, &trees.work_tree)
                     .into_iter()
@@ -1596,17 +1607,19 @@ fn main() -> anyhow::Result<()> {
                     .collect();
                 Some(weft_engine::stage::globset(&pats)?)
             };
+            if let Some(globs) = &globs {
+                let missing = weft_engine::stage::unmatched(
+                    globs,
+                    &[&trees.base_tree, &staged, &trees.work_tree],
+                );
+                ctx::refuse_unmatched(&here, &patterns, &missing, &trees.sess.session.scope)?;
+            }
             weft_engine::stage::reset(&mut staged, &trees.base_tree, globs.as_ref());
             weft_engine::stage::write(&here.template, &here.session, &staged, &trees.base_tree)?;
             eprintln!("unstaged");
             Ok(())
         }
         Command::Status { scope } => {
-            let template = scope.template()?;
-            if weft_engine::session::Session::list(&template)?.is_empty() {
-                println!("no session in `{template}` — start one with `weft session new`");
-                return Ok(());
-            }
             let here = scope.resolve()?;
             let mut resolver = source::RemoteResolver::new(hub::registry_url(None).ok(), false);
             let tpl = Template::load_with(&here.template, &mut resolver)?;
@@ -1765,7 +1778,7 @@ fn main() -> anyhow::Result<()> {
                 Ok(())
             }
             SessionCmd::Scope { scope, add, rm } => {
-                let here = scope.resolve()?;
+                let here = scope.resolve_or_only()?;
                 let mut sess = weft_engine::session::Session::load(&here.template, &here.session)?;
                 for glob in &rm {
                     if !sess.session.scope.iter().any(|g| g == glob) {
@@ -1829,7 +1842,7 @@ fn main() -> anyhow::Result<()> {
                     template,
                     session: name,
                 }
-                .resolve()?;
+                .resolve_or_only()?;
                 println!("{}", here.worktree);
                 Ok(())
             }
@@ -1876,7 +1889,7 @@ fn main() -> anyhow::Result<()> {
                 answers_json,
                 non_interactive,
             } => {
-                let here = scope.resolve()?;
+                let here = scope.resolve_or_only()?;
                 let opts = weft_engine::refresh::RefreshOptions {
                     template: here.template,
                     session: here.session,
@@ -1924,7 +1937,7 @@ fn main() -> anyhow::Result<()> {
                     eprintln!("no session to end");
                     return Ok(());
                 }
-                let here = scope.resolve()?;
+                let here = scope.resolve_or_only()?;
                 let sess = weft_engine::session::Session::load(&here.template, &here.session)?;
                 if !discard {
                     let mut resolver =

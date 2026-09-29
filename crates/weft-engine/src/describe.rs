@@ -199,7 +199,8 @@ pub struct Usage {
     pub scaffold_with_preset: Vec<String>,
     /// Answers-as-JSON variant for agents.
     pub scaffold_json: String,
-    /// How to evolve the template (record → edit → commit).
+    /// How to evolve the template (start a session, edit its worktree,
+    /// commit from inside it).
     pub author: Vec<String>,
 }
 
@@ -566,11 +567,11 @@ fn build_usage(
             .collect(),
         scaffold_json: format!("weft new {dir} <dest> --answers-json '{json_answers}'"),
         author: vec![
-            format!("weft record --template {dir} <answers…>   # base worktree is printed"),
-            "… edit the worktree files with concrete values …".into(),
             format!(
-                "weft commit --template {dir} --name <patch> --describe \"what it does\" --yes"
+                "cd \"$(weft session new <patch> --template {dir}{flag_answers} --no-wizard)\""
             ),
+            "… edit the worktree files with concrete values …".into(),
+            "weft commit --name <patch> --describe \"what it does\" --yes".into(),
         ],
     }
 }

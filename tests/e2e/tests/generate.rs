@@ -51,6 +51,7 @@ fn record_generated(tpl: &Path, src: &Path, out_file: &str, name: &str) {
         .success();
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(tpl)
         .arg("--name")
@@ -79,6 +80,7 @@ fn record_exec_commits_generator_patch() {
         .stderr(predicates::str::contains("generator"));
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--name")
@@ -477,6 +479,7 @@ fn resync_reports_broken_dependent() {
     .unwrap();
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--name")
@@ -524,6 +527,7 @@ fn resync_all_follows_the_dependency_chain() {
         .success();
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--name")
@@ -580,6 +584,7 @@ fn exec_interpolates_declared_answers() {
         .stderr(predicates::str::contains("generator interpolates:"));
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--name")
@@ -644,6 +649,7 @@ fn exec_shell_vars_stay_literal() {
         .stderr(predicates::str::contains("generator interpolates").not());
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--name")
@@ -758,6 +764,7 @@ fn exec_editor_fallback_records_command() {
     );
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--name")

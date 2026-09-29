@@ -43,7 +43,7 @@ weft session end [NAME] [--discard]
 - `--exec CMD` runs the command in the rendered worktree; its output is the patch and the command is stored so `weft patch resync` can re-run it. `${answer}` and `${expr}` interpolate declared answers. Pass `--exec` with no value to write the command in `$EDITOR`.
 - `adopt` on a directory `weft new` made needs no arguments beyond `-n`; it reads `.weft/state.toml`. On any other directory pass `--template`, the answers, and `--scope`, or every file reads as new.
 - `end` refuses a worktree with uncommitted changes unless `--discard`. A worktree weft created is deleted; an adopted one is only unlinked.
-- Inside a worktree no `--template` or `--session` is needed: weft walks up to `.weft/worktree.toml`. From the template root, `-s NAME` when more than one session exists.
+- Inside a worktree no `--template` or `--session` is needed: weft walks up to `.weft/worktree.toml`. Anywhere else `status`, `add`, `reset`, `diff` and `commit` need `-s NAME`, even when the template has one session; `session scope|refresh|path|end` still fall back to the only one.
 
 ## Staging and committing
 
@@ -57,7 +57,7 @@ weft commit --name NAME [--title TEXT] [--describe TEXT] [--tag T]... [--when EX
             [--depends-on A,B | --after NAME] [--no-tui]
 ```
 
-- Paths and globs are relative to where you stand. `weft add .` stages the subtree, `-A` the whole worktree.
+- Paths and globs are relative to where you stand, or to the worktree root when `-s` names the session from outside it. `weft add .` stages the subtree, `-A` the whole worktree. A pattern that matches no file fails and changes nothing.
 - `-p` prompts `y n a d s q ?` per hunk; `s` splits a hunk that has internal context. A new file is one hunk and cannot be split, so trim a new file in the worktree before staging it.
 - `commit` takes the staged set, or the whole worktree when nothing is staged. `--name` is the file stem; without it and without a TTY the patch is auto-named `patch-NNN`.
 - `--tag` is repeatable on `commit`; `--tags a,b` in the docs is wrong.

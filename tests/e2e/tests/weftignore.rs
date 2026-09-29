@@ -51,6 +51,7 @@ fn generator_junk_is_ignored() {
         .success();
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--name")
@@ -119,6 +120,7 @@ fn ds_store_ignored_by_default() {
     std::fs::write(worktree.join("real.txt"), "real change\n").unwrap();
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--name")
@@ -153,6 +155,7 @@ fn base_rendered_paths_are_exempt() {
     std::fs::remove_file(worktree.join("README.md")).unwrap();
     weft()
         .arg("commit")
+        .args(["--session", "main"])
         .arg("--template")
         .arg(&tpl)
         .arg("--name")
