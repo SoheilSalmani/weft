@@ -366,8 +366,8 @@ pub struct Question {
     /// values computed from other answers. Requires a `default`.
     #[serde(default)]
     pub computed: bool,
-    /// Display grouping for UIs (sidebar sections, wizard groups). Pure
-    /// presentation metadata.
+    /// Display grouping for UIs (sidebar sections). Pure presentation
+    /// metadata.
     #[serde(default)]
     pub section: Option<String>,
 }

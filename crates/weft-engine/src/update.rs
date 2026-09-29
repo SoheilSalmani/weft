@@ -49,18 +49,15 @@ pub struct UpdateOptions {
 
 /// Answer changes requested with an update: new values layered exactly like
 /// `weft new`'s inputs (answers file → `--answer` → JSON, with the selected
-/// presets' locks enforced over them; then `typed` on top), plus answer ids
-/// handed back to their defaults. Ids are flat: `id`, `<include>.<id>`, or
-/// `<include>.<key>.<id>` for a repeat instance.
+/// presets' locks enforced over them), plus answer ids handed back to their
+/// defaults. Ids are flat: `id`, `<include>.<id>`, or `<include>.<key>.<id>`
+/// for a repeat instance.
 #[derive(Debug, Clone, Default)]
 pub struct AnswerChanges {
     pub presets: Vec<String>,
     pub answers: Vec<String>,
     pub answers_file: Option<Utf8PathBuf>,
     pub answers_json: Option<String>,
-    /// Already-typed values from an interactive layer (the `--reconfigure`
-    /// wizard); highest precedence.
-    pub typed: AnswerSet,
     pub unset: Vec<String>,
 }
 
@@ -70,7 +67,6 @@ impl AnswerChanges {
             && self.answers.is_empty()
             && self.answers_file.is_none()
             && self.answers_json.is_none()
-            && self.typed.is_empty()
             && self.unset.is_empty()
     }
 }
@@ -645,14 +641,13 @@ impl Requested {
         if changes.is_empty() {
             return Ok(requested);
         }
-        let mut flat = answers::layered_with_json(
+        let flat = answers::layered_with_json(
             template,
             &changes.presets,
             changes.answers_file.as_deref(),
             &changes.answers,
             changes.answers_json.as_deref(),
         )?;
-        flat.overlay(&changes.typed);
         let (root, children) = compose::split_provided(template, &flat)?;
         requested.root.set = root;
         for ((include, key), set) in children {

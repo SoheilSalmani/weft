@@ -74,5 +74,5 @@ Third person present (`Adds`, `Replaces`, `Registers`) reads well in `describe -
 | patch name | file name, `depends_on`, `--base`, `--when` neighbours, `weft graph`, `weft patch ls`, every CLI argument |
 | title | `weft patch ls`, `weft describe --json`, the studio node |
 | description | `weft describe --json`, the generated AGENTS.md patch list, the studio inspector |
-| question prompt / description / example | the wizard, `describe --json`, AGENTS.md question table, the scaffold command in AGENTS.md |
+| question prompt / description / example | the terminal prompt (prompt only), `describe --json`, AGENTS.md question table, the scaffold command in AGENTS.md |
 | hook label | the run log (the command is not echoed when it interpolates), `weft hook ls`, AGENTS.md hooks table |

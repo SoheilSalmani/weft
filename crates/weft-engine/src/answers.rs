@@ -1,21 +1,52 @@
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet};
+
 use anyhow::{bail, Context, Result};
 use camino::Utf8Path;
-use weft_core::render::{narrow, ExprEval, ValueOrigin};
-use weft_core::{AnswerKind, AnswerSet, Question, Value};
+use weft_core::render::{narrow, same_answer, ExprEval, ValueOrigin};
+use weft_core::{AnswerId, AnswerKind, AnswerSet, Question, Value};
 
 use crate::interact::Interaction;
 use crate::secrets;
 use crate::template::Template;
 
-/// The layered pre-interactive answers plus the preset lock information —
-/// what the wizard needs to skip locked rows and constrain multichoices.
+/// The layered pre-interactive answers, plus the multichoices the selected
+/// presets constrain rather than answer.
 pub struct Layered {
     pub answers: AnswerSet,
-    /// Question ids locked by a selected preset (not editable, not
-    /// overridable).
-    pub locked: std::collections::BTreeSet<weft_core::AnswerId>,
-    /// Multichoice constraints: id → (fixed, blocked).
-    pub constraints: std::collections::BTreeMap<weft_core::AnswerId, (Vec<String>, Vec<String>)>,
+    pub constraints: PresetConstraints,
+}
+
+/// Multichoices the selected presets constrain: `fixed` choices are always
+/// selected, `blocked` ones never offered.
+#[derive(Default)]
+pub struct PresetConstraints {
+    /// id → (fixed, blocked).
+    by_id: BTreeMap<AnswerId, (Vec<String>, Vec<String>)>,
+    /// The constrained multichoices no input answered: the layered answers
+    /// hold their fixed choices as a starting selection, which
+    /// [`gather_reviewed`] offers rather than takes.
+    prefilled: BTreeSet<AnswerId>,
+}
+
+impl PresetConstraints {
+    /// `q` as a person is asked it: the presets' blocked choices hidden, and
+    /// their fixed ones pinned like a template's.
+    fn shown<'q>(&self, q: &'q Question) -> Cow<'q, Question> {
+        let Some((fixed, blocked)) = self.by_id.get(&q.id) else {
+            return Cow::Borrowed(q);
+        };
+        let mut shown = q.clone();
+        if let AnswerKind::MultiChoice { choices } = &mut shown.kind {
+            choices.retain(|c| !blocked.contains(c));
+        }
+        for f in fixed {
+            if !shown.narrowing.fixed.contains(f) {
+                shown.narrowing.fixed.push(f.clone());
+            }
+        }
+        Cow::Owned(shown)
+    }
 }
 
 /// Build the pre-interactive answers. Presets **lock** what they answer: a
@@ -29,16 +60,6 @@ pub fn layered_answers(
     answers_file: Option<&Utf8Path>,
     answer_args: &[String],
 ) -> Result<AnswerSet> {
-    Ok(layered_full(template, presets, answers_file, answer_args)?.answers)
-}
-
-/// [`layered_answers`] with the lock/constraint info exposed.
-pub fn layered_full(
-    template: &Template,
-    presets: &[String],
-    answers_file: Option<&Utf8Path>,
-    answer_args: &[String],
-) -> Result<Layered> {
     let mut specs = Vec::new();
     for preset in presets {
         specs.push(template.preset_spec(preset)?);
@@ -57,11 +78,7 @@ pub fn layered_full(
             );
         }
     }
-    Ok(Layered {
-        answers: layered,
-        locked: spec.locked(),
-        constraints: spec.constraints(),
-    })
+    Ok(layered)
 }
 
 /// The user-provided layers only: answers file → `--answer` flags.
@@ -193,7 +210,66 @@ pub fn gather(
     interaction: &mut dyn Interaction,
 ) -> Result<AnswerSet> {
     let questions = &template.manifest.questions;
+    Ok(walk(
+        questions,
+        provided,
+        presolved_secrets,
+        None,
+        eval,
+        interaction,
+    )?
+    .answers)
+}
+
+/// What [`gather_reviewed`] resolved, and which of it a person typed.
+pub struct Gathered {
+    /// Every question's answer, as [`gather`] resolves it.
+    pub answers: AnswerSet,
+    /// The answers typed at a prompt. A default accepted as offered is not
+    /// among them, so it stays derived and keeps following the template.
+    pub entered: AnswerSet,
+}
+
+/// [`gather`] for a person choosing answers from scratch (`weft new`,
+/// `weft session new`, `weft patch amend`): every open question no input
+/// answered is asked, its default offered rather than taken. A multichoice
+/// a preset constrains is asked with the blocked choices hidden and the
+/// fixed ones pinned, starting from the preset's selection. `provided` is
+/// the root frame's share of the layered answers.
+///
+/// [`NonInteractive`](crate::interact::NonInteractive) takes every offered
+/// value, so an unattended run resolves exactly as [`gather`] does.
+pub fn gather_reviewed(
+    template: &Template,
+    provided: &AnswerSet,
+    constraints: &PresetConstraints,
+    eval: &dyn ExprEval,
+    interaction: &mut dyn Interaction,
+) -> Result<Gathered> {
+    let questions = &template.manifest.questions;
+    let none = AnswerSet::new();
+    walk(
+        questions,
+        provided,
+        &none,
+        Some(constraints),
+        eval,
+        interaction,
+    )
+}
+
+/// The question walk behind [`gather`] and [`gather_reviewed`]. `review`
+/// holds the presets' constraints when a person reviews every open question.
+fn walk(
+    questions: &[Question],
+    provided: &AnswerSet,
+    presolved_secrets: &AnswerSet,
+    review: Option<&PresetConstraints>,
+    eval: &dyn ExprEval,
+    interaction: &mut dyn Interaction,
+) -> Result<Gathered> {
     let mut resolved = AnswerSet::new();
+    let mut entered = AnswerSet::new();
     for q in questions {
         if let Some(when) = &q.when {
             let asked = eval
@@ -232,31 +308,51 @@ pub fn gather(
             resolved.insert(q.id.clone(), Value::Secret(value));
             continue;
         }
-        let value = if let Some(v) = provided.get(&q.id) {
-            narrow(q, v.clone(), ValueOrigin::Input)?
-        } else if let Some(default) = &q.default {
-            let value = eval
-                .eval(default, &resolved)
-                .with_context(|| format!("evaluating default of question `{}`", q.id))?;
-            narrow(q, value, ValueOrigin::Default)?
-        } else if q.nothing_to_choose() {
-            narrow(q, Value::List(Vec::new()), ValueOrigin::Default)?
-        } else {
-            narrow(q, interaction.ask(q, None)?, ValueOrigin::Input)?
+        // A preset's starting selection answers the question for `gather`,
+        // and is only an offer to a person reviewing.
+        let prefilled = review.is_some_and(|r| r.prefilled.contains(&q.id));
+        let value = match provided.get(&q.id) {
+            Some(v) if !prefilled => narrow(q, v.clone(), ValueOrigin::Input)?,
+            start => {
+                let offered = if let Some(v) = start {
+                    Some(narrow(q, v.clone(), ValueOrigin::Input)?)
+                } else if let Some(default) = &q.default {
+                    let value = eval
+                        .eval(default, &resolved)
+                        .with_context(|| format!("evaluating default of question `{}`", q.id))?;
+                    Some(narrow(q, value, ValueOrigin::Default)?)
+                } else if q.nothing_to_choose() {
+                    Some(narrow(q, Value::List(Vec::new()), ValueOrigin::Default)?)
+                } else {
+                    None
+                };
+                let shown = review.map_or(Cow::Borrowed(q), |r| r.shown(q));
+                match offered {
+                    Some(v) if review.is_none() || !shown.is_promptable() => v,
+                    offered => {
+                        let answer = interaction.ask(&shown, offered.as_ref())?;
+                        let answer = narrow(q, answer, ValueOrigin::Input)?;
+                        if !offered.is_some_and(|o| same_answer(&o, &answer)) {
+                            entered.insert(q.id.clone(), answer.clone());
+                        }
+                        answer
+                    }
+                }
+            }
         };
         resolved.insert(q.id.clone(), value);
     }
-    let validated = weft_core::render::resolve_answers(questions, &resolved, eval)?;
-    Ok(validated)
+    let answers = weft_core::render::resolve_answers(questions, &resolved, eval)?;
+    Ok(Gathered { answers, entered })
 }
 
 /// Split one frame's resolved answers into what a project stores:
 ///
 /// - `given` — the inputs: every `supplied` answer (any input layer: flags,
-///   answers file, JSON, wizard, preset, or a stored given answer on update),
-///   kept even while its question is gated off so it returns when the gate
-///   opens; plus answers to open questions with no default and no `seeded`
-///   value, which were prompted for.
+///   answers file, JSON, a preset, an answer typed at a prompt, or a stored
+///   given answer on update), kept even while its question is gated off so
+///   it returns when the gate opens; plus answers to open questions with no
+///   default and no `seeded` value, which were prompted for.
 /// - `derived` — every other resolved value: defaults, computed values,
 ///   `seeded` values (include binds), and the value standing in for a
 ///   gated-off question.
@@ -323,7 +419,7 @@ pub fn layered_with_json(
     Ok(layered_with_json_full(template, presets, answers_file, answer_args, answers_json)?.answers)
 }
 
-/// [`layered_with_json`] with the lock/constraint info exposed.
+/// [`layered_with_json`] with the presets' multichoice constraints exposed.
 pub fn layered_with_json_full(
     template: &Template,
     presets: &[String],
@@ -360,10 +456,17 @@ pub fn layered_with_json_full(
         }
         user.overlay(&set);
     }
+    let by_id = spec.constraints();
+    // `apply` starts a constrained multichoice no input answered from its
+    // fixed choices.
+    let prefilled = by_id
+        .iter()
+        .filter(|(id, (fixed, _))| !fixed.is_empty() && !user.contains(id))
+        .map(|(id, _)| id.clone())
+        .collect();
     Ok(Layered {
         answers: spec.apply(&user)?,
-        locked: spec.locked(),
-        constraints: spec.constraints(),
+        constraints: PresetConstraints { by_id, prefilled },
     })
 }
 
@@ -528,5 +631,160 @@ mod tests {
         let mut rendered = given.clone();
         rendered.overlay(&derived);
         assert_eq!(rendered, resolved);
+    }
+
+    /// Answers prompts in order and records each question as shown, with
+    /// the value it offered.
+    #[derive(Default)]
+    struct Scripted {
+        replies: Vec<Value>,
+        asked: Vec<(Question, Option<Value>)>,
+    }
+
+    impl Interaction for Scripted {
+        fn ask(&mut self, question: &Question, default: Option<&Value>) -> Result<Value> {
+            self.asked.push((question.clone(), default.cloned()));
+            Ok(self.replies.remove(0))
+        }
+
+        fn ask_secret(&mut self, _: &Question) -> Result<weft_core::SecretValue> {
+            unreachable!("no secret questions here")
+        }
+
+        fn confirm(&mut self, _: &str, _: bool) -> Result<bool> {
+            unreachable!("gathering confirms nothing")
+        }
+    }
+
+    fn docker_questions() -> Vec<Question> {
+        let mut use_docker = q("use_docker", Some("True"), None);
+        use_docker.kind = AnswerKind::Bool;
+        vec![
+            q("name", None, None),
+            q("slug", Some("name.lower()"), None),
+            use_docker,
+            q("registry", Some("'docker.io'"), Some("use_docker")),
+        ]
+    }
+
+    #[test]
+    fn review_offers_every_default_and_enters_only_changed_answers() {
+        let mut person = Scripted {
+            replies: vec![
+                Value::String("Acme".into()),
+                Value::String("acme".into()), // the offered slug, accepted
+                Value::Bool(false),           // the default turned down
+            ],
+            ..Default::default()
+        };
+        let none = AnswerSet::new();
+        let reviewed = walk(
+            &docker_questions(),
+            &none,
+            &none,
+            Some(&PresetConstraints::default()),
+            &StarlarkEval,
+            &mut person,
+        )
+        .unwrap();
+        let offered: Vec<_> = person
+            .asked
+            .iter()
+            .map(|(q, offered)| (q.id.0.as_str(), offered.clone()))
+            .collect();
+        // `registry` is never asked: turning Docker down closed its gate.
+        assert_eq!(
+            offered,
+            vec![
+                ("name", None),
+                ("slug", Some(Value::String("acme".into()))),
+                ("use_docker", Some(Value::Bool(true))),
+            ]
+        );
+        assert_eq!(ids(&reviewed.entered), vec!["name", "use_docker"]);
+    }
+
+    #[test]
+    fn an_unattended_review_resolves_like_gather() {
+        let provided = set(&[("name", "Acme")]);
+        let none = AnswerSet::new();
+        let questions = docker_questions();
+        let reviewed = walk(
+            &questions,
+            &provided,
+            &none,
+            Some(&PresetConstraints::default()),
+            &StarlarkEval,
+            &mut crate::interact::NonInteractive,
+        )
+        .unwrap();
+        let gathered = walk(
+            &questions,
+            &provided,
+            &none,
+            None,
+            &StarlarkEval,
+            &mut crate::interact::NonInteractive,
+        )
+        .unwrap();
+        assert_eq!(reviewed.answers, gathered.answers);
+        assert!(reviewed.entered.is_empty());
+    }
+
+    #[test]
+    fn review_asks_a_constrained_multichoice_from_the_preset_selection() {
+        let list = |items: &[&str]| {
+            Value::List(items.iter().map(|s| Value::String((*s).into())).collect())
+        };
+        let mut features = q("features", None, None);
+        features.kind = AnswerKind::MultiChoice {
+            choices: vec!["lint".into(), "docs".into(), "exp".into()],
+        };
+        let questions = vec![features];
+        let id = AnswerId::from("features");
+        // What `PresetSpec::apply` leaves for a constrained multichoice no
+        // input answered: its fixed choices.
+        let mut provided = AnswerSet::new();
+        provided.insert(id.clone(), list(&["lint"]));
+        let constraints = PresetConstraints {
+            by_id: [(id.clone(), (vec!["lint".into()], vec!["exp".into()]))].into(),
+            prefilled: [id.clone()].into(),
+        };
+        let none = AnswerSet::new();
+        let mut person = Scripted {
+            replies: vec![list(&["docs", "lint"])],
+            ..Default::default()
+        };
+        let reviewed = walk(
+            &questions,
+            &provided,
+            &none,
+            Some(&constraints),
+            &StarlarkEval,
+            &mut person,
+        )
+        .unwrap();
+        let (shown, offered) = &person.asked[0];
+        assert_eq!(
+            shown.kind,
+            AnswerKind::MultiChoice {
+                choices: vec!["lint".into(), "docs".into()]
+            }
+        );
+        assert_eq!(shown.narrowing.fixed, vec!["lint".to_owned()]);
+        assert_eq!(offered, &Some(list(&["lint"])));
+        assert_eq!(reviewed.entered.get(&id), Some(&list(&["docs", "lint"])));
+
+        // Unreviewed, the preset's selection is the answer.
+        let gathered = walk(
+            &questions,
+            &provided,
+            &none,
+            None,
+            &StarlarkEval,
+            &mut crate::interact::NonInteractive,
+        )
+        .unwrap();
+        assert_eq!(gathered.answers.get(&id), Some(&list(&["lint"])));
     }
 }

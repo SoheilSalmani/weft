@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 
 use anyhow::{bail, Context, Result};
 use camino::Utf8PathBuf;
-use weft_core::{AnswerSet, StarlarkExpr, Value};
+use weft_core::{AnswerId, AnswerKind, AnswerSet, Question, StarlarkExpr, Value};
 use weft_lang::StarlarkEval;
 
 use crate::abstraction::Abstractor;
@@ -20,7 +20,8 @@ pub struct CommitOptions {
     pub template: Utf8PathBuf,
     /// Which session's worktree to commit.
     pub session: String,
-    /// Patch name; defaults to `patch-NNN`.
+    /// Patch name. `None` asks for one, offering `patch-NNN`, which is what
+    /// an unattended commit takes.
     pub name: Option<String>,
     /// Optional `when` condition for the new patch.
     pub when: Option<String>,
@@ -87,6 +88,28 @@ pub fn parse_keep_literal(specs: &[String]) -> Result<crate::abstraction::Except
         ));
     }
     Ok(excepted)
+}
+
+/// The new patch's name when none was given: asked, offering `patch-NNN`,
+/// which is what an unattended commit takes.
+fn ask_name(template: &Template, interaction: &mut dyn Interaction) -> Result<String> {
+    let question = Question {
+        id: AnswerId("name".into()),
+        kind: AnswerKind::String,
+        prompt: Some("Patch name".into()),
+        description: None,
+        example: None,
+        default: None,
+        when: None,
+        computed: false,
+        section: None,
+        narrowing: Default::default(),
+    };
+    let offered = Value::String(format!("patch-{:03}", template.patches.len() + 1));
+    match interaction.ask(&question, Some(&offered))? {
+        Value::String(name) => Ok(name),
+        _ => bail!("a patch name must be a string"),
+    }
 }
 
 pub fn run(
@@ -194,7 +217,7 @@ pub fn run(
     let name = match (&sess.amend, &opts.name) {
         (Some(target), _) => target.clone(),
         (None, Some(name)) => name.clone(),
-        (None, None) => format!("patch-{:03}", template.patches.len() + 1),
+        (None, None) => ask_name(&template, interaction)?,
     };
     let keys = match &sess.foreach {
         Some(f) => diff::SlotKeys::per_instance(&name, &f.key),

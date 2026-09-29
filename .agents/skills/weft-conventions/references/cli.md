@@ -1,6 +1,6 @@
 # The weft command sheet
 
-Copied from `weft <command> --help` on `weft 0.1.0`, 2026-09-25. The docs under `docs/content/docs/weft/reference/cli.mdx` lag the binary in places (they omit `--title`, spell the tag flag `--tags a,b`, and still mention `weft record`), so when this sheet and the binary disagree, run `--help` and believe the binary. `weft --version` first: a newer binary may have moved flags.
+Copied from `weft <command> --help` on `weft 0.1.0`, 2026-09-25, with the prompting and flag changes from removing the full-screen wizard and forms checked against the build on 2026-09-30. The docs under `docs/content/docs/weft/reference/cli.mdx` lag the binary in places (they omit `--title`, spell the tag flag `--tags a,b`, and still mention `weft record`), so when this sheet and the binary disagree, run `--help` and believe the binary. `weft --version` first: a newer binary may have moved flags, and `weft 0.1.0` itself still has the `--no-tui` and `--no-wizard` flags this sheet no longer lists.
 
 ## Contents
 
@@ -28,7 +28,7 @@ The generated `weft.toml` carries `description = "TODO: what this template scaff
 ```text
 weft session new NAME [--template DIR] [--base latest|PATCH] [--preset P]... [--answer K=V]...
                       [--answers-file F] [--path DIR] [--foreach INCLUDE=KEY] [--exec [CMD]]
-                      [--force] [--non-interactive] [--no-wizard] [--shell]
+                      [--force] [--non-interactive] [--shell]
 weft session adopt PATH -n NAME [--template DIR] [--base REF] [--preset P]... [--answer K=V]...
                       [--answers-file F] [--scope GLOB]... [--force] [--non-interactive]
 weft session list | ls
@@ -56,12 +56,12 @@ weft status
 weft diff [--abstracted] [--json] [--staged|--cached]
 weft commit --name NAME [--title TEXT] [--describe TEXT] [--tag T]... [--when EXPR]
             [--yes] [--keep-literal ANSWER@PATH:LINE[:NTH]]... [--stack|--sibling]
-            [--depends-on A,B | --after NAME] [--no-tui]
+            [--depends-on A,B | --after NAME]
 ```
 
 - Paths and globs are relative to where you stand, or to the worktree root when `-s` names the session from outside it. `weft add .` stages the subtree, `-A` the whole worktree. A pattern that matches no file fails and changes nothing.
 - `-p` prompts `y n a d s q ?` per hunk; `s` splits a hunk that has internal context. A new file is one hunk and cannot be split, so trim a new file in the worktree before staging it.
-- `commit` takes the staged set, or the whole worktree when nothing is staged. `--name` is the file stem; without it and without a TTY the patch is auto-named `patch-NNN`.
+- `commit` takes the staged set, or the whole worktree when nothing is staged. `--name` is the file stem; without it a terminal asks for one, offering `patch-NNN`, and an unattended commit (no TTY, or `--yes`) takes `patch-NNN`.
 - `--tag` is repeatable on `commit`; `--tags a,b` in the docs is wrong.
 - `--yes` accepts every abstraction candidate. `--keep-literal` keeps one occurrence literal and implies `--yes` for the rest; the keys come from `weft diff --json` (`occurrences[].id/path/line/nth`).
 - `--depends-on` names must be in the session's base, and the patch must still apply with only their closure present. `--after NAME` is sugar for one parent.
@@ -70,7 +70,7 @@ weft commit --name NAME [--title TEXT] [--describe TEXT] [--tag T]... [--when EX
 
 ```text
 weft patch ls [--template DIR]
-weft patch set NAME [--title TEXT] [--describe TEXT] [--tag T]... [--clear-tags] [--no-tui]
+weft patch set NAME [--title TEXT] [--describe TEXT] [--tag T]... [--clear-tags]
 weft patch amend NAME [--answer K=V]... [--preset P]... [--answers-file F] [--force]
 weft patch squash NAME NAME... --into NAME [--title TEXT]
 weft patch resync [NAMES]... [--all] [--answer K=V]... [--keep-literal SPEC]... [--dry-run] [--json]
@@ -88,19 +88,19 @@ weft patch detach NAME
 
 ```text
 weft hook add PATCH --id ID --phase pre|post --effect check|setup|deploy --label TEXT --action CMD
-              [--description TEXT] [--when EXPR] [--after HOOK_ID]... [--input glob:P|answer:ID|hook:ID]... [--no-tui]
+              [--description TEXT] [--when EXPR] [--after HOOK_ID]... [--input glob:P|answer:ID|hook:ID]...
 weft hook rm PATCH ID
 weft hook ls                                               # every hook, in execution order
 ```
 
-`--input` is post-only. Bad `--after` or `--input` references are rejected and the patch file is rolled back. Pass `--no-tui` in scripts, or a missing flag opens a form.
+`--input` is post-only. Bad `--after` or `--input` references are rejected and the patch file is rolled back. Leaving out `--action` opens `$EDITOR` for the command, so a script always passes it.
 
 ## Presets
 
 ```text
 weft presets list
 weft presets show NAME
-weft presets save NAME [TEMPLATE] [--answer K=V]... [--fix K=CHOICE]... [--block K=CHOICE]... [--non-interactive]
+weft presets save NAME [TEMPLATE] [--answer K=V]... [--fix K=CHOICE]... [--block K=CHOICE]...
 weft presets rm NAME
 ```
 
@@ -116,19 +116,19 @@ weft schema [--out DIR]                                    # weft-patch.schema.j
 ```
 
 - `check` without answers validates the manifest, expressions and graph only. With answers it also renders and tests every independent pair for commutation, under those answers. `--json` returns `{ok, issues, notes}`.
-- `describe --json` returns `template`, `questions`, `presets`, `patches` (with `title`, `description`, `when`, `depends_on`, op summaries), `hooks` in execution order, `includes`, `usage`. Its `usage.author` lines still say `weft record`; ignore them.
+- `describe --json` returns `template`, `questions`, `presets`, `patches` (with `title`, `description`, `when`, `depends_on`, op summaries), `hooks` in execution order, `includes`, `usage`. Its `usage.author` lines are the recording loop: `cd "$(weft session new <patch> --template DIR … --non-interactive)"`, edit, then `weft commit` from the worktree.
 - `describe --agents-md` writes `<template>/AGENTS.md`; `-` writes to stdout.
 
 ## Consuming a template
 
 ```text
-weft new [TEMPLATE] [DEST] [--preset P]... [--answer K=V]... [--answers-file F] [--answers-json J|@file|-]
+weft new TEMPLATE [DEST] [--preset P]... [--answer K=V]... [--answers-file F] [--answers-json J|@file|-]
          [--instance INCLUDE=KEY]... [--skip-tasks] [--non-interactive] [--frozen]
 weft update [DEST] [--dry-run] [--template DIR] [--skip-tasks] [--non-interactive] [--frozen]
 weft instance add INCLUDE KEY [--answer ID=V]... | list | remove INCLUDE KEY
 ```
 
-`DEST` must be empty or absent; two templates cannot be scaffolded into one directory. `--skip-tasks` renders without running hooks.
+`DEST` must be empty or absent; two templates cannot be scaffolded into one directory. `--skip-tasks` renders without running hooks. In a terminal, `new` asks every question that no flag, file or preset answered, offering its default; `--non-interactive` takes the defaults and fails only on a question without one.
 
 ## Composition and hub
 

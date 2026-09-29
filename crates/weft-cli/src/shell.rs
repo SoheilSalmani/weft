@@ -11,14 +11,12 @@
 //! does.
 
 use std::ffi::OsString;
-use std::io::Write as _;
+use std::io::{IsTerminal as _, Write as _};
 use std::process::Command;
 
 use camino::Utf8Path;
 use weft_engine::discover;
 use weft_engine::session::Session;
-
-use crate::tui::shell_quote;
 
 /// Names the session in the shell [`enter`] opens, so a prompt can show it.
 /// A command started with `--` does not get it: [`stands_in`] and the
@@ -178,4 +176,22 @@ pub fn stands_in(sess: &Session, template: &Utf8Path, name: &str) -> bool {
 /// Printed once a session ended from under its own shell ([`stands_in`]).
 pub fn exit_hint() {
     eprintln!("its worktree is gone from under this shell — `exit` returns to where you opened it");
+}
+
+/// Is a person at a terminal on both ends? A shell reads stdin and draws on
+/// stdout; on a pipe it would run whatever it reads.
+pub fn has_terminal() -> bool {
+    std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+}
+
+/// Quote one shell argument if it needs it.
+fn shell_quote(s: &str) -> String {
+    if !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '='))
+    {
+        s.to_owned()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
 }

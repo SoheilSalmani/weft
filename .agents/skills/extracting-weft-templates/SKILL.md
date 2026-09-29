@@ -90,9 +90,9 @@ The project's own setup is written down somewhere: `make setup`, the CI workflow
 | `make deploy`, `flyctl deploy` | `deploy-<target>`, post, deploy, `--when deploy_to_<target>` on an explicit bool defaulting to False |
 
 ```sh
-weft hook add base --id verify-uv --phase pre --effect check --label "Verify uv is installed" --action "command -v uv" --no-tui
+weft hook add base --id verify-uv --phase pre --effect check --label "Verify uv is installed" --action "command -v uv"
 weft hook add base --id uv-sync --phase post --effect setup --label "Lock and sync the Python environment" \
-  --action "uv lock && uv sync" --input "glob:pyproject.toml" --no-tui
+  --action "uv lock && uv sync" --input "glob:pyproject.toml"
 ```
 
 ## Finish and prove

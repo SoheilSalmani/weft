@@ -1,7 +1,6 @@
 mod addpatch;
 mod ctx;
 mod diffcmd;
-mod forms;
 mod git;
 mod hub;
 mod lsp;
@@ -9,8 +8,6 @@ mod mcp;
 mod schema;
 mod shell;
 mod source;
-mod tui;
-mod wizard;
 
 use std::io::IsTerminal;
 
@@ -30,15 +27,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Scaffold a template into a destination directory. Run without a
-    /// template in a terminal to pick one interactively.
+    /// Scaffold a template into a destination directory.
     New {
         /// The template: a directory containing weft.toml, a hub ref
         /// (`hub:owner/name[@version]`), or a git source — `gh:owner/repo`,
         /// any git URL — with an optional `//subdir` and `@rev` (tag,
-        /// branch, or commit): `gh:acme/templates//base@v1`. Omit it (in a
-        /// terminal) to pick from templates found here.
-        template: Option<String>,
+        /// branch, or commit): `gh:acme/templates//base@v1`.
+        template: String,
         /// Destination directory (must be empty or absent). Defaults to `.`.
         #[arg(default_value = ".")]
         dest: Utf8PathBuf,
@@ -63,15 +58,10 @@ enum Command {
         /// Do not run template tasks after scaffolding.
         #[arg(long)]
         skip_tasks: bool,
-        /// Never prompt; fail if answers are missing.
+        /// Never prompt: take every default, and fail on a question without
+        /// one.
         #[arg(long)]
         non_interactive: bool,
-        /// Use sequential prompts instead of the full-screen wizard.
-        #[arg(long)]
-        no_wizard: bool,
-        /// Never open the interactive template picker.
-        #[arg(long)]
-        no_tui: bool,
         /// Fail if a remote include isn't already pinned in weft.lock (CI).
         #[arg(long)]
         frozen: bool,
@@ -118,10 +108,6 @@ enum Command {
         /// follows the other answers again (repeatable).
         #[arg(long = "unset", value_name = "ID")]
         unset: Vec<String>,
-        /// Change answers in the full-screen wizard, prefilled with the
-        /// project's current answers.
-        #[arg(long)]
-        reconfigure: bool,
         /// Write even over files with uncommitted git changes (by default
         /// the update stops, so git can show and undo what the merge does).
         #[arg(long)]
@@ -199,7 +185,8 @@ enum Command {
     Commit {
         #[command(flatten)]
         scope: ctx::Scope,
-        /// Name for the new patch (defaults to patch-NNN).
+        /// Name for the new patch. Asked in a terminal, offering patch-NNN,
+        /// which is also what an unattended commit takes.
         #[arg(long)]
         name: Option<String>,
         /// Starlark condition gating the new patch.
@@ -214,7 +201,8 @@ enum Command {
         /// Tag the patch (repeatable).
         #[arg(long = "tag")]
         tags: Vec<String>,
-        /// Accept all abstraction proposals without prompting.
+        /// Accept every abstraction proposal without prompting, and take
+        /// patch-NNN when --name is left out.
         #[arg(long)]
         yes: bool,
         /// Keep one occurrence literal: ANSWER@PATH:LINE[:NTH] (repeatable;
@@ -238,9 +226,6 @@ enum Command {
         /// Depend on exactly this patch — sugar for `--depends-on NAME`.
         #[arg(long, conflicts_with = "depends_on")]
         after: Option<String>,
-        /// Never open the interactive form; use the default patch name.
-        #[arg(long)]
-        no_tui: bool,
     },
     /// Show the session's changes before committing: the concrete diff with
     /// abstraction candidates highlighted.
@@ -380,12 +365,12 @@ enum Command {
 #[derive(Subcommand)]
 enum InstanceCmd {
     /// Add an instance of a repeatable include (renders its files in
-    /// place). Run bare in a terminal for an interactive form.
+    /// place).
     Add {
         /// The [[include]] name in the template.
-        include: Option<String>,
+        include: String,
         /// The new instance's key (lowercase alphanumerics, `-`, `_`).
-        key: Option<String>,
+        key: String,
         /// Child answers as ID=VALUE (child-scoped; repeatable).
         #[arg(long = "answer")]
         answers: Vec<String>,
@@ -401,9 +386,6 @@ enum InstanceCmd {
         /// Never prompt; fail if child answers are missing.
         #[arg(long)]
         non_interactive: bool,
-        /// Never open the interactive form; fail on missing arguments.
-        #[arg(long)]
-        no_tui: bool,
     },
     /// Remove an instance (untouched files deleted, modified ones kept).
     Remove {
@@ -427,27 +409,27 @@ enum InstanceCmd {
 
 #[derive(Subcommand)]
 enum HookCmd {
-    /// Add a hook to a patch. Missing options open an interactive form in
-    /// a terminal; provided flags prefill it.
+    /// Add a hook to a patch. Leave out --action to write the command in
+    /// $VISUAL/$EDITOR.
     Add {
         /// Patch name (file stem) that owns the hook.
-        patch: Option<String>,
+        patch: String,
         /// Template directory (defaults to `.`).
         #[arg(long, default_value = ".")]
         template: Utf8PathBuf,
         /// Unique hook id (referenced by --after / hook: inputs).
         #[arg(long)]
-        id: Option<String>,
+        id: String,
         /// `pre` (guard, before writing) or `post` (after writing).
         #[arg(long)]
-        phase: Option<String>,
+        phase: String,
         /// `check` (read-only), `setup` (idempotent local), `deploy` (external).
         #[arg(long)]
-        effect: Option<String>,
+        effect: String,
         /// Short human label, e.g. "Verify the Go toolchain is installed".
         #[arg(long)]
-        label: Option<String>,
-        /// Shell command to run.
+        label: String,
+        /// Shell command to run (leave out to write it in $VISUAL/$EDITOR).
         #[arg(long)]
         action: Option<String>,
         #[arg(long)]
@@ -462,9 +444,6 @@ enum HookCmd {
         /// (repeatable).
         #[arg(long = "input")]
         inputs: Vec<String>,
-        /// Never open the interactive form; fail on missing options.
-        #[arg(long)]
-        no_tui: bool,
     },
     /// Remove a hook from a patch by id.
     Rm {
@@ -522,12 +501,10 @@ enum SessionCmd {
         /// Replace an existing session of this name instead of failing.
         #[arg(long)]
         force: bool,
-        /// Never prompt; fail if answers are missing.
+        /// Never prompt: take every default, and fail on a question without
+        /// one.
         #[arg(long)]
         non_interactive: bool,
-        /// Use sequential prompts instead of the full-screen wizard.
-        #[arg(long)]
-        no_wizard: bool,
         /// Open a shell in the new worktree once it is ready (`exit` returns
         /// here); needs a terminal. `weft session shell` does the same later.
         #[arg(long)]
@@ -668,10 +645,9 @@ enum SessionCmd {
 #[derive(Subcommand)]
 enum PatchCmd {
     /// Edit a patch's display metadata (never changes its content id).
-    /// Run bare in a terminal for an interactive form.
     Set {
         /// Patch name (file stem).
-        name: Option<String>,
+        name: String,
         #[arg(long, default_value = ".")]
         template: Utf8PathBuf,
         /// Display title, e.g. "Add Prisma support" (empty string clears it).
@@ -686,9 +662,6 @@ enum PatchCmd {
         /// Remove all existing tags first.
         #[arg(long)]
         clear_tags: bool,
-        /// Never open the interactive form; fail on missing options.
-        #[arg(long)]
-        no_tui: bool,
     },
     /// List patches with their metadata.
     Ls {
@@ -781,12 +754,10 @@ enum PatchCmd {
         /// Discard an existing session instead of failing.
         #[arg(long)]
         force: bool,
-        /// Never prompt; fail if answers are missing.
+        /// Never prompt: take every default, and fail on a question without
+        /// one.
         #[arg(long)]
         non_interactive: bool,
-        /// Use sequential prompts instead of the full-screen wizard.
-        #[arg(long)]
-        no_wizard: bool,
     },
 }
 
@@ -837,9 +808,8 @@ enum PresetsCommand {
         #[arg(default_value = ".")]
         template: Utf8PathBuf,
     },
-    /// Create or update a preset: a tri-state wizard in a terminal (answer =
-    /// lock; multichoice options cycle free/fixed/blocked), or scripted via
-    /// --answer/--fix/--block with --non-interactive.
+    /// Create or update a preset: --answer locks an answer, --fix and
+    /// --block constrain a multichoice.
     Save {
         name: String,
         #[arg(default_value = ".")]
@@ -853,9 +823,6 @@ enum PresetsCommand {
         /// Never allow a multichoice option, as KEY=CHOICE (repeatable).
         #[arg(long = "block")]
         block: Vec<String>,
-        /// Skip the wizard; use only the flags.
-        #[arg(long)]
-        non_interactive: bool,
     },
     /// Remove a preset: its declaration in weft.toml and its file.
     Rm {
@@ -878,28 +845,14 @@ fn main() -> anyhow::Result<()> {
             instances,
             skip_tasks,
             non_interactive,
-            no_wizard,
-            no_tui,
             frozen,
             offline,
         } => {
-            // No template given: pick one interactively (terminal only).
-            let (template, dest, presets) = match template {
-                Some(t) => (t, dest, presets),
-                None if tui::interactive(no_tui || non_interactive) => {
-                    let form = forms::new_picker(&dest, &presets)?;
-                    (form.template.to_string(), form.dest, form.presets)
-                }
-                None => anyhow::bail!(
-                    "missing TEMPLATE (weft new <template> [dest]); \
-                     run in a terminal to pick one interactively"
-                ),
-            };
             // Remote sources (hub, git) are fetched into the local caches;
             // the state file records the resolved ref, never the cache path.
             let source = source::Source::parse(&template)?;
             let located = source::fetch(&source, offline)?;
-            let mut opts = NewOptions {
+            let opts = NewOptions {
                 template: located.dir,
                 dest,
                 presets,
@@ -910,29 +863,22 @@ fn main() -> anyhow::Result<()> {
                 skip_tasks,
                 stored: located.stored,
             };
-            let wizard_ran = maybe_wizard(
-                &opts.template,
-                &opts.presets,
-                opts.answers_file.as_deref(),
-                &opts.answers,
-                &mut opts.answers_json,
-                non_interactive,
-                no_wizard,
-            )?;
             let mut interaction = auto_interaction(non_interactive);
             let mut resolver =
                 source::RemoteResolver::new(hub::registry_url(None).ok(), frozen).offline(offline);
             let result = weft_engine::new::run(&opts, &mut resolver, interaction.as_mut());
             resolver.flush()?;
-            result?;
-            // Offer to capture the answers as a preset — local templates
-            // only (a cache checkout isn't the author's working tree).
-            if wizard_ran && source.is_path() {
+            let entered = result?;
+            // Offer to capture the answers as a preset once a person typed
+            // some — local templates only (a cache checkout isn't the
+            // author's working tree).
+            if !entered.is_empty() && source.is_path() {
                 if let Err(e) = offer_preset_capture(
                     &opts.template,
                     opts.answers_file.as_deref(),
                     &opts.answers,
                     opts.answers_json.as_deref(),
+                    &entered,
                     interaction.as_mut(),
                 ) {
                     eprintln!("preset capture skipped: {e:#}");
@@ -951,19 +897,17 @@ fn main() -> anyhow::Result<()> {
             answers_file,
             answers_json,
             unset,
-            reconfigure,
             allow_dirty,
             skip_tasks,
             non_interactive,
             frozen,
             offline,
         } => {
-            let mut changes = weft_engine::update::AnswerChanges {
+            let changes = weft_engine::update::AnswerChanges {
                 presets,
                 answers,
                 answers_file,
                 answers_json,
-                typed: Default::default(),
                 unset,
             };
             let state = weft_engine::state::State::load(&dest)?;
@@ -974,7 +918,7 @@ fn main() -> anyhow::Result<()> {
                     let located = source::locate_project(&state, to.as_deref(), offline)?;
                     // Nothing to re-render when neither the source nor the
                     // answers move.
-                    if let (true, Some(s)) = (changes.is_empty() && !reconfigure, &located.stored) {
+                    if let (true, Some(s)) = (changes.is_empty(), &located.stored) {
                         if let Some(commit) = &s.commit {
                             if s.template == state.state.template
                                 && state.state.commit.as_deref() == Some(commit)
@@ -987,15 +931,7 @@ fn main() -> anyhow::Result<()> {
                     (located.dir, located.stored)
                 }
             };
-            if reconfigure {
-                if !tui::interactive(non_interactive) {
-                    anyhow::bail!(
-                        "--reconfigure opens the answers wizard and needs a terminal; \
-                         change answers with --answer ID=VALUE / --unset ID instead"
-                    );
-                }
-                reconfigure_answers(&template_dir, &state, &mut changes)?;
-            }
+
             let opts = weft_engine::update::UpdateOptions {
                 dest,
                 dry_run,
@@ -1046,8 +982,8 @@ fn main() -> anyhow::Result<()> {
                 );
             }
             eprintln!(
-                "change one with `weft update --answer ID=VALUE`, hand one back to its default \
-                 with `--unset ID`, or edit them in the wizard with `weft update --reconfigure`"
+                "change one with `weft update --answer ID=VALUE`, or hand one back to its \
+                 default with `--unset ID`"
             );
             Ok(())
         }
@@ -1060,19 +996,7 @@ fn main() -> anyhow::Result<()> {
                 skip_tasks,
                 allow_dirty,
                 non_interactive,
-                no_tui,
             } => {
-                let (include, key) = match (include, key) {
-                    (Some(include), Some(key)) => (include, key),
-                    (include, key) if tui::interactive(no_tui || non_interactive) => {
-                        let form = forms::instance_add(&dest, include, key)?;
-                        (form.include, form.key)
-                    }
-                    _ => anyhow::bail!(
-                        "missing INCLUDE and KEY (weft instance add <include> <key>); \
-                         run in a terminal for the interactive form"
-                    ),
-                };
                 let state = weft_engine::state::State::load(&dest)?;
                 let source = source::locate_project(&state, None, false)?;
                 let mut interaction = auto_interaction(non_interactive);
@@ -1135,61 +1059,29 @@ fn main() -> anyhow::Result<()> {
                 when,
                 after,
                 inputs,
-                no_tui,
             } => {
-                // Everything but the command provided → write it in
-                // $VISUAL/$EDITOR instead of the full TUI form.
-                let action = match (&patch, &id, &phase, &effect, &label, action) {
-                    (Some(_), Some(_), Some(_), Some(_), Some(_), None) => {
-                        Some(weft_engine::interact::edit_command(
-                            "Enter the hook's shell command.\n\
-                             Lines starting with '#' are ignored. Multi-line commands run \
-                             via sh -c.\n\
-                             ${answer_or_expr} interpolates declared answers; unknown ${...} \
-                             passes through to the shell.",
-                        )?)
-                    }
-                    (_, _, _, _, _, action) => action,
+                // No --action: write the command in $VISUAL/$EDITOR.
+                let action = match action {
+                    Some(action) => action,
+                    None => weft_engine::interact::edit_command(
+                        "Enter the hook's shell command.\n\
+                         Lines starting with '#' are ignored. Multi-line commands run \
+                         via sh -c.\n\
+                         ${answer_or_expr} interpolates declared answers; unknown ${...} \
+                         passes through to the shell.",
+                    )?,
                 };
-                let opts = match (patch, id, phase, effect, label, action) {
-                    (
-                        Some(patch),
-                        Some(id),
-                        Some(phase),
-                        Some(effect),
-                        Some(label),
-                        Some(action),
-                    ) => weft_engine::author::HookAddOptions {
-                        patch,
-                        id,
-                        phase,
-                        effect,
-                        label,
-                        action,
-                        description,
-                        when,
-                        after,
-                        inputs,
-                    },
-                    (patch, id, phase, effect, label, action) if tui::interactive(no_tui) => {
-                        forms::hook_add(
-                            &template,
-                            patch,
-                            id,
-                            phase,
-                            effect,
-                            label,
-                            action,
-                            description,
-                            when,
-                            after,
-                            inputs,
-                        )?
-                    }
-                    _ => anyhow::bail!(
-                        "missing required options (PATCH, --id, --phase, --effect, --label, \
-                         --action); run in a terminal for the interactive form or pass the flags"
-                    ),
+                let opts = weft_engine::author::HookAddOptions {
+                    patch,
+                    id,
+                    phase,
+                    effect,
+                    label,
+                    action,
+                    description,
+                    when,
+                    after,
+                    inputs,
                 };
                 source::with_resolver(|r| weft_engine::author::hook_add(&template, &opts, r))
             }
@@ -1210,25 +1102,13 @@ fn main() -> anyhow::Result<()> {
                 describe,
                 tags,
                 clear_tags,
-                no_tui,
             } => {
-                let has_changes =
-                    title.is_some() || describe.is_some() || !tags.is_empty() || clear_tags;
-                let opts = match (&name, has_changes) {
-                    (Some(_), true) => weft_engine::author::PatchSetOptions {
-                        name: name.expect("matched Some"),
-                        title,
-                        describe,
-                        tags,
-                        clear_tags,
-                    },
-                    _ if tui::interactive(no_tui) => {
-                        forms::patch_set(&template, name, title, describe, tags, clear_tags)?
-                    }
-                    _ => anyhow::bail!(
-                        "nothing to change; pass NAME plus --title/--describe/--tag/--clear-tags, \
-                         or run in a terminal for the interactive form"
-                    ),
+                let opts = weft_engine::author::PatchSetOptions {
+                    name,
+                    title,
+                    describe,
+                    tags,
+                    clear_tags,
                 };
                 source::with_resolver(|r| weft_engine::author::patch_set(&template, &opts, r))
             }
@@ -1366,9 +1246,8 @@ fn main() -> anyhow::Result<()> {
                 answers_file,
                 force,
                 non_interactive,
-                no_wizard,
             } => {
-                let mut opts = weft_engine::amend::AmendOptions {
+                let opts = weft_engine::amend::AmendOptions {
                     template,
                     // The edit gets a session named after the patch.
                     session: name.clone(),
@@ -1376,18 +1255,8 @@ fn main() -> anyhow::Result<()> {
                     presets,
                     answers,
                     answers_file,
-                    answers_json: None,
                     force,
                 };
-                maybe_wizard(
-                    &opts.template,
-                    &opts.presets,
-                    opts.answers_file.as_deref(),
-                    &opts.answers,
-                    &mut opts.answers_json,
-                    non_interactive,
-                    no_wizard,
-                )?;
                 let mut interaction = auto_interaction(non_interactive);
                 let mut resolver = source::RemoteResolver::new(hub::registry_url(None).ok(), false);
                 let worktree =
@@ -1458,7 +1327,6 @@ fn main() -> anyhow::Result<()> {
             sibling,
             depends_on,
             after,
-            no_tui,
         } => {
             let depends_on = match (depends_on.is_empty(), after) {
                 (true, None) => None,
@@ -1474,27 +1342,11 @@ fn main() -> anyhow::Result<()> {
             };
             let here = scope.resolve()?;
             let session = weft_engine::session::Session::load(&here.template, &here.session).ok();
-            // An amend session's name is the amended patch: no name form.
-            let amending = session.as_ref().is_some_and(|s| s.amend.is_some());
             // Asked before committing: a commit that ends the session deletes
             // the worktree the answer depends on.
             let under_shell = session
                 .as_ref()
                 .is_some_and(|s| shell::stands_in(s, &here.template, &here.session));
-            let (name, title, describe, when, tags) = match name {
-                Some(name) => (Some(name), title, describe, when, tags),
-                None if !amending && tui::interactive(no_tui) => {
-                    let form = forms::commit(&here.template, title, describe, when, tags)?;
-                    (
-                        Some(form.name),
-                        form.title,
-                        form.describe,
-                        form.when,
-                        form.tags,
-                    )
-                }
-                None => (None, title, describe, when, tags),
-            };
             let opts = weft_engine::commit::CommitOptions {
                 template: here.template,
                 session: here.session,
@@ -1726,12 +1578,11 @@ fn main() -> anyhow::Result<()> {
                 exec,
                 force,
                 non_interactive,
-                no_wizard,
                 shell: open_shell,
             } => {
                 // Refused before anything is rendered or written, so no
                 // half-made session is left behind.
-                if open_shell && !tui::interactive(false) {
+                if open_shell && !shell::has_terminal() {
                     anyhow::bail!(
                         "--shell opens a shell in the new worktree and needs a terminal; \
                          drop it and `cd` into the path `weft session new` prints"
@@ -1752,7 +1603,7 @@ fn main() -> anyhow::Result<()> {
                     )?),
                     other => other,
                 };
-                let mut opts = weft_engine::start::StartOptions {
+                let opts = weft_engine::start::StartOptions {
                     template,
                     name,
                     path,
@@ -1765,15 +1616,6 @@ fn main() -> anyhow::Result<()> {
                     exec,
                     force,
                 };
-                maybe_wizard(
-                    &opts.template,
-                    &opts.presets,
-                    opts.answers_file.as_deref(),
-                    &opts.answers,
-                    &mut opts.answers_json,
-                    non_interactive,
-                    no_wizard,
-                )?;
                 let mut interaction = auto_interaction(non_interactive);
                 let mut resolver = source::RemoteResolver::new(hub::registry_url(None).ok(), false);
                 let worktree = weft_engine::start::run(&opts, &mut resolver, interaction.as_mut())?;
@@ -1909,7 +1751,7 @@ fn main() -> anyhow::Result<()> {
                         shell::template_arg(&here.template)
                     );
                 }
-                if command.is_empty() && !tui::interactive(false) {
+                if command.is_empty() && !shell::has_terminal() {
                     anyhow::bail!(
                         "`weft session shell` without a command opens a shell and needs a \
                          terminal; run one command there with `{} -- CMD`",
@@ -2088,12 +1930,11 @@ fn main() -> anyhow::Result<()> {
                 answers,
                 fix,
                 block,
-                non_interactive,
             } => {
                 use weft_engine::preset::{PresetEntry, PresetSpec};
                 let template = source::load_template(&dir)?;
 
-                // Flag prefills: --answer locks, --fix/--block constraints.
+                // --answer locks an answer; --fix/--block constrain a multichoice.
                 let mut locks = std::collections::BTreeMap::new();
                 for arg in &answers {
                     let (id, value) =
@@ -2120,18 +1961,6 @@ fn main() -> anyhow::Result<()> {
                         side.push(choice.to_owned());
                     }
                 }
-
-                let (locks, constraints) = if tui::interactive(non_interactive) {
-                    wizard::run_author(
-                        &template.manifest.template.name,
-                        &template.manifest.questions,
-                        locks,
-                        constraints,
-                        &weft_engine::eval(),
-                    )?
-                } else {
-                    (locks, constraints)
-                };
 
                 let mut spec = PresetSpec::default();
                 for (id, value) in locks {
@@ -2332,127 +2161,29 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-/// `weft update --reconfigure`: open the answers wizard over the project's
-/// current answers — the ones it stores as given, overlaid with any passed
-/// on this command line — and fold what the user changed and reset into
-/// this update's answer changes. Derived values show as live defaults.
-fn reconfigure_answers(
-    template_dir: &camino::Utf8Path,
-    state: &weft_engine::state::State,
-    changes: &mut weft_engine::update::AnswerChanges,
-) -> anyhow::Result<()> {
-    let template = source::load_template(template_dir)?;
-    let layered = weft_engine::answers::layered_with_json_full(
-        &template,
-        &changes.presets,
-        changes.answers_file.as_deref(),
-        &changes.answers,
-        changes.answers_json.as_deref(),
-    )?;
-    let (root, _) = weft_engine::compose::split_provided(&template, &layered.answers)?;
-    let mut current = state.answers.clone();
-    current.overlay(&root);
-    for id in &changes.unset {
-        current.remove(&weft_core::AnswerId(id.clone()));
-    }
-    let locks = wizard::PresetLocks {
-        locked: layered.locked,
-        constraints: layered.constraints,
-    };
-    let eval = weft_engine::eval();
-    let result = wizard::run_reconfigure(
-        &template.manifest.template.name,
-        &template.manifest.questions,
-        &current,
-        &locks,
-        &eval,
-    )?;
-    changes.typed = result.entered;
-    changes
-        .unset
-        .extend(result.cleared.into_iter().map(|id| id.0));
-    Ok(())
-}
-
-/// Run the full-screen wizard when interactive (stdin and stdout both a
-/// terminal, not --non-interactive, not --no-wizard) and stash its answers as
-/// the highest-precedence JSON layer. Falls through silently otherwise, and
-/// missing answers are asked line by line on stderr: the wizard draws on
-/// stdout, which `cd $(weft session new)` captures, so opening it there would
-/// wait behind a blank screen. Returns whether the wizard ran.
-#[allow(clippy::too_many_arguments)]
-fn maybe_wizard(
-    template_dir: &Utf8PathBuf,
-    presets: &[String],
-    answers_file: Option<&camino::Utf8Path>,
-    answer_args: &[String],
-    answers_json: &mut Option<String>,
-    non_interactive: bool,
-    no_wizard: bool,
-) -> anyhow::Result<bool> {
-    if !tui::interactive(non_interactive || no_wizard) {
-        return Ok(false);
-    }
-    let template = source::load_template(template_dir)?;
-    let layered = weft_engine::answers::layered_with_json_full(
-        &template,
-        presets,
-        answers_file,
-        answer_args,
-        answers_json.as_deref(),
-    )?;
-    let provided = layered.answers;
-    let locks = wizard::PresetLocks {
-        locked: layered.locked,
-        constraints: layered.constraints,
-    };
-    let eval = weft_engine::eval();
-    let entered = wizard::run(
-        &template.manifest.template.name,
-        &template.manifest.questions,
-        &provided,
-        &locks,
-        &eval,
-    )?;
-    if !entered.is_empty() {
-        let mut merged = provided;
-        merged.overlay(&entered);
-        // Serialize the wizard layer only (secrets never appear here).
-        let map: std::collections::BTreeMap<String, serde_json::Value> = entered
-            .iter()
-            .map(|(k, v)| {
-                let json = value_to_json(v);
-                (k.0.clone(), json)
-            })
-            .collect();
-        *answers_json = Some(serde_json::to_string(&map)?);
-    }
-    Ok(true)
-}
-
-/// After an interactive `weft new` succeeds against a *local* template,
-/// offer once to capture the user's answers (flags/file/wizard — not preset
-/// locks or defaults) as a new preset in that template.
+/// After `weft new` against a *local* template asked something, offer once
+/// to capture the person's own answers (flags, answers file, JSON, and what
+/// they typed; not preset locks or defaults) as a new preset in that
+/// template.
 fn offer_preset_capture(
     template_dir: &Utf8PathBuf,
     answers_file: Option<&camino::Utf8Path>,
     answer_args: &[String],
     answers_json: Option<&str>,
+    entered: &weft_core::AnswerSet,
     interaction: &mut dyn weft_engine::interact::Interaction,
 ) -> anyhow::Result<()> {
     use weft_engine::preset::{PresetEntry, PresetSpec};
     let template = source::load_template(template_dir)?;
-    // No presets selected here: only the user's own layers are captured.
-    let captured = weft_engine::answers::layered_with_json(
+    // No presets selected here: only the person's own layers are captured.
+    let mut captured = weft_engine::answers::layered_with_json(
         &template,
         &[],
         answers_file,
         answer_args,
         answers_json,
     )?;
-    if captured.iter().next().is_none() {
-        return Ok(());
-    }
+    captured.overlay(entered);
     if !interaction.confirm("Save these answers as a preset of the template?", false)? {
         return Ok(());
     }
@@ -2481,18 +2212,4 @@ fn offer_preset_capture(
     source::with_resolver(|r| weft_engine::preset::save(template_dir, &name, &spec, r))?;
     println!("saved preset `{name}` in {template_dir}");
     Ok(())
-}
-
-/// JSON projection of a wizard-entered value. The wizard never holds secrets,
-/// so `Value::Secret` (and any list containing one) is unreachable here.
-fn value_to_json(v: &weft_core::Value) -> serde_json::Value {
-    match v {
-        weft_core::Value::String(s) => serde_json::Value::String(s.clone()),
-        weft_core::Value::Bool(b) => serde_json::Value::Bool(*b),
-        weft_core::Value::Int(i) => serde_json::Value::Number((*i).into()),
-        weft_core::Value::List(items) => {
-            serde_json::Value::Array(items.iter().map(value_to_json).collect())
-        }
-        weft_core::Value::Secret(_) => unreachable!("wizard never holds secrets"),
-    }
 }

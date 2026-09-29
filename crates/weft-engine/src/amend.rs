@@ -34,7 +34,6 @@ pub struct AmendOptions {
     pub presets: Vec<String>,
     pub answers: Vec<String>,
     pub answers_file: Option<Utf8PathBuf>,
-    pub answers_json: Option<String>,
     /// Discard an existing session instead of erroring.
     pub force: bool,
 }
@@ -125,26 +124,28 @@ pub fn start(
     }
 
     let eval = StarlarkEval;
-    let provided = answers::layered_with_json(
+    let layered = answers::layered_with_json_full(
         &template,
         &opts.presets,
         opts.answers_file.as_deref(),
         &opts.answers,
-        opts.answers_json.as_deref(),
+        None,
     )?;
-    let (parent_provided, child_provided) = crate::compose::split_provided(&template, &provided)?;
+    let (parent_provided, child_provided) =
+        crate::compose::split_provided(&template, &layered.answers)?;
     let include_provided: BTreeMap<String, weft_core::AnswerSet> = child_provided
         .into_iter()
         .filter(|((inc, _), _)| template.include(inc).is_some_and(|i| !i.decl.repeat))
         .map(|((inc, _), set)| (inc, set))
         .collect();
-    let resolved = answers::gather(
+    let resolved = answers::gather_reviewed(
         &template,
         &parent_provided,
-        &weft_core::AnswerSet::new(),
+        &layered.constraints,
         &eval,
         interaction,
-    )?;
+    )?
+    .answers;
 
     // Base = the target's strict ancestors (its dependency closure minus
     // itself), across frames: a target depending on `web/next-config` needs

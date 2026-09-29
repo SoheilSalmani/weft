@@ -13,8 +13,8 @@ use std::io::{IsTerminal, Write};
 
 use anyhow::Result;
 use camino::{Utf8Path, Utf8PathBuf};
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use ratatui::crossterm::terminal;
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::terminal;
 use weft_core::{FileData, FileEntry, Tree};
 use weft_engine::diff::{self, HunkLine, SelectableHunk};
 

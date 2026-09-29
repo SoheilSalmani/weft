@@ -3,6 +3,49 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — TUI removed until after v1 (BREAKING: `--no-tui`, `--no-wizard`, `--reconfigure`)
+
+- **Why**: PLAN.md's MVP non-goals include "no GUI/TUI beyond plain
+  interactive prompts". The ratatui layer (answers wizard, completion forms,
+  preset-authoring wizard: ~3,300 lines, a third of `weft-cli`) kept a second
+  answer resolver in `WizardState` that every question-model feature had to
+  mirror, and its own terminal rules (the `$(…)` fix below). Decided with the
+  user: remove it now, reconsider after v1. The TTY check and shell quoting
+  that `weft session shell` borrowed from `tui/` moved into `shell.rs`.
+- **The trap it hid**: `answers::gather` prompts only a question with no
+  answer and no default, so without the wizard an interactive `weft new`
+  would take every `use_<concern>` default silently. New
+  `answers::gather_reviewed` (`new`, `session new`, `patch amend`) asks every
+  open, promptable question no input answered, offering its default. A
+  multichoice a preset constrains is asked with the blocked choices hidden and
+  the fixed ones pinned, starting from the preset's selection
+  (`PresetConstraints`, which replaces `Layered.locked`). `Gathered.entered`
+  holds what was typed that differs from the offer; `weft new` stores it as
+  given, so an accepted default stays derived and follows the template, as an
+  untouched wizard row did. `NonInteractive::ask` now takes an offered default
+  (as `confirm` already did), so unattended runs resolve exactly as before;
+  `gather` is unchanged for every other flow.
+- **Commit name**: without `--name`, commit asks for one, offering
+  `patch-NNN` (`commit::ask_name`); unattended (no TTY, or `--yes`) takes
+  `patch-NNN`, as before.
+- **Removed**, no aliases (pre-1.0): `--no-tui` (`new`, `commit`, `hook add`,
+  `patch set`, `instance add`), `--no-wizard` (`new`, `session new`, `patch
+  amend`), `weft update --reconfigure` (use `--answer`/`--unset`), `weft
+  presets save --non-interactive` (save never prompts now), and the `weft new`
+  template picker (TEMPLATE is required); with them `AnswerChanges.typed` and
+  `AmendOptions.answers_json`. clap now requires `hook add` PATCH, `--id`,
+  `--phase`, `--effect` and `--label`, `patch set` NAME, and `instance add`
+  INCLUDE KEY; `hook add` without `--action` still opens `$EDITOR`. The offer
+  to save answers as a preset after `weft new` fires once a person typed an
+  answer. `weft add -p` reads its keypresses through `crossterm` directly.
+  `weft describe`'s `usage.author` passes `--non-interactive` where it passed
+  `--no-wizard`.
+- Tests: engine unit tests for review (defaults offered, only changed answers
+  entered, an unattended review resolves like `gather`, a constrained
+  multichoice); the two e2e tests that pinned the forms' fallback messages are
+  gone and the rest drop the removed flags. README, nvim docs, the schema's
+  `section` text and the weft skills follow.
+
 ## Post-MVP — `weft session shell` and `weft session new --shell`
 
 - **The gap**: entering a session meant `cd`-ing into the path `weft session

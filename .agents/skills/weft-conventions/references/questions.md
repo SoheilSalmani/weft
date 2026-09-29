@@ -45,7 +45,7 @@ name = "with-docker"
 file = "presets/with-docker.toml"
 ```
 
-Questions are processed in declaration order, and a `default` or `when` may only mention earlier questions. `section = "…"` is display grouping for the wizard and the studio; the CLI ignores it.
+Questions are processed in declaration order, and a `default` or `when` may only mention earlier questions. `section = "…"` is display grouping for the studio; the CLI ignores it.
 
 ## Kinds
 
@@ -68,7 +68,7 @@ Nothing else: no `validate`, `regex`, `min`, `max`, `required`, `help`. `require
 
 Every name in an expression is bound before evaluation, including the untaken side of `and`/`or`. So `use_prisma and prisma_driver == 'postgresql'` fails when `prisma_driver` is gated off and has no default. A gated-off question with a default still resolves to that default. The fix is always the same: **give every optional question a safe default** (`''`, `False`, `[]`).
 
-A question with a default is never prompted; only default-less, unanswered, non-secret questions prompt. On `weft update`, new questions with defaults are filled silently and default-less ones prompt or fail under `--non-interactive`, so a question added to a template in the field wants a default.
+In a terminal, `weft new`, `weft session new` and `weft patch amend` ask every open question that no flag, file or preset answered, offering its default; without a terminal, or with `--non-interactive`, they take the defaults and fail only on a default-less question. A computed, secret or locked question is never asked. On `weft update`, new questions with defaults are filled silently and default-less ones prompt or fail under `--non-interactive`, so a question added to a template in the field wants a default.
 
 ## Computed questions
 
@@ -93,11 +93,11 @@ A secret value is never written anywhere: not in answers, state, sessions, patch
 
 ## Presets
 
-A preset is a partial answer file that **locks** what it answers: the wizard skips those questions, `--answer` with a different value is an error, and a multichoice can carry `fixed` and `blocked` options, giving `(selection ∪ fixed) − blocked`.
+A preset is a partial answer file that **locks** what it answers: prompts skip those questions, `--answer` with a different value is an error, and a multichoice can carry `fixed` and `blocked` options, giving `(selection ∪ fixed) − blocked`. The prompt for a constrained multichoice hides the blocked options and names the fixed ones.
 
 ```sh
-weft presets save with-docker --answer use_docker=true --non-interactive
-weft presets save with-shadcn-ui --answer use_shadcn_ui=true --fix components=button --block components=chart --non-interactive
+weft presets save with-docker --answer use_docker=true
+weft presets save with-shadcn-ui --answer use_shadcn_ui=true --fix components=button --block components=chart
 ```
 
 Name them `with-<feature>` for additive locks and `no-<feature>` for the opposite. Run `weft check --preset NAME` for each one you ship, since commutation is only tested under the answers supplied.

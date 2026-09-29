@@ -59,7 +59,7 @@
     {
       "id": 6,
       "prompt": "Our template needs uv installed before scaffolding and should run uv sync afterwards. Wire that up.",
-      "expected_output": "Two hooks added with weft hook add and --no-tui: verify-uv as pre/check with action 'command -v uv' on the patch that introduces uv, and uv-sync as post/setup with 'uv lock && uv sync' and --input glob:pyproject.toml on the patch whose files it reads; weft hook ls to confirm order.",
+      "expected_output": "Two hooks added with weft hook add: verify-uv as pre/check with action 'command -v uv' on the patch that introduces uv, and uv-sync as post/setup with 'uv lock && uv sync' and --input glob:pyproject.toml on the patch whose files it reads; weft hook ls to confirm order.",
       "assertions": [
         "Hook ids follow verify-<tool> and <tool>-<verb>",
         "The setup hook declares an inputs glob so weft update re-fires it",

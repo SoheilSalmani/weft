@@ -206,7 +206,7 @@ fn amend_commit_applies_title_and_description() {
     copy_dir(&hello_template(), &tpl);
     amend_base_with_edit(&tpl);
     weft()
-        .args(["commit", "--session", "base", "--yes", "--no-tui"])
+        .args(["commit", "--session", "base", "--yes"])
         .args(["--describe", "New words.", "--title", "New title"])
         .arg("--template")
         .arg(&tpl)
@@ -230,15 +230,7 @@ fn amend_commit_refuses_when() {
     amend_base_with_edit(&tpl);
     let before = read(&tpl, "patches/base.json");
     weft()
-        .args([
-            "commit",
-            "--session",
-            "base",
-            "--yes",
-            "--no-tui",
-            "--when",
-            "x",
-        ])
+        .args(["commit", "--session", "base", "--yes", "--when", "x"])
         .arg("--template")
         .arg(&tpl)
         .assert()

@@ -568,7 +568,7 @@ fn build_usage(
         scaffold_json: format!("weft new {dir} <dest> --answers-json '{json_answers}'"),
         author: vec![
             format!(
-                "cd \"$(weft session new <patch> --template {dir}{flag_answers} --no-wizard)\""
+                "cd \"$(weft session new <patch> --template {dir}{flag_answers} --non-interactive)\""
             ),
             "… edit the worktree files with concrete values …".into(),
             "weft commit --name <patch> --describe \"what it does\" --yes".into(),

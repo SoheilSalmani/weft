@@ -19,7 +19,7 @@ weft-engine.workspace = true
 anyhow.workspace = true
 rmcp = { version = "2", features = ["server", "transport-io", "macros"] }
 schemars = "1"
-ratatui = "0.29"
+crossterm = "0.28"
 ureq = "3"
 tar = "0.4"
 flate2 = "1"

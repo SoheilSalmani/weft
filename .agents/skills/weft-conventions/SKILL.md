@@ -5,7 +5,7 @@ description: House conventions and the mental model for Weft, the record-based t
 
 # Weft conventions
 
-Weft is a personal project. No model has seen it in training and its documentation is not online, so nothing about it may be assumed from memory. Everything here was verified against `weft 0.1.0` on 2026-09-25, the composition facts again on 2026-09-27, after `extends` and include nodes landed, and session resolution and session entry on 2026-09-30. Where the docs and the binary disagree, the binary wins, and `weft <command> --help` is the check to run before relying on any flag. `references/cli.md` is the verified command sheet.
+Weft is a personal project. No model has seen it in training and its documentation is not online, so nothing about it may be assumed from memory. Everything here was verified against `weft 0.1.0` on 2026-09-25, the composition facts again on 2026-09-27, after `extends` and include nodes landed, session resolution and session entry on 2026-09-30, and the prompting facts the same day, after the full-screen wizard and forms were removed. Where the docs and the binary disagree, the binary wins, and `weft <command> --help` is the check to run before relying on any flag. `references/cli.md` is the verified command sheet.
 
 ## The model
 
@@ -34,11 +34,11 @@ weft commit --name docker --title "Docker image" \
 weft check --answer "project_name=Demo Service" --answer use_docker=true
 ```
 
-These invocations, and the others in this skill, are how an agent runs weft unattended: `--yes`, `--non-interactive` and `--no-tui` stand in for a person. A page written for people shows what a person types; the `writing-documentation` skill has that rule.
+These invocations, and the others in this skill, are how an agent runs weft unattended: `--yes` and `--non-interactive` stand in for a person. A page written for people shows what a person types; the `writing-documentation` skill has that rule.
 
 Facts that shape the loop, all observed on the binary:
 
-- `weft session new` prints only the worktree path on stdout; everything else goes to stderr, so `cd $(…)` works with or without a terminal. `--exec` is the exception: the generator's output, and the editor a bare `--exec` opens, share that stdout, so run an `--exec` session on its own and `cd` into the path it prints last. The full-screen answers wizard opens only when stdin and stdout are both a terminal, even when every question is answered on the command line; inside `cd $(…)` it stays closed and anything missing is asked line by line on stderr. In a pseudo-terminal, `--no-wizard` or `--non-interactive` keeps it closed. `weft session shell NAME -- CMD` runs one command in a session's worktree and exits with its status; without `CMD` it opens a shell there and, like `weft session new --shell`, needs a terminal. `weft patch amend` prints a path relative to the template.
+- `weft session new` prints only the worktree path on stdout; everything else goes to stderr, prompts included, so `cd $(…)` works with or without a terminal. `--exec` is the exception: the generator's output, and the editor a bare `--exec` opens, share that stdout, so run an `--exec` session on its own and `cd` into the path it prints last. In a terminal it asks every question no flag answered, offering the default; `--non-interactive` takes the defaults without asking, which also keeps it from waiting in a pseudo-terminal. `weft session shell NAME -- CMD` runs one command in a session's worktree and exits with its status; without `CMD` it opens a shell there and, like `weft session new --shell`, needs a terminal. `weft patch amend` prints a path relative to the template.
 - A commit that leaves nothing uncommitted ends the session and removes the worktree weft created. An adopted directory is only unlinked.
 - With changes left over, the next patch is a **sibling** by default when scripted: the base stays put and the committed content is peeled back out, so the two must commute. `--stack` builds the next patch on the one just committed. Adopted sessions always stack, and `--sibling` is refused there.
 - A patch whose `--when` is false under the session's answers cannot be committed while other changes remain. Record with answers that make the gate true, or give it its own session.
@@ -95,10 +95,10 @@ A question is for identity (`project_name`, with slugs derived by `computed` que
 
 ```sh
 weft hook add base --id verify-uv --phase pre --effect check \
-  --label "Verify uv is installed" --action "command -v uv" --no-tui
+  --label "Verify uv is installed" --action "command -v uv"
 weft hook add app --id uv-sync --phase post --effect setup \
   --label "Lock and sync the Python environment" --action "uv lock && uv sync" \
-  --input "glob:pyproject.toml" --no-tui
+  --input "glob:pyproject.toml"
 ```
 
 - `check` is read-only and safe to auto-run. `setup` must be idempotent. `deploy` is external and irreversible; it is confirmed, never assumed, and gated with `--when` on an explicit answer.

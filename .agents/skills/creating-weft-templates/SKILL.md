@@ -84,10 +84,10 @@ If one editing sprint touched two concerns, stage them apart: `weft add ruff.tom
 ## Hooks, presets, contract
 
 ```sh
-weft hook add base --id verify-uv --phase pre --effect check --label "Verify uv is installed" --action "command -v uv" --no-tui
+weft hook add base --id verify-uv --phase pre --effect check --label "Verify uv is installed" --action "command -v uv"
 weft hook add app  --id uv-sync  --phase post --effect setup --label "Lock and sync the Python environment" \
-  --action "uv lock && uv sync" --input "glob:pyproject.toml" --no-tui
-weft presets save with-docker --answer use_docker=true --non-interactive
+  --action "uv lock && uv sync" --input "glob:pyproject.toml"
+weft presets save with-docker --answer use_docker=true
 weft describe --agents-md
 ```
 

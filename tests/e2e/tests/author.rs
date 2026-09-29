@@ -186,35 +186,10 @@ fn invalid_hook_edits_roll_back() {
         .stderr(predicates::str::contains("pre-hook"));
 }
 
-// ---- non-TTY behavior of the interactive forms ------------------------
-// e2e runs pipe stdio, so the TUI must never open; missing options fail
-// with a message pointing at the interactive form.
+// ---- optional flags left out -------------------------------------------
 
 #[test]
-fn missing_hook_flags_error_without_a_tty() {
-    let dir = tempfile::tempdir().unwrap();
-    let tpl = dir.path().join("tpl");
-    scaffold_template(&tpl);
-    weft()
-        .args(["hook", "add", "base", "--id", "x"])
-        .arg("--template")
-        .arg(&tpl)
-        .assert()
-        .failure()
-        .stderr(predicates::str::contains("run in a terminal"));
-}
-
-#[test]
-fn missing_new_template_errors_without_a_tty() {
-    weft()
-        .arg("new")
-        .assert()
-        .failure()
-        .stderr(predicates::str::contains("missing TEMPLATE"));
-}
-
-#[test]
-fn patch_set_without_changes_errors_without_a_tty() {
+fn patch_set_without_changes_errors() {
     let dir = tempfile::tempdir().unwrap();
     let tpl = dir.path().join("tpl");
     scaffold_template(&tpl);
@@ -228,7 +203,7 @@ fn patch_set_without_changes_errors_without_a_tty() {
 }
 
 #[test]
-fn commit_without_name_still_defaults_without_a_tty() {
+fn commit_without_name_takes_the_offered_default_unattended() {
     let dir = tempfile::tempdir().unwrap();
     let tpl = dir.path().join("tpl");
     scaffold_template(&tpl);
@@ -241,7 +216,7 @@ fn commit_without_name_still_defaults_without_a_tty() {
         .assert()
         .success();
     std::fs::write(tpl.join(".weft-sessions/main/worktree/EXTRA.md"), "x\n").unwrap();
-    // No --name, no TTY: the historical auto-name (patch-NNN) still applies.
+    // No --name and nobody to ask: the commit takes the offered patch-NNN.
     weft()
         .arg("commit")
         .args(["--session", "main"])

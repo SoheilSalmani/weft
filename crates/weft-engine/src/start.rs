@@ -65,7 +65,7 @@ pub fn run(
     }
 
     let eval = StarlarkEval;
-    let provided = answers::layered_with_json(
+    let layered = answers::layered_with_json_full(
         &template,
         &opts.presets,
         opts.answers_file.as_deref(),
@@ -75,7 +75,8 @@ pub fn run(
     // Namespaced answers seed the single includes mounted into the base;
     // repeat instances are project-time and only enter a session as the one
     // `--foreach` sample.
-    let (parent_provided, child_provided) = crate::compose::split_provided(&template, &provided)?;
+    let (parent_provided, child_provided) =
+        crate::compose::split_provided(&template, &layered.answers)?;
     let mut include_provided: BTreeMap<String, weft_core::AnswerSet> = BTreeMap::new();
     for ((include, key), set) in child_provided {
         if template.include(&include).is_some_and(|i| i.decl.repeat) {
@@ -86,13 +87,14 @@ pub fn run(
         }
         include_provided.insert(include, set);
     }
-    let resolved = answers::gather(
+    let resolved = answers::gather_reviewed(
         &template,
         &parent_provided,
-        &weft_core::AnswerSet::new(),
+        &layered.constraints,
         &eval,
         interaction,
-    )?;
+    )?
+    .answers;
 
     // The base is a set of composed-graph nodes: root patches plus the single
     // includes' patches (their files are what a parent hunk anchors on).

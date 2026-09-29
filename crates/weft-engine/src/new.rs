@@ -59,15 +59,17 @@ pub(crate) fn secret_specs(
         .collect()
 }
 
+/// Scaffold the template into `opts.dest`. Returns the root answers a person
+/// typed at a prompt (see [`answers::Gathered::entered`]).
 pub fn run(
     opts: &NewOptions,
     resolver: &mut dyn crate::template::IncludeResolver,
     interaction: &mut dyn Interaction,
-) -> Result<()> {
+) -> Result<AnswerSet> {
     let template = Template::load_with(&opts.template, resolver)?;
     let eval = StarlarkEval;
 
-    let provided = answers::layered_with_json(
+    let layered = answers::layered_with_json_full(
         &template,
         &opts.presets,
         opts.answers_file.as_deref(),
@@ -76,11 +78,14 @@ pub fn run(
     )?;
     // Split flat answers into parent + per-include child sets, resolve the
     // parent, then each include instance (binds → provided → child gather).
-    let (parent_provided, child_provided) = compose::split_provided(&template, &provided)?;
-    let resolved = answers::gather(
+    let (parent_provided, child_provided) = compose::split_provided(&template, &layered.answers)?;
+    let answers::Gathered {
+        answers: resolved,
+        entered,
+    } = answers::gather_reviewed(
         &template,
         &parent_provided,
-        &weft_core::AnswerSet::new(),
+        &layered.constraints,
         &eval,
         interaction,
     )?;
@@ -116,9 +121,11 @@ pub fn run(
     // is given; defaults, computed values, and binds are derived and follow
     // the template on the next update.
     let parent_secrets = secret_specs(&template.manifest.questions, &resolved);
+    let mut supplied = parent_provided;
+    supplied.overlay(&entered);
     let root_answers = answers::provenance(
         &template.manifest.questions,
-        &parent_provided,
+        &supplied,
         &Default::default(),
         &resolved,
         &eval,
@@ -175,5 +182,5 @@ pub fn run(
         opts.dest,
         tree.len()
     );
-    Ok(())
+    Ok(entered)
 }

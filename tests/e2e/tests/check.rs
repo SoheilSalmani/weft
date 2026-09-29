@@ -160,7 +160,7 @@ fn expr_template(root: &Path, patches: &[(&str, &str)]) {
 
 fn session_with_extra(root: &Path) -> std::path::PathBuf {
     weft()
-        .args(["session", "new", "--no-wizard", "--answer", "extra=true"])
+        .args(["session", "new", "--answer", "extra=true"])
         .arg("--template")
         .arg(root)
         .assert()
@@ -182,15 +182,7 @@ fn commit_keeps_expression_output_out_of_hunk_context() {
     )
     .unwrap();
     weft()
-        .args([
-            "commit",
-            "--session",
-            "default",
-            "--name",
-            "mine",
-            "--yes",
-            "--no-tui",
-        ])
+        .args(["commit", "--session", "default", "--name", "mine", "--yes"])
         .arg("--template")
         .arg(root)
         .assert()
@@ -223,15 +215,7 @@ fn commit_refuses_a_change_with_only_expression_lines_around_it() {
     )
     .unwrap();
     weft()
-        .args([
-            "commit",
-            "--session",
-            "default",
-            "--name",
-            "mine",
-            "--yes",
-            "--no-tui",
-        ])
+        .args(["commit", "--session", "default", "--name", "mine", "--yes"])
         .arg("--template")
         .arg(root)
         .assert()

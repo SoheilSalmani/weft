@@ -191,7 +191,7 @@ fn the_first_fill_of_an_omitted_file_records_as_a_fill() {
     // With Linear off the base leaves `.mcp.json` out: the author writes the
     // whole file, owner's lines and their own.
     weft()
-        .args(["session", "new", "lightdash", "--no-wizard"])
+        .args(["session", "new", "lightdash"])
         .args([
             "--answer",
             "use_linear=false",
@@ -218,7 +218,7 @@ fn the_first_fill_of_an_omitted_file_records_as_a_fill() {
         ));
     weft()
         .args(["commit", "--session", "lightdash", "--name", "lightdash"])
-        .args(["--when", "use_lightdash", "--yes", "--no-tui"])
+        .args(["--when", "use_lightdash", "--yes"])
         .arg("--template")
         .arg(&tpl)
         .assert()
@@ -262,7 +262,7 @@ fn amending_the_only_fill_of_an_omitted_file_keeps_it_a_fill() {
     let text = fs::read_to_string(&file).unwrap();
     fs::write(&file, text.replace("/api/v1/mcp", "/api/v2/mcp")).unwrap();
     weft()
-        .args(["commit", "--session", "lightdash", "--yes", "--no-tui"])
+        .args(["commit", "--session", "lightdash", "--yes"])
         .arg("--template")
         .arg(&tpl)
         .assert()
@@ -285,7 +285,7 @@ fn amending_the_only_fill_of_an_omitted_file_keeps_it_a_fill() {
 /// it will record.
 fn lightdash_session(tpl: &Path) -> PathBuf {
     weft()
-        .args(["session", "new", "lightdash", "--no-wizard"])
+        .args(["session", "new", "lightdash"])
         .args(["--answer", "use_lightdash=true"])
         .args(["--answer", "lightdash_url=https://demo.lightdash.cloud"])
         .arg("--template")
@@ -319,14 +319,7 @@ fn commit_records_lines_added_inside_a_slot_as_a_fill() {
     // line, so it applies on `mcp` alone (commit proves that).
     weft()
         .args(["commit", "--session", "lightdash", "--name", "lightdash"])
-        .args([
-            "--when",
-            "use_lightdash",
-            "--depends-on",
-            "mcp",
-            "--yes",
-            "--no-tui",
-        ])
+        .args(["--when", "use_lightdash", "--depends-on", "mcp", "--yes"])
         .arg("--template")
         .arg(&tpl)
         .assert()
@@ -392,7 +385,7 @@ fn commit_refuses_a_contribution_out_of_key_order() {
     .unwrap();
     weft()
         .args(["commit", "--session", "lightdash", "--name", "lightdash"])
-        .args(["--when", "use_lightdash", "--yes", "--no-tui"])
+        .args(["--when", "use_lightdash", "--yes"])
         .arg("--template")
         .arg(&tpl)
         .assert()

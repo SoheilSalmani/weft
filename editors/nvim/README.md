@@ -4,8 +4,8 @@ Thin Neovim integration for [weft](../../README.md):
 
 - attaches `weft lsp` to `weft.toml` and `patches/*.json` buffers
   (diagnostics, completion, hover, go-to-definition),
-- `:WeftNew [template] [dest]` opens weft's full-screen answers wizard in a
-  floating terminal — the CLI wizard *is* the TUI.
+- `:WeftNew [template] [dest]` runs `weft new` in a floating terminal, where
+  weft asks the template's questions.
 
 ## Install
 

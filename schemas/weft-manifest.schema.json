@@ -157,7 +157,7 @@
           "default": false
         },
         "section": {
-          "description": "Display grouping for UIs (sidebar sections, wizard groups). Pure\npresentation metadata.",
+          "description": "Display grouping for UIs (sidebar sections). Pure presentation\nmetadata.",
           "type": [
             "string",
             "null"

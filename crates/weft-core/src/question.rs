@@ -51,8 +51,8 @@ pub struct Question {
     /// `selected_fonts = [font_ui, font_heading, ...]`. Requires a `default`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub computed: bool,
-    /// Display grouping for UIs (sidebar sections, wizard groups). Pure
-    /// presentation metadata — no effect on resolution.
+    /// Display grouping for UIs (sidebar sections). Pure presentation
+    /// metadata — no effect on resolution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
     /// How extending templates narrowed this inherited question (their

@@ -138,7 +138,7 @@ fn blocked_choice_errors() {
         .stderr(predicates::str::contains("blocked"));
 }
 
-/// `presets save` (scripted) → usable preset; `presets rm` removes it.
+/// `presets save` → usable preset; `presets rm` removes it.
 #[test]
 fn preset_save_and_rm_round_trip() {
     let dir = tempfile::tempdir().unwrap();
@@ -152,7 +152,6 @@ fn preset_save_and_rm_round_trip() {
         .arg(&tpl)
         .arg("--answer")
         .arg("project_name=Acme")
-        .arg("--non-interactive")
         .assert()
         .success();
     assert!(tpl.join("presets/acme.toml").exists());
@@ -205,7 +204,6 @@ fn preset_save_constraint_flags() {
         .arg("features=ci")
         .arg("--block")
         .arg("features=experimental")
-        .arg("--non-interactive")
         .assert()
         .success();
     let file = read(&tpl, "presets/pinned.toml");
@@ -239,7 +237,6 @@ fn preset_save_rejects_unknown_question() {
         .arg(&tpl)
         .arg("--fix")
         .arg("nope=x")
-        .arg("--non-interactive")
         .assert()
         .failure()
         .stderr(predicates::str::contains("unknown question"));

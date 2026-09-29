@@ -305,8 +305,8 @@ pub fn resolve_answers(
 /// Where a candidate value for a question came from (see [`narrow`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueOrigin {
-    /// Supplied from outside: a flag, an answers file or JSON, the wizard, a
-    /// prompt, a preset, a bind, or an answer the project stored.
+    /// Supplied from outside: a flag, an answers file or JSON, a prompt, a
+    /// preset, a bind, or an answer the project stored.
     Input,
     /// The question's default (or lock) expression.
     Default,
@@ -364,8 +364,8 @@ pub fn narrow(q: &Question, value: Value, origin: ValueOrigin) -> Result<Value, 
 }
 
 /// Equal answers; a multichoice compares as a set, since the order of a
-/// selection means nothing to a lock.
-fn same_answer(a: &Value, b: &Value) -> bool {
+/// selection means nothing to a lock or to a prompt's default.
+pub fn same_answer(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::List(x), Value::List(y)) => {
             x.iter().all(|v| y.contains(v)) && y.iter().all(|v| x.contains(v))

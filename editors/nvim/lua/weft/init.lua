@@ -1,8 +1,8 @@
 -- weft.nvim — thin Neovim integration for weft templates.
 --
 -- * LSP: registers `weft lsp` for weft.toml and patches/*.json buffers.
--- * :WeftNew [template] [dest] — opens the weft full-screen wizard in a
---   floating terminal (the wizard IS the TUI; nothing bespoke here).
+-- * :WeftNew [template] [dest] — runs `weft new` in a floating terminal, where
+--   weft asks the template's questions (nothing bespoke here).
 --
 -- Setup:
 --   require("weft").setup({ bin = "weft" })
@@ -49,7 +49,7 @@ function M.setup(opts)
   end, { nargs = "*", complete = "dir", desc = "Scaffold a project from a weft template" })
 end
 
---- Open the weft wizard in a floating terminal.
+--- Run `weft new` in a floating terminal.
 ---@param template string|nil template directory (prompted when nil)
 ---@param dest string|nil destination directory (prompted when nil)
 function M.new(template, dest)

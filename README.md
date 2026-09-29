@@ -70,7 +70,9 @@ cargo test --workspace         # full test suite (unit + e2e)
 
 ## Five-minute tutorial
 
-The repo ships a tiny fixture template. Scaffold a project from it:
+The repo ships a tiny fixture template. Scaffold a project from it; weft asks
+for each answer the command leaves out, offering its default, so press Enter
+to accept them:
 
 ```sh
 alias weft=target/release/weft
@@ -99,8 +101,8 @@ ls /tmp/demo2          # no Dockerfile
 
 Copy the fixture somewhere writable, then record a change against a rendered
 base state. `--shell` opens a new shell in the session's worktree once it is
-rendered. The answers form opens first, with your answer filled in; press `s`
-to continue:
+rendered. First weft asks for the answers you left out, as `weft new` did;
+press Enter to accept the defaults:
 
 ```sh
 cp -r fixtures/templates/hello /tmp/tpl
@@ -167,7 +169,6 @@ weft answers /tmp/demo                                  # what's set, and where 
 weft update /tmp/demo --answer "project_name=New Name"  # re-render + 3-way merge
 weft update /tmp/demo --answer svc.port=8080            # an include's answer
 weft update /tmp/demo --unset package_name              # back to its default
-weft update /tmp/demo --reconfigure                     # edit them all in the wizard
 ```
 
 `.weft/state.toml` keeps two kinds of answers. `[answers]` holds the ones you
@@ -332,7 +333,7 @@ extends = "../base"
 
 [refine.stack_skills]        # a multichoice inherited from base
 choices = ["dbt", "sql"]     # keep only these (or: blocked = ["airflow"])
-fixed = ["dbt"]              # always selected, shown pinned in the wizard
+fixed = ["dbt"]              # always selected; the prompt names it, never offers it
 default = "['sql']"          # pre-selected, still editable
 
 [refine.use_jira]
@@ -348,14 +349,14 @@ everything an extender renders is something its base could render. A
 refined `default` or `lock` keeps the inherited question's place in the
 answer order, so it may only mention questions declared before it.
 
-Blocked choices are gone from the wizard and from `weft describe`; picking
-one on any input layer (flag, JSON, answers file, preset) is an error that
-names the refining template. Fixed choices join whatever is selected, and a
-default that lists a blocked choice simply drops it. Answers you give are
-stored as given, fixed choices included; the template never rewrites them.
-If a template narrows further after projects exist, `weft update` stops on a
-stored answer that no longer fits and says how to change it (`--answer`) or
-hand it back to the template (`--unset`).
+Blocked choices are never offered at the prompt and are gone from `weft
+describe`; picking one on any input layer (flag, JSON, answers file, preset)
+is an error that names the refining template. Fixed choices join whatever is
+selected, and a default that lists a blocked choice simply drops it. Answers
+you give are stored as given, fixed choices included; the template never
+rewrites them. If a template narrows further after projects exist, `weft
+update` stops on a stored answer that no longer fits and says how to change
+it (`--answer`) or hand it back to the template (`--unset`).
 
 ## Workspace layout
 

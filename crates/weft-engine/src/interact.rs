@@ -30,6 +30,8 @@ pub fn edit_command(instructions: &str) -> Result<String> {
 /// How the engine talks to a human. Abstracted so tests and non-interactive
 /// runs can plug in deterministic behavior.
 pub trait Interaction {
+    /// Ask one question. A `default` is offered for the person to accept,
+    /// and taken as the answer when there is nobody to ask.
     fn ask(&mut self, question: &Question, default: Option<&Value>) -> Result<Value>;
     fn ask_secret(&mut self, question: &Question) -> Result<SecretValue>;
     fn confirm(&mut self, message: &str, default: bool) -> Result<bool>;
@@ -54,12 +56,16 @@ pub trait Interaction {
     }
 }
 
-/// Fails on any prompt with an actionable message. Used when stdin is not a
-/// TTY or `--non-interactive` is set.
+/// Takes the default a prompt offers, and fails on a prompt without one with
+/// an actionable message. Used when stdin is not a TTY or `--non-interactive`
+/// is set.
 pub struct NonInteractive;
 
 impl Interaction for NonInteractive {
-    fn ask(&mut self, question: &Question, _default: Option<&Value>) -> Result<Value> {
+    fn ask(&mut self, question: &Question, default: Option<&Value>) -> Result<Value> {
+        if let Some(default) = default {
+            return Ok(default.clone());
+        }
         bail!(
             "question `{}` is unanswered and this run is non-interactive; \
              pass it with --answer {}=..., --answers-json, an answers file, or a \
