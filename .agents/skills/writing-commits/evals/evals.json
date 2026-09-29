@@ -1,0 +1,176 @@
+{
+  "skill_name": "writing-commits",
+  "notes": "Score commit boundaries and message quality separately. A polished message around an incoherent diff fails. Well-split commits with vague subjects also fail. No run may commit, stage destructively, or discard work.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I fixed the off-by-one in the pagination offset. Commit it.",
+      "expected_output": "One commit, subject only, no body.",
+      "assertions": [
+        "It reads the staged or unstaged diff before writing the message",
+        "The subject names the behaviour fixed rather than saying fix",
+        "No body is added",
+        "No issue reference is used as the subject"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Commit the webhook idempotency fix and its regression test.",
+      "expected_output": "One commit containing both, not two.",
+      "assertions": [
+        "Implementation and test go in the same commit",
+        "The reasoning references revertability or coherence rather than a rule about tests",
+        "The subject describes the behaviour change, not the files"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "I refactored the billing module to extract a service, and while I was in there I fixed the currency rounding bug. Commit.",
+      "expected_output": "Two commits proposed, refactor first, with approval sought before creating them.",
+      "assertions": [
+        "It proposes splitting into a refactor commit and a behaviour-fix commit",
+        "The refactor is ordered first so a reviewer can confirm it changed nothing",
+        "It does not create the commits without approval",
+        "Each proposed subject would revert as one decision"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "I ran the formatter across the repo and also changed the retry limit from 3 to 5. Commit everything.",
+      "expected_output": "Split, because the formatting would bury the semantic change in blame.",
+      "assertions": [
+        "It proposes separating the formatter run from the retry change",
+        "The reason given is that the mechanical change would hide the semantic one in review or blame",
+        "It does not cite a line-count threshold as the deciding factor",
+        "It stages by path rather than staging everything"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Commit the schema change. I also updated the generated types file.",
+      "expected_output": "One commit, because source and generated artifact must stay synchronised.",
+      "assertions": [
+        "Source and generated output go in one commit",
+        "The reason is that splitting creates a commit where they disagree",
+        "It does not propose a separate generated-files commit"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Commit my changes.",
+      "expected_output": "An inspection of the whole tree first, and a question or a split proposal if it holds unrelated work.",
+      "assertions": [
+        "It runs git status and reads the diffs before staging",
+        "It does not run git add . or git add -A",
+        "If unrelated changes exist, it asks or proposes a grouping rather than committing a mixture",
+        "It reports what it left unstaged"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Commit the auth fix. Note that I have unfinished work in packages/ui that I do not want committed.",
+      "expected_output": "Only the auth paths staged, the UI work untouched and explicitly acknowledged.",
+      "assertions": [
+        "Only the auth-related paths are staged, by name",
+        "The packages/ui changes are neither staged nor modified",
+        "It never runs checkout, restore, reset --hard, clean, or stash drop",
+        "The response states what was left alone"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "config.ts has both my new feature flag and a debug console.log I want to keep locally. Commit just the flag.",
+      "expected_output": "Hunk-level staging, or a proposal for the user to run it interactively.",
+      "assertions": [
+        "It proposes git add -p or an equivalent hunk-level approach",
+        "It does not stage the whole file",
+        "It does not delete or revert the debug line",
+        "If the hunks are entangled, it asks rather than guessing"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Use this commit message: 'Update stuff'.",
+      "expected_output": "Pushback with a specific alternative derived from the actual diff.",
+      "assertions": [
+        "It reads the staged diff and proposes a specific subject",
+        "It explains what the vague subject costs a future blame or bisect reader",
+        "It defers to the user if they insist"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Write a commit message for this. Here is the tracker issue describing what we wanted to build.",
+      "expected_output": "A message describing the staged diff, not the issue.",
+      "assertions": [
+        "It reads git diff --cached rather than writing from the issue text",
+        "If the diff differs from what the issue described, it describes the diff",
+        "It does not copy the issue description into the body",
+        "It does not use a closing keyword in the commit"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Add a body to this commit explaining what changed in each file.",
+      "expected_output": "A refusal to narrate files, with a body only if something non-obvious exists.",
+      "assertions": [
+        "It does not produce a per-file narration",
+        "It writes a body only if the diff leaves something unexplained",
+        "If no such thing exists, it says the subject and diff are sufficient"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "The fix looks trivial but the obvious version does not work because the lock is per-process. Commit it.",
+      "expected_output": "A body that records why the simpler fix fails.",
+      "assertions": [
+        "A body is written",
+        "It states why the obvious implementation is insufficient",
+        "It does not narrate the code",
+        "It stays within a few short paragraphs"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "Should I use feat: or fix: prefixes on these commits?",
+      "expected_output": "An answer grounded in whether anything in the repository consumes the prefix, established by checking rather than assumed.",
+      "assertions": [
+        "It checks for release tooling, changelog generation, commitlint and a CI title check before answering",
+        "Where nothing consumes the prefix, the answer is no",
+        "The reason is that no tooling consumes the prefix, not that prefixes are bad",
+        "It names the condition under which the answer would change, such as adopting release tooling",
+        "It would conform if the repository did use them"
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "Commit this. Nothing has changed in the working tree, I already committed it earlier.",
+      "expected_output": "No commit created.",
+      "assertions": [
+        "It checks the tree and finds no changes",
+        "It does not create an empty commit",
+        "It says plainly that there is nothing to commit"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "These three commits on my branch are fine but the subjects are not uniform. Rewrite them to match.",
+      "expected_output": "Refusal to rewrite accurate history for cosmetic uniformity.",
+      "assertions": [
+        "It does not rewrite the commits",
+        "It distinguishes cosmetic preference from a semantic problem",
+        "It routes any genuine rewriting need to rewriting-history"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "I renamed the Session type to AuthSession across 180 files. Commit.",
+      "expected_output": "One commit, on the revert test.",
+      "assertions": [
+        "It is one commit despite the file count",
+        "The reasoning references reverting one decision, not size",
+        "The subject names the rename and its object"
+      ]
+    }
+  ]
+}

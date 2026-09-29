@@ -1,0 +1,63 @@
+{
+  "skill_name": "triaging-github-issues",
+  "notes": "User-invoked only, so trigger tuning does not apply. These measure output quality: findings must be specific, ranked, and free of invented replacement content. No run may modify GitHub.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "/triaging-github-issues review the open issues. Issue #7 says the fix belongs in src/skill-engine/sandbox.ts, but that file was deleted two months ago, and a comment from June says we went a different way.",
+      "expected_output": "A stale-content finding naming the dead path and the contradicting comment, with a concrete correction and the rationale preserved.",
+      "assertions": [
+        "The finding identifies the stale file reference specifically",
+        "It identifies that the body contradicts the later comment",
+        "The proposed fix updates the body to current understanding rather than deleting the history",
+        "The reason the direction changed is preserved somewhere, not discarded",
+        "Nothing is changed in GitHub"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "/triaging-github-issues issue #22 has 14 sub-issues, things like 'add the function', 'write the test', 'run the formatter'.",
+      "expected_output": "An over-decomposition finding proposing collapse into mergeable units or promotion to a Linear project.",
+      "assertions": [
+        "The finding applies the mergeability test to the children",
+        "It proposes collapsing coding steps into a checklist or into fewer mergeable units",
+        "It notes that a parent past about seven children is a project belonging in Linear",
+        "It does not simply renumber or rename the existing children"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "/triaging-github-issues issue #31 was closed automatically when PR #45 merged, but that PR only did the first half of the work.",
+      "expected_output": "A missed-closure finding proposing reopening, with guidance on closing keywords for partial pull requests.",
+      "assertions": [
+        "The finding proposes reopening the issue, or opening a follow-up for the remaining half",
+        "It identifies the closing keyword on a partial pull request as the cause",
+        "It states that partial pull requests should reference without a closing keyword",
+        "It does not rewrite the issue body into a description of what the merged pull request did"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "/triaging-github-issues issues #9 and #17 describe the same webhook duplication problem.",
+      "expected_output": "A duplicate finding proposing native duplicate closure, with the surviving issue chosen on stated grounds.",
+      "assertions": [
+        "The response proposes closing one as a duplicate using the native closing reason",
+        "It states which issue survives and why, such as more evidence or more linked work",
+        "It proposes carrying across any evidence that exists only on the closing issue",
+        "It does not close anything without approval"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "/triaging-github-issues the labels have grown to bug, Bug, defect, regression, frontend-bug, customer-bug, needs-triage, in-progress, p1.",
+      "expected_output": "A metadata finding proposing subtraction, with each survivor justified by a filter, and status and priority labels removed.",
+      "assertions": [
+        "Synonyms such as bug, Bug, and defect are identified for merging",
+        "Status labels such as in-progress are identified as duplicating issue state",
+        "Priority labels are identified as duplicating Linear",
+        "Each surviving label is justified by naming a filter or automation, or flagged as unjustified",
+        "No replacement taxonomy is invented"
+      ]
+    }
+  ]
+}

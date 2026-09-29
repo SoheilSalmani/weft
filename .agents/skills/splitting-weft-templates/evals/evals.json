@@ -1,0 +1,91 @@
+{
+  "skill_name": "splitting-weft-templates",
+  "notes": "Score the decision first: the agent must name which of the three outcomes applies (include, portable patch, gates and presets) or that nothing should change, with the reason. Promising an overlay, or a parent patch that edits a mounted child's files without depending on the child node that owns them, fails. So does claiming that weft has no root mount or no base-template mechanism. For an include split, both templates must be checked and the before/after renders diffed. For a portable patch, the two constraints must be stated and checked in every host.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "The web template has grown to 17 patches. Should I split it?",
+      "expected_output": "Not on size. The agent reads weft graph, notes the patches are opt-in packages gated on use_* bools with presets, and says that is the right shape for variants of one project. It suggests squash or amend only where two patches always travel together, and names the one real split candidate if a subtree (apps/api) is something another template would mount.",
+      "assertions": [
+        "Refuses size as a reason and says so",
+        "Identifies the gated-patches-plus-presets shape as correct",
+        "Names a subtree as the only candidate for an include, if any"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I want the skills patch and the editorconfig from the java template in the fastapi and dbt templates too, like a shared base template.",
+      "expected_output": "The house shares root-level scaffolding as portable patches, so the agent does that: it confirms each patch has no depends_on and only create_file ops at untouched paths, copies the JSON files into the other templates, runs weft check in each, and notes that updating means re-copying. Any hunk on a shared file such as .gitignore is handed to each host's base instead. It may name extends as the engine's mechanism for a shared base, as a proposal, without migrating the templates.",
+      "assertions": [
+        "Follows the house practice of portable patches for root-level files",
+        "States the two portability constraints and verifies them on the actual patch files",
+        "Copies the files and runs weft check in every host template",
+        "Does not claim that weft cannot mount at the root or has no base-template mechanism",
+        "Does not migrate the templates to extends without being asked"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Pull the apps/api FastAPI service out of the shop template so the workspace and the platform templates can both mount it.",
+      "expected_output": "An include split: a child template initialised with its own questions (service_name, computed package_name), the api patch's ops moved with the apps/api/ prefix stripped from paths, hook inputs and cd prefixes, the README hunk kept in the parent as a glue patch on base, an [[include]] with path apps/api and a bind for service_name, weft check on both, and a diff of the parent's render before and after the split.",
+      "assertions": [
+        "Renders the parent before touching anything and diffs after",
+        "Strips the mount prefix from every path, glob and cd in the moved ops and hooks",
+        "Keeps ops on root files in the parent rather than moving them",
+        "Declares in the child only the questions the moved ops mention and binds them from the parent",
+        "Checks both templates"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Split the dbt template into dbt-duckdb and dbt-snowflake templates.",
+      "expected_output": "The agent pushes back: two adapters are variants of one project, expressed as one adapter choice with a gated connection patch each and, if wanted, with-duckdb and with-snowflake presets. Two sibling templates would duplicate everything else. It keeps one template.",
+      "assertions": [
+        "Refuses the sibling-template split with the duplication reason",
+        "Proposes a choice question, gated patches and presets",
+        "Runs weft check --preset for each bundle"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Make one connector template and mount it once per REST API we integrate, so updating it updates all of them.",
+      "expected_output": "A repeated include: the child connector template, [[include]] with path connectors/{key} and repeat = true, a bind of api_name = key, instances declared per project with --instance or weft instance add, and any per-instance root glue as a foreach patch recorded with --foreach. The agent states that instances belong to projects, not the template.",
+      "assertions": [
+        "Uses repeat = true with {key} in the path",
+        "Records root glue as a foreach patch, a leaf",
+        "Puts the instance list on the project side"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Let the parent template override the child's Dockerfile after mounting it.",
+      "expected_output": "Possible for a single include, as an edit rather than an override: the agent records the change in a session on the parent, where the composed base already contains the child's Dockerfile, and weft commit makes the patch depend on the child node that owns it and says so on stderr. If that child patch is gated off, the parent's edit is off too, and the hunk can reference only the parent's answers. For a repeat include the edit needs a foreach patch. No overlay or post-render step is invented.",
+      "assertions": [
+        "States the mount rule: a parent patch may edit files under a single mount only by depending on the child node that owns them",
+        "Records the edit in a session so the dependency is inferred, or adds it to depends_on by hand",
+        "Notes that the edit switches off with the child patch it depends on",
+        "Does not invent an overlay or post-render edit"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Split this large pull request into smaller commits.",
+      "expected_output": "Git work; the skill does not fire.",
+      "assertions": [
+        "No weft command is proposed",
+        "The agent works with git"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "The java template is a six-deep chain: base, gradle, gradle-wrapper, testing, formatter, linter. Split it up.",
+      "expected_output": "Not a template split but a graph repair inside one template: the agent explains chains come from recording on latest, checks which links anchor on the previous patch's lines (the build.gradle.kts edits), and re-parents the independent ones by editing their depends_on to base by hand (there is no weft patch rebase), or re-records them with --base base, leaving the legitimate chain. weft check proves the render and commutation afterwards.",
+      "assertions": [
+        "Identifies this as a dependency-shape problem, not a composition problem",
+        "Distinguishes links that anchor on the previous patch from links recorded on latest by habit",
+        "Re-parents by editing depends_on or re-recording with --base, and proves it with weft check",
+        "Does not invoke a weft patch rebase command"
+      ]
+    }
+  ]
+}

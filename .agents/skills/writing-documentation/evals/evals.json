@@ -1,0 +1,97 @@
+{
+  "skill_name": "writing-documentation",
+  "notes": "Run each case with the skill and again without it, in fresh sessions, and compare. Score the page a reader would get, not the plan: open the output and check it against the assertions. Cases 1, 2 and 8 fail if the page carries anything that exists only for its test script, even when the script passes. Case 5 passes when the answer is that little or nothing needs changing.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Write a getting-started tutorial for `stack sync`. The reader creates a project with `stack new`, edits its `stack.toml`, and runs `stack sync`. Every tutorial here has a bash script that replays it and asserts the output, so add one for this page.",
+      "expected_output": "A tutorial in which the reader edits stack.toml in their editor, every block has a sentence before it, names are realistic, and commands carry only the flags a person needs; plus a script that replays the page's commands and file contents and may assert more than the page shows.",
+      "assertions": [
+        "Every file the reader writes is an editor step that names the file, followed by a block titled with its path",
+        "No block on the page writes a reader-authored file with printf, echo redirection, a heredoc, tee, or sed -i",
+        "Example names are realistic and spelled out; none is an abbreviation such as proj or cfg, or a throwaway such as x or foo",
+        "No command on the page carries --non-interactive, --quiet, --no-color, or another flag that exists only for running without a person",
+        "Every code block has a sentence before it, and no two blocks touch",
+        "Output appears only where it confirms a step or is used next, and every output block is introduced",
+        "The script writes the same file contents the page shows, and the checks it adds do not appear on the page"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Write part 2 of our tutorial series. It continues from the project readers built in part 1 and adds a staging environment.",
+      "expected_output": "A tutorial that starts from part 1's end state, says so in its first lines with a link to part 1, and pastes no script that rebuilds part 1.",
+      "assertions": [
+        "The first lines say the page continues from part 1 and link to it",
+        "No block rebuilds part 1's result by script",
+        "The page does not repeat part 1's steps",
+        "Where the page is run to check it, it is run from where part 1 leaves the reader, not only from an empty directory"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Write a guide for running `stack sync` in GitHub Actions, where nobody is there to answer prompts.",
+      "expected_output": "A how-to guide whose subject is running without a person, so the automation flags stay and are explained.",
+      "assertions": [
+        "The title starts with How to",
+        "The workflow keeps --non-interactive or the tool's equivalent, because automation is what the page is about",
+        "Each automation flag is explained once, by what would happen without it",
+        "The workflow file is shown whole, in a block titled with its path, for the reader to create",
+        "It does not teach `stack sync` from scratch; it links to the tutorial or the reference instead"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Write the part of our deployment guide that tells readers how to point `stack deploy` at their own cloud project and region.",
+      "expected_output": "Values the reader must replace look like placeholders and are explained after the block; every other value is realistic.",
+      "assertions": [
+        "Values the reader must replace are capitalised placeholders such as PROJECT_ID or REGION",
+        "The sentence after each block says what to put in each placeholder",
+        "No value the reader must replace is written so that it looks real and could be pasted unchanged",
+        "Values the reader types as they stand are realistic, not x or foo"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Review this tutorial step and fix what needs fixing. [A step whose heading names the learner's goal and whose first sentence gives its reason. It names the directory, tells the reader to open settings.toml in their editor and shows the file in a titled block, introduces its one command, and shows one introduced output block followed by a sentence on what to notice.]",
+      "expected_output": "It says the step already follows the rules and changes nothing, or at most one small thing it can name.",
+      "assertions": [
+        "It does not restructure the step",
+        "It does not add output blocks, checks, or explanation",
+        "Any change it makes is named together with the rule it applies"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Our getting-started page opens with three paragraphs on the architecture before the first command. Readers skip them or give up. Fix it.",
+      "expected_output": "The architecture moves to an explanation page, and the tutorial starts with what the reader will build and then the first step, linking to the explanation.",
+      "assertions": [
+        "The architecture paragraphs move to a separate page whose title would make sense with About in front of it",
+        "The tutorial's first lines say what the reader will build, and the first step follows",
+        "The tutorial links to the explanation rather than summarising it",
+        "Nothing is deleted without saying whether it moved or was judged unnecessary"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "The configuration reference has a Best practices subsection with recommendations for each option. Clean it up.",
+      "expected_output": "The recommendations leave the reference for a how-to guide or an explanation page, and the reference keeps neutral descriptions.",
+      "assertions": [
+        "The reference keeps only descriptions: what each option is, what it accepts, and its default",
+        "The advice moves to a how-to guide or an explanation page, linked from the reference",
+        "No should, recommended, or prefer remains in the reference entries"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "This tutorial was generated from our test plan. Its headings are cases like 'Both sides change the same line: a conflict', it runs a check command after every step, and it shows output after every command. Make it read like a tutorial without weakening the test script behind it.",
+      "expected_output": "Headings become the learner's goals, each step gets a one-clause reason, checks and output stay only where the learner learns from them, and every check removed from the page keeps running in the script.",
+      "assertions": [
+        "Every heading names what the learner does or achieves, not a test case",
+        "Each step opens with a one-clause reason",
+        "A check command stays on the page only where its output teaches something, and the page says what to notice in it",
+        "Output blocks that only confirm the obvious are removed",
+        "Every check removed from the page still runs in the script"
+      ]
+    }
+  ]
+}
