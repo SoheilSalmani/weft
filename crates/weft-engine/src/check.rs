@@ -61,7 +61,10 @@ pub fn run(
             }
         }
         if let AnswerKind::Choice { choices } | AnswerKind::MultiChoice { choices } = &q.kind {
-            if choices.is_empty() {
+            // Only as declared: an extender may narrow an inherited multichoice
+            // to nothing, so it is never asked (a `choice` left empty is
+            // already a load error).
+            if choices.is_empty() && q.narrowing.blocked.is_empty() {
                 issue(&mut report, format!("question `{}` has no choices", q.id));
             }
         }
@@ -1462,5 +1465,48 @@ default = "'github'"
             refine_issues("[refine.ci]\nblocked = [\"github\"]\ndefault = \"'gitlab'\"\n"),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn a_multichoice_narrowed_to_nothing_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        for (name, manifest) in [
+            (
+                "base",
+                "[template]\nname = \"base\"\nweft-version = \"0.1\"\n\n\
+                 [[question]]\nid = \"skills\"\nkind = \"multichoice\"\n\
+                 choices = [\"dbt\", \"slides\"]\ndefault = \"[]\"\n",
+            ),
+            (
+                "mid",
+                "[template]\nname = \"mid\"\nweft-version = \"0.1\"\nextends = \"../base\"\n\n\
+                 [refine.skills]\nchoices = []\n",
+            ),
+        ] {
+            std::fs::create_dir_all(root.join(name).join("patches")).unwrap();
+            std::fs::write(root.join(name).join("weft.toml"), manifest).unwrap();
+        }
+        let opts = CheckOptions {
+            template: root.join("mid"),
+            presets: vec![],
+            answers: vec![],
+            answers_file: None,
+        };
+        let report = run(&opts, &mut PathResolver).unwrap();
+        assert_eq!(report.issues, Vec::<String>::new());
+        // Declaring a question with no choices is still an issue.
+        std::fs::write(
+            root.join("base/weft.toml"),
+            "[template]\nname = \"base\"\nweft-version = \"0.1\"\n\n\
+             [[question]]\nid = \"skills\"\nkind = \"multichoice\"\nchoices = []\ndefault = \"[]\"\n",
+        )
+        .unwrap();
+        let opts = CheckOptions {
+            template: root.join("base"),
+            ..opts
+        };
+        let report = run(&opts, &mut PathResolver).unwrap();
+        assert_eq!(report.issues, ["question `skills` has no choices"]);
     }
 }
