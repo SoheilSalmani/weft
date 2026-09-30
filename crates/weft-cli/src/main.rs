@@ -408,6 +408,8 @@ enum InstanceCmd {
 }
 
 #[derive(Subcommand)]
+// Parsed once per process; boxing the fields would only obscure clap's derive.
+#[allow(clippy::large_enum_variant)]
 enum HookCmd {
     /// Add a hook to a patch. Leave out --action to write the command in
     /// $VISUAL/$EDITOR.
@@ -417,7 +419,7 @@ enum HookCmd {
         /// Template directory (defaults to `.`).
         #[arg(long, default_value = ".")]
         template: Utf8PathBuf,
-        /// Unique hook id (referenced by --after / hook: inputs).
+        /// Unique hook id (referenced by --after / --before / hook: inputs).
         #[arg(long)]
         id: String,
         /// `pre` (guard, before writing) or `post` (after writing).
@@ -440,6 +442,10 @@ enum HookCmd {
         /// Hook id this one must run after (repeatable).
         #[arg(long = "after")]
         after: Vec<String>,
+        /// Hook id this one must run before (repeatable); how an extender
+        /// orders its hooks ahead of one it inherits.
+        #[arg(long = "before")]
+        before: Vec<String>,
         /// Post-only update re-fire input: `glob:P`, `answer:ID`, `hook:ID`
         /// (repeatable).
         #[arg(long = "input")]
@@ -1058,6 +1064,7 @@ fn main() -> anyhow::Result<()> {
                 description,
                 when,
                 after,
+                before,
                 inputs,
             } => {
                 // No --action: write the command in $VISUAL/$EDITOR.
@@ -1081,6 +1088,7 @@ fn main() -> anyhow::Result<()> {
                     description,
                     when,
                     after,
+                    before,
                     inputs,
                 };
                 source::with_resolver(|r| weft_engine::author::hook_add(&template, &opts, r))

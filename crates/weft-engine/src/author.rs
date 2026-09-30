@@ -26,6 +26,7 @@ pub struct HookAddOptions {
     pub description: Option<String>,
     pub when: Option<String>,
     pub after: Vec<String>,
+    pub before: Vec<String>,
     /// `glob:…`, `answer:…`, `hook:…`
     pub inputs: Vec<String>,
 }
@@ -120,6 +121,7 @@ pub fn hook_add(
         action,
         when: opts.when.clone().map(StarlarkExpr),
         after: opts.after.iter().cloned().map(HookId).collect(),
+        before: opts.before.iter().cloned().map(HookId).collect(),
         inputs: opts
             .inputs
             .iter()

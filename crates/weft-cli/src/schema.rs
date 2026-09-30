@@ -251,6 +251,10 @@ pub struct Hook {
     /// Other hooks this one must run after (ordering edges).
     #[serde(default)]
     pub after: Vec<String>,
+    /// Other hooks this one must run before (the mirror of `after`; how an
+    /// extender orders its hooks ahead of one it inherits).
+    #[serde(default)]
+    pub before: Vec<String>,
     /// Post-only: `glob:PATTERN`, `answer:ID`, or `hook:ID` — on `weft update`
     /// this hook re-fires only when one changed.
     #[serde(default)]

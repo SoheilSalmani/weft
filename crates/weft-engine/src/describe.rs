@@ -187,6 +187,8 @@ pub struct HookDescription {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub after: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub before: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<String>,
 }
 
@@ -390,14 +392,15 @@ fn hook_descriptions(template: &Template) -> Vec<HookDescription> {
                     action: hook.action.source(),
                     when: hook.when.as_ref().map(|e| e.as_str().to_owned()),
                     after: hook.after.iter().map(ToString::to_string).collect(),
+                    before: hook.before.iter().map(ToString::to_string).collect(),
                     inputs: hook.inputs.iter().map(ToString::to_string).collect(),
                 },
             ));
         }
     }
     rows.sort_by_key(|(phase, pi, di, _)| (*phase, *pi, *di));
-    // Present each phase in true execution order: topo-sort over `after`,
-    // with the base (declaration) order as the stable tie-break.
+    // Present each phase in true execution order: topo-sort over `after` and
+    // `before`, with the base (declaration) order as the stable tie-break.
     let mut out = Vec::with_capacity(rows.len());
     for phase in [0u8, 1] {
         let group: Vec<HookDescription> = rows
@@ -405,7 +408,7 @@ fn hook_descriptions(template: &Template) -> Vec<HookDescription> {
             .filter(|(p, _, _, _)| *p == phase)
             .map(|(_, _, _, d)| clone_desc(d))
             .collect();
-        out.extend(topo_by_after(group));
+        out.extend(topo_order(group));
     }
     out
 }
@@ -421,13 +424,15 @@ fn clone_desc(d: &HookDescription) -> HookDescription {
         action: d.action.clone(),
         when: d.when.clone(),
         after: d.after.clone(),
+        before: d.before.clone(),
         inputs: d.inputs.clone(),
     }
 }
 
-/// Stable topological order of one phase's hooks over their `after` edges;
-/// input order is the base tie-break. `after` refs outside the set are ignored.
-fn topo_by_after(hooks: Vec<HookDescription>) -> Vec<HookDescription> {
+/// Stable topological order of one phase's hooks over their `after` and
+/// `before` edges; input order is the base tie-break. Refs outside the set are
+/// ignored.
+fn topo_order(hooks: Vec<HookDescription>) -> Vec<HookDescription> {
     let index: BTreeMap<&str, usize> = hooks
         .iter()
         .enumerate()
@@ -440,6 +445,12 @@ fn topo_by_after(hooks: Vec<HookDescription>) -> Vec<HookDescription> {
             if let Some(&j) = index.get(a.as_str()) {
                 indegree[i] += 1;
                 dependents[j].push(i);
+            }
+        }
+        for b in &h.before {
+            if let Some(&j) = index.get(b.as_str()) {
+                indegree[j] += 1;
+                dependents[i].push(j);
             }
         }
     }

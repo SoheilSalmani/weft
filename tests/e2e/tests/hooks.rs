@@ -1,5 +1,6 @@
 //! Hooks: a failing pre-hook aborts before any file is written; passing
-//! pre-hooks let the render proceed and post-hooks run in `after` order.
+//! pre-hooks let the render proceed and post-hooks run in `after` / `before`
+//! order.
 
 use std::path::Path;
 
@@ -78,4 +79,51 @@ fn post_hooks_run_in_after_order() {
     // declaration order is a,b,c; `after` forces a -> c -> b.
     let ran = std::fs::read_to_string(&order_file).unwrap();
     assert_eq!(ran.split_whitespace().collect::<Vec<_>>(), ["a", "c", "b"]);
+}
+
+#[test]
+fn extender_hook_runs_before_an_inherited_hook() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("base");
+    write_template(
+        &base,
+        r#"{
+          "ops": [{"op":"create_file","path":"file.txt","content":["hi"]}],
+          "hooks": [
+            {"id":"commit","phase":"post","effect":"setup","label":"commit","action":"echo commit >> order.txt"}
+          ]
+        }"#,
+    );
+    let stack = dir.path().join("stack");
+    std::fs::create_dir_all(stack.join("patches")).unwrap();
+    std::fs::write(
+        stack.join("weft.toml"),
+        "[template]\nname = \"stack\"\nweft-version = \"0.1\"\nextends = \"../base\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        stack.join("patches/stack.json"),
+        r#"{
+          "ops": [{"op":"create_file","path":"stack.txt","content":["s"]}],
+          "hooks": [
+            {"id":"sync","phase":"post","effect":"setup","label":"sync","action":"echo sync >> order.txt","before":["commit"]},
+            {"id":"deps","phase":"post","effect":"setup","label":"deps","action":"echo deps >> order.txt","after":["sync"],"before":["commit"]}
+          ]
+        }"#,
+    )
+    .unwrap();
+    let dest = dir.path().join("out");
+
+    weft()
+        .arg("new")
+        .arg(&stack)
+        .arg(&dest)
+        .arg("--non-interactive")
+        .assert()
+        .success();
+
+    // The base declares (and renders) `commit` first; `before` moves the
+    // extender's setup hooks ahead of it.
+    let ran = std::fs::read_to_string(dest.join("order.txt")).unwrap();
+    assert_eq!(ran, "sync\ndeps\ncommit\n");
 }

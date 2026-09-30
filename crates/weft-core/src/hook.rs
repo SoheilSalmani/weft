@@ -166,7 +166,8 @@ pub struct HookInputError(String);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Hook {
-    /// Human slug, unique across the template (referenced by `after`/`inputs`).
+    /// Human slug, unique across the template (referenced by
+    /// `after`/`before`/`inputs`).
     pub id: HookId,
     pub phase: HookPhase,
     pub effect: HookEffect,
@@ -180,6 +181,10 @@ pub struct Hook {
     /// Other hooks this one must run after (explicit ordering edges).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub after: Vec<HookId>,
+    /// Other hooks this one must run before (the mirror of `after`; how an
+    /// extender orders its hooks ahead of one it inherits).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub before: Vec<HookId>,
     /// Post-only: `weft update` re-fires this hook only when one of these
     /// changed. Ignored for `pre` hooks (they always run).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

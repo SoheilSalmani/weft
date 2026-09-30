@@ -3,6 +3,33 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Hook `before`
+
+- **Why**: a template that `extends` a base inherits its hooks, and the
+  house `base` ends with a `git-commit` post hook that must run after every
+  setup hook. A stack extending it (dbt) adds setup hooks (`uv-sync`,
+  `dbt-deps`) that must run before that inherited hook, but only `after`
+  existed: the base cannot name its extenders' hooks (it knows nothing of
+  them, and `weft check` flags unknown `after` refs), and base order puts
+  the base's hooks first.
+- **What**: `Hook.before: [ids]`, the mirror of `after`: `before: ["x"]` on
+  `h` adds the edge h → x, resolved relative to `h`'s frame like `after`
+  and ignored at run time when `x` is outside the phase set. Hooks are
+  metadata outside the patch hash, so ids do not change. `weft check`
+  reports an unknown ref as ``hook `h`: unknown `before` hook `x` `` and its
+  cycle detection includes `before` edges; cycle errors now read `hook
+  ordering cycle among: …`. `weft hook add --before ID` (repeatable);
+  describe and graph JSON show `before` next to `after`, and describe's
+  hook order honours it. Schemas regenerated.
+- **Tests**: unit (`before_edges_reorder`,
+  `root_before_runs_ahead_of_an_earlier_child_hook`,
+  `cycle_mixing_after_and_before_is_an_error`,
+  `unknown_before_ref_is_a_check_issue`,
+  `check_flags_a_cycle_mixing_after_and_before`); e2e
+  `extender_hook_runs_before_an_inherited_hook` scaffolds an extender whose
+  hooks say `before: ["commit"]` and asserts they ran ahead of the base's
+  `commit`.
+
 ## Fix — name every clash between an extender and its base, and how to settle it
 
 - **Decided: names stay shared across `extends`.** Namespacing question ids

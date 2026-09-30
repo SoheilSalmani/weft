@@ -118,6 +118,8 @@ pub struct HookSummary {
     pub when: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub after: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub before: Vec<String>,
 }
 
 fn hook_summary(hook: &weft_core::Hook) -> HookSummary {
@@ -138,6 +140,7 @@ fn hook_summary(hook: &weft_core::Hook) -> HookSummary {
         action: hook.action.source(),
         when: hook.when.as_ref().map(|e| e.as_str().to_owned()),
         after: hook.after.iter().map(ToString::to_string).collect(),
+        before: hook.before.iter().map(ToString::to_string).collect(),
     }
 }
 

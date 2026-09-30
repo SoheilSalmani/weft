@@ -262,6 +262,7 @@ mod tests {
                 action: Command::literal("command -v docker"),
                 when: None,
                 after: vec![],
+                before: vec![],
                 inputs: vec![],
             }],
             generator: Some(Generator {

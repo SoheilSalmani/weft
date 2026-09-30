@@ -473,6 +473,14 @@
           },
           "default": []
         },
+        "before": {
+          "description": "Other hooks this one must run before (the mirror of `after`; how an\nextender orders its hooks ahead of one it inherits).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
         "inputs": {
           "description": "Post-only: `glob:PATTERN`, `answer:ID`, or `hook:ID` — on `weft update`\nthis hook re-fires only when one changed.",
           "type": "array",

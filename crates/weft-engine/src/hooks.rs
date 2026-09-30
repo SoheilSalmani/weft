@@ -6,10 +6,11 @@
 //! passes and no dependency is skipped), sees the node's frame answers, and
 //! post-hooks run inside the node's mount. Within a phase the plan is
 //! topologically ordered: the base order is the composed render order then
-//! in-patch declaration order, with explicit `after` edges layered on top.
+//! in-patch declaration order, with explicit `after` / `before` edges layered
+//! on top (`before: ["x"]` on `h` is the same edge as `after: ["h"]` on `x`).
 //!
 //! Hook ids are **namespaced by frame**: root hooks keep their id, a hook of
-//! include `web` is `web/<id>`, nested `web/svc/<id>`. `after` and
+//! include `web` is `web/<id>`, nested `web/svc/<id>`. `after`, `before` and
 //! `inputs: hook:` references are written relative to the referencing hook's
 //! frame — `after: ["x"]` inside `web` means `web/x`; a root hook may write
 //! `after: ["web/pnpm-install"]`. A child never names its parent's hooks.
@@ -146,16 +147,16 @@ pub fn plan<'a>(
 }
 
 /// Topologically order one phase's hooks: base order is the input order
-/// (composed render order + declaration order); `after` adds edges, resolved
-/// to namespaced ids. References to hooks outside this set (other phase /
-/// inactive node / unknown) are ignored.
+/// (composed render order + declaration order); `after` and `before` add
+/// edges, resolved to namespaced ids. References to hooks outside this set
+/// (other phase / inactive node / unknown) are ignored.
 fn order_phase(hooks: Vec<PlannedHook<'_>>) -> Result<Vec<PlannedHook<'_>>> {
     let index: BTreeMap<&str, usize> = hooks
         .iter()
         .enumerate()
         .map(|(i, h)| (h.id.as_str(), i))
         .collect();
-    // indegree over in-set `after` edges
+    // indegree over in-set `after` / `before` edges
     let mut indegree = vec![0usize; hooks.len()];
     let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); hooks.len()];
     for (i, h) in hooks.iter().enumerate() {
@@ -163,6 +164,12 @@ fn order_phase(hooks: Vec<PlannedHook<'_>>) -> Result<Vec<PlannedHook<'_>>> {
             if let Some(&j) = index.get(h.qualify(dep).as_str()) {
                 indegree[i] += 1;
                 dependents[j].push(i);
+            }
+        }
+        for succ in &h.hook.before {
+            if let Some(&j) = index.get(h.qualify(succ).as_str()) {
+                indegree[j] += 1;
+                dependents[i].push(j);
             }
         }
     }
@@ -187,7 +194,7 @@ fn order_phase(hooks: Vec<PlannedHook<'_>>) -> Result<Vec<PlannedHook<'_>>> {
             .filter(|(i, _)| indegree[*i] > 0)
             .map(|(_, h)| h.id.as_str())
             .collect();
-        bail!("hook `after` cycle among: {}", stuck.join(", "));
+        bail!("hook ordering cycle among: {}", stuck.join(", "));
     }
     let mut slots: Vec<Option<PlannedHook>> = hooks.into_iter().map(Some).collect();
     Ok(order
@@ -447,7 +454,7 @@ fn static_hooks<'t>(template: &'t Template, prefix: &str, out: &mut Vec<StaticHo
 /// post-hooks, parseable `when`/command expressions, known answers, and
 /// `after`/`inputs:hook:` references that resolve against the composed
 /// namespaced id set (root ids plus every include's `<include>/<id>`,
-/// recursively); no `after` cycle anywhere in the composed set. Included
+/// recursively); no `after`/`before` cycle anywhere in the composed set. Included
 /// templates' own hooks are validated by their own check (which `weft
 /// check` recurses into), not repeated here. Returns human-readable issue
 /// strings.
@@ -470,6 +477,11 @@ pub fn validate_all(template: &Template) -> Vec<String> {
         for a in &hook.after {
             if !ids.contains(namespaced(prefix, &a.0).as_str()) {
                 issues.push(format!("hook `{}`: unknown `after` hook `{a}`", hook.id));
+            }
+        }
+        for b in &hook.before {
+            if !ids.contains(namespaced(prefix, &b.0).as_str()) {
+                issues.push(format!("hook `{}`: unknown `before` hook `{b}`", hook.id));
             }
         }
         if matches!(hook.phase, HookPhase::Pre) && !hook.inputs.is_empty() {
@@ -528,7 +540,7 @@ pub fn validate_all(template: &Template) -> Vec<String> {
             }
         }
     }
-    // cycle detection over the composed `after` graph
+    // cycle detection over the composed `after` / `before` graph
     let index: BTreeMap<&str, usize> = all
         .iter()
         .enumerate()
@@ -541,6 +553,12 @@ pub fn validate_all(template: &Template) -> Vec<String> {
             if let Some(&j) = index.get(namespaced(&h.prefix, &a.0).as_str()) {
                 indegree[i] += 1;
                 deps[j].push(i);
+            }
+        }
+        for b in &h.hook.before {
+            if let Some(&j) = index.get(namespaced(&h.prefix, &b.0).as_str()) {
+                indegree[j] += 1;
+                deps[i].push(j);
             }
         }
     }
@@ -562,7 +580,7 @@ pub fn validate_all(template: &Template) -> Vec<String> {
             .filter(|(i, _)| indegree[*i] > 0)
             .map(|(_, h)| h.id.as_str())
             .collect();
-        issues.push(format!("hook `after` cycle among: {}", stuck.join(", ")));
+        issues.push(format!("hook ordering cycle among: {}", stuck.join(", ")));
     }
     issues
 }
@@ -626,6 +644,7 @@ mod tests {
             action: Command::literal("true"),
             when: None,
             after: after.iter().map(|a| HookId::from(*a)).collect(),
+            before: vec![],
             inputs: vec![],
         }
     }
@@ -675,6 +694,41 @@ mod tests {
     #[test]
     fn cycle_is_an_error() {
         let hs = [hook("a", &["b"]), hook("b", &["a"])];
+        assert!(order_phase(hs.iter().map(|h| planned(h, &[], "")).collect()).is_err());
+    }
+
+    fn before(mut h: Hook, ids: &[&str]) -> Hook {
+        h.before = ids.iter().map(|a| HookId::from(*a)).collect();
+        h
+    }
+
+    #[test]
+    fn before_edges_reorder() {
+        // `commit` is declared first, but `install` says it runs before it
+        let hs = [
+            hook("commit", &[]),
+            before(hook("install", &[]), &["commit"]),
+        ];
+        assert_eq!(order(&hs), ["install", "commit"]);
+    }
+
+    #[test]
+    fn root_before_runs_ahead_of_an_earlier_child_hook() {
+        let install = hook("install", &[]);
+        let format = before(hook("format", &[]), &["web/install"]);
+        let ordered = order_phase(vec![
+            planned(&install, &[("web", "web")], "apps/web"),
+            planned(&format, &[], ""),
+        ])
+        .unwrap();
+        let ids: Vec<&str> = ordered.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!(ids, ["format", "web/install"]);
+    }
+
+    #[test]
+    fn cycle_mixing_after_and_before_is_an_error() {
+        // a after b, and a before b
+        let hs = [before(hook("a", &["b"]), &["b"]), hook("b", &[])];
         assert!(order_phase(hs.iter().map(|h| planned(h, &[], "")).collect()).is_err());
     }
 
@@ -824,6 +878,51 @@ mod tests {
         assert_eq!(plan.post[1].answers, answers);
         // Root hooks resolve `after` across the include boundary in check.
         assert!(validate_all(&template).is_empty());
+    }
+
+    fn single_template(hooks: &str) -> (tempfile::TempDir, Template) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        std::fs::create_dir_all(root.join("patches")).unwrap();
+        std::fs::write(
+            root.join("weft.toml"),
+            "[template]\nname = \"t\"\nweft-version = \"0.1\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("patches/base.json"),
+            format!(r#"{{"ops":[],"hooks":{hooks}}}"#),
+        )
+        .unwrap();
+        let template = Template::load(&root).unwrap();
+        (dir, template)
+    }
+
+    #[test]
+    fn unknown_before_ref_is_a_check_issue() {
+        let (_dir, template) = single_template(
+            r#"[{"id":"a","phase":"post","effect":"setup","label":"a","action":"true",
+                "before":["ghost"]}]"#,
+        );
+        assert_eq!(
+            validate_all(&template),
+            ["hook `a`: unknown `before` hook `ghost`"]
+        );
+    }
+
+    #[test]
+    fn check_flags_a_cycle_mixing_after_and_before() {
+        let (_dir, template) = single_template(
+            r#"[{"id":"a","phase":"post","effect":"setup","label":"a","action":"true",
+                 "after":["b"],"before":["c"]},
+                {"id":"b","phase":"post","effect":"setup","label":"b","action":"true",
+                 "after":["c"]},
+                {"id":"c","phase":"post","effect":"setup","label":"c","action":"true"}]"#,
+        );
+        assert_eq!(
+            validate_all(&template),
+            ["hook ordering cycle among: a, b, c"]
+        );
     }
 
     fn question(id: &str, kind: weft_core::AnswerKind) -> weft_core::Question {
