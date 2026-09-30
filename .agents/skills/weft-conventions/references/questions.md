@@ -11,6 +11,7 @@ Open this when writing or changing `weft.toml`, when an expression fails, or whe
 - Multichoice
 - Secrets
 - Presets
+- Inherited questions: `[refine]`
 - Wording
 
 ## The manifest
@@ -78,6 +79,8 @@ In a terminal, `weft new`, `weft session new` and `weft patch amend` ask every o
 
 The answer is a list. A raw list never renders; project it with an expression (`' '.join(components)`) or gate one patch per option (`--when "'button' in components"`). On the CLI the value is comma-separated (`--answer components=button,card`); in `--answers-json` it is an array.
 
+Its values are never abstracted at commit, unlike a `choice`, so the choices may be names the recorded files also contain, such as one skill per choice. Verified 2026-09-30: skill patches recorded with `--answer skills=python` kept `python` as a literal.
+
 ## Secrets
 
 ```toml
@@ -101,6 +104,42 @@ weft presets save with-shadcn-ui --answer use_shadcn_ui=true --fix components=bu
 ```
 
 Name them `with-<feature>` for additive locks and `no-<feature>` for the opposite. Run `weft check --preset NAME` for each one you ship, since commutation is only tested under the answers supplied.
+
+## Inherited questions: `[refine]`
+
+A template that `extends` a base inherits the base's questions, and redeclaring one is a load error that names every redeclared id and the two ways out: delete the declaration to use the inherited question, or rename it. To change what a stack asks, narrow the inherited question with a `[refine.<id>]` table in the extender's `weft.toml`:
+
+```toml
+[refine.skills]               # a multichoice the base declares
+choices = ["python", "sql"]   # keep only these; blocked = [...] removes named ones instead
+fixed = ["python"]            # always selected
+default = "['sql']"           # replaces the base's default; the answer stays editable
+
+[refine.use_jira]
+lock = "False"                # the only accepted answer; never asked
+
+[refine.project_name]
+description = "Its slug names the Python package."   # prompt and example too
+```
+
+| key | kinds | effect |
+| --- | --- | --- |
+| `prompt`, `description`, `example` | all but `secret` | replace the inherited text |
+| `default` | all but `secret` | replaces the inherited default (Starlark); the answer stays editable |
+| `lock` | all but `secret` | the only accepted answer (Starlark), never asked; excludes every other value key |
+| `choices` | `choice`, `multichoice` | allow-list: every choice not listed is blocked |
+| `blocked` | `choice`, `multichoice` | deny-list; use `choices` or `blocked`, not both |
+| `fixed` | `multichoice` | always selected, whatever else is picked |
+
+Verified 2026-09-30 against a build of `5c73e00`:
+
+- A refinement only narrows. It cannot add a choice, change a kind, touch a secret, refine a question the template declares itself or a question of an include, or undo what a template further up the chain narrowed. Down a chain, `blocked` and `fixed` add up, the nearest `default` wins, and a `lock` is final. Each of these mistakes is a load error starting ``refine `<id>`:``.
+- A refined `default` or `lock` keeps the inherited question's place in the order, so it may only mention questions declared before it. `weft check` reports one that does not.
+- A blocked choice is refused on every input (a flag, an answers file, JSON, a preset), naming the template that blocked it. A default that lists one drops it, and fixed choices join every selection.
+- Answers a project gave stay given, fixed choices included; the template never rewrites them. When a template stops allowing a stored answer, `weft update` stops and names `--answer` and `--unset`.
+- `weft describe --json` shows each narrowed question's `locked`, `fixed`, `blocked` and `refined_by`.
+
+Offer a list once in the base and let each stack narrow it, rather than repeating a question in every stack: one `skills` multichoice in the base, and a `[refine.skills]` in each stack that needs its own.
 
 ## Wording
 

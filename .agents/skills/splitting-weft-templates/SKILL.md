@@ -5,7 +5,7 @@ description: "Decides whether a Weft template should become two, and does the mo
 
 # Splitting a Weft template
 
-Weft composes templates in two ways. `extends` imports a base template as it is, keeping its patches' names and ids, and the extender builds on it without changing it. `[[include]]` mounts a whole child template under a path: the child knows nothing of the parent, and a parent patch may edit files under a single mount only by depending on the child's patch that owns them. Nothing overrides a patch; there is no overlay. So "split" means one of three different things, and the first job is to say which.
+Weft composes templates in two ways. `extends` imports a base template as it is, keeping its patches' names and ids, and the extender builds on it without changing its patches; the only thing it changes is what it asks, rewording or narrowing inherited questions with `[refine.<id>]`. `[[include]]` mounts a whole child template under a path: the child knows nothing of the parent, and a parent patch may edit files under a single mount only by depending on the child's patch that owns them. Nothing overrides a patch; there is no overlay. So "split" means one of three different things, and the first job is to say which.
 
 ## Decide
 
