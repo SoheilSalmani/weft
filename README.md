@@ -294,6 +294,14 @@ does is a node in it, wherever that patch lives.
   (`"depends_on": ["base-readme"]`); you cannot redeclare an inherited name,
   and `weft patch amend`/`squash` send you to the base template to edit it.
   `weft patch ls` flags inherited rows.
+
+  The names are shared, not namespaced: a base and every template that
+  extends it have one set of question ids, patch names, and hook ids. A base
+  that gains a name an extender already uses therefore breaks that extender:
+  a question id or patch name stops it loading, a hook id fails its `weft
+  check`. A path base does it at once, a git or hub base at the extender's
+  next `weft lock --upgrade`. Each error names every clash and how to settle
+  it, so run `weft check` on every extender before you publish a base change.
 - **Include nodes.** A single (non-repeat) `[[include]]` named `web`
   contributes its whole graph as `web/<patch>` nodes (nested:
   `web/svc/base`), rendered under its mount with the instance's answers. A

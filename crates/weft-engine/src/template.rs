@@ -233,13 +233,17 @@ impl Template {
             let base = Self::load_inner(&base_root, seen, depth + 1, resolver)
                 .with_context(|| format!("loading extended template from `{base_root}`"))?;
             let mut questions = base.manifest.questions;
-            for q in &manifest.questions {
-                if questions.iter().any(|b| b.id == q.id) {
-                    bail!(
-                        "question `{}` is already declared by the extended template `{base_root}`",
-                        q.id
-                    );
-                }
+            let redeclared: Vec<&str> = manifest
+                .questions
+                .iter()
+                .filter(|q| questions.iter().any(|b| b.id == q.id))
+                .map(|q| q.id.0.as_str())
+                .collect();
+            if !redeclared.is_empty() {
+                bail!(
+                    "{}",
+                    redeclared_questions(&manifest.template.name, decl.template(), &redeclared)
+                );
             }
             let inherited_questions = questions.len();
             questions.append(&mut manifest.questions);
@@ -323,6 +327,7 @@ impl Template {
         // Own patch files, resolved against the inherited names and the
         // include nodes.
         let mut files: BTreeMap<String, PatchFile> = BTreeMap::new();
+        let mut redefined: Vec<String> = Vec::new();
         let patches_dir = root.join(PATCHES_DIR);
         if patches_dir.is_dir() {
             for entry in patches_dir
@@ -338,19 +343,24 @@ impl Template {
                     .file_stem()
                     .context("patch file has no name")?
                     .to_owned();
-                if let Some(ext) = &extends {
-                    if names.contains_key(&stem) {
-                        bail!(
-                            "patch `{stem}` is already defined by the extended template `{}`",
-                            ext.root
-                        );
-                    }
+                if extends.is_some() && names.contains_key(&stem) {
+                    redefined.push(stem);
+                    continue;
                 }
                 let src =
                     std::fs::read_to_string(path).with_context(|| format!("reading {path}"))?;
                 let file: PatchFile =
                     serde_json::from_str(&src).with_context(|| format!("parsing patch {path}"))?;
                 files.insert(stem, file);
+            }
+        }
+        if let Some(ext) = &extends {
+            if !redefined.is_empty() {
+                redefined.sort();
+                bail!(
+                    "{}",
+                    redefined_patches(&manifest.template.name, ext.decl.template(), &redefined)
+                );
             }
         }
         let repeat_names: std::collections::BTreeSet<&str> = includes
@@ -567,6 +577,56 @@ impl Template {
         json.push('\n');
         std::fs::write(&path, json).with_context(|| format!("writing {path}"))?;
         Ok(patch.id)
+    }
+}
+
+/// `a`, `b` and `c`, each in backticks.
+fn backticked(names: &[&str]) -> String {
+    let quoted: Vec<String> = names.iter().map(|n| format!("`{n}`")).collect();
+    match quoted.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => quoted.concat(),
+    }
+}
+
+/// The load error for an extender declaring questions its base declares
+/// too. Question ids share one namespace across `extends`, and a base can
+/// gain an id after an extender took it, so say how to settle it: use the
+/// inherited question (narrowed by `[refine]` where it must differ), or
+/// rename.
+fn redeclared_questions(template: &str, base: &Utf8Path, ids: &[&str]) -> String {
+    match ids {
+        [id] => format!(
+            "question `{id}` is declared by template `{template}` and inherited from \
+             `{base}`; delete it from `{template}` to use the inherited question, narrowing it \
+             with a `[refine.{id}]` table if it must differ, or rename it"
+        ),
+        _ => format!(
+            "questions {} are declared by template `{template}` and inherited from `{base}`; \
+             delete them from `{template}` to use the inherited questions, narrowing any that \
+             must differ with a `[refine.<id>]` table, or rename them",
+            backticked(ids)
+        ),
+    }
+}
+
+/// The load error for an extender with patch files named like patches it
+/// inherits: a copy of the base's patch goes, a patch of its own is
+/// renamed, which keeps its id.
+fn redefined_patches(template: &str, base: &Utf8Path, names: &[String]) -> String {
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    match names.as_slice() {
+        [name] => format!(
+            "patch `{name}` is defined by template `{template}` and inherited from `{base}`; \
+             delete `patches/{name}.json` if it is a copy of the inherited patch, or rename it \
+             and the `depends_on` entries that name it (it keeps its id)"
+        ),
+        _ => format!(
+            "patches {} are defined by template `{template}` and inherited from `{base}`; \
+             delete the files under `patches/` that copy an inherited patch, and rename the \
+             others and the `depends_on` entries that name them (each keeps its id)",
+            backticked(&names)
+        ),
     }
 }
 

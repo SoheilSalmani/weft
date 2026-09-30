@@ -3,6 +3,28 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Fix — name every clash between an extender and its base, and how to settle it
+
+- **Decided: names stay shared across `extends`.** Namespacing question ids
+  by template was considered and declined: one template can fill several
+  include slots (the slot name, not the template name, is what tells them
+  apart), template names are neither unique nor stable, and a shared id is
+  what lets a base's question be the extender's own, move between base and
+  stack without renaming stored answers, and be narrowed by `[refine]`.
+  Includes keep their slot namespaces (`web.x`, `connector.<key>.x`).
+- **The cost is clashes**, including a base gaining a name an extender
+  already uses. The errors now list every clash at once (a stack moving onto
+  `extends` meets all its duplicates together) and say how to settle each:
+  a question: delete it from the extender to use the inherited one,
+  narrowing it with `[refine.<id>]` if it must differ, or rename it; a
+  patch: delete a copy of the inherited patch, or rename it and the
+  `depends_on` entries naming it (the id is unchanged); a hook id (a `weft
+  check` issue that named nothing): the patches declaring it, the
+  extender's own first so the LSP anchors it in an editable file.
+- README notes the shared namespace for base authors. Verified by
+  scratch runs of each clash and each fix, including adopting a base's
+  computed question through `[refine]` and a renamed patch keeping its id.
+
 ## Post-MVP — TUI removed until after v1 (BREAKING: `--no-tui`, `--no-wizard`, `--reconfigure`)
 
 - **Why**: PLAN.md's MVP non-goals include "no GUI/TUI beyond plain

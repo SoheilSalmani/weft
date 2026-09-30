@@ -457,10 +457,7 @@ pub fn validate_all(template: &Template) -> Vec<String> {
     static_hooks(template, "", &mut all);
     let ids: BTreeSet<&str> = all.iter().map(|h| h.id.as_str()).collect();
     let own: Vec<&StaticHook> = all.iter().filter(|h| h.prefix.is_empty()).collect();
-    let own_ids: BTreeSet<&str> = own.iter().map(|h| h.id.as_str()).collect();
-    if own_ids.len() != own.len() {
-        issues.push("duplicate hook ids across patches".to_owned());
-    }
+    issues.extend(duplicate_hook_ids(template, &own));
     let declared_answers: BTreeSet<&AnswerId> =
         template.manifest.questions.iter().map(|q| &q.id).collect();
     for StaticHook {
@@ -566,6 +563,50 @@ pub fn validate_all(template: &Template) -> Vec<String> {
             .map(|(_, h)| h.id.as_str())
             .collect();
         issues.push(format!("hook `after` cycle among: {}", stuck.join(", ")));
+    }
+    issues
+}
+
+/// One issue per hook id that more than one root hook declares. Hook ids
+/// share one namespace with the templates a template extends, so a clash can
+/// come from a base; name every patch involved, this template's own first,
+/// so the fix (a rename) is clear and an editor anchors it in a file the
+/// author can change.
+fn duplicate_hook_ids(template: &Template, own: &[&StaticHook]) -> Vec<String> {
+    let mut by_id: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for h in own {
+        let name = template
+            .id_to_name
+            .get(&h.patch.id)
+            .map_or("?", String::as_str);
+        by_id.entry(h.id.as_str()).or_default().push(name);
+    }
+    let mut issues = Vec::new();
+    for (id, mut patches) in by_id.into_iter().filter(|(_, p)| p.len() > 1) {
+        patches.sort_by_key(|p| (template.is_inherited(p), *p));
+        patches.dedup();
+        let fix = "rename one, and the `after` entries and `hook:` inputs that name it";
+        issues.push(match patches.as_slice() {
+            [patch] => format!("hook `{id}` is declared more than once by patch `{patch}`; {fix}"),
+            _ => {
+                let listed: Vec<String> = patches
+                    .iter()
+                    .map(|p| {
+                        let from = if template.is_inherited(p) {
+                            " (inherited)"
+                        } else {
+                            ""
+                        };
+                        format!("patch `{p}`{from}")
+                    })
+                    .collect();
+                format!(
+                    "hook `{id}` is declared by {}; hook ids are shared with the templates \
+                     a template extends, so {fix}",
+                    listed.join(" and ")
+                )
+            }
+        });
     }
     issues
 }
