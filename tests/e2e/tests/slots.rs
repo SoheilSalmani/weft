@@ -399,18 +399,98 @@ fn commit_refuses_a_contribution_out_of_key_order() {
     assert!(!tpl.join("patches/lightdash.json").exists());
 }
 
+/// `weft patch amend mcp`, with the worktree's `.mcp.json`.
+fn amend_owner(tpl: &Path, answers: &[&str]) -> PathBuf {
+    let mut cmd = weft();
+    cmd.args(["patch", "amend", "mcp", "--non-interactive"]);
+    for answer in answers {
+        cmd.args(["--answer", answer]);
+    }
+    cmd.arg("--template").arg(tpl).assert().success();
+    tpl.join(".weft-sessions/mcp/worktree/.mcp.json")
+}
+
+fn commit_amend(tpl: &Path) -> assert_cmd::assert::Assert {
+    weft()
+        .args(["commit", "--session", "mcp", "--yes"])
+        .arg("--template")
+        .arg(tpl)
+        .assert()
+}
+
 #[test]
-fn amend_refuses_a_patch_that_declares_slots() {
+fn amending_an_owner_edits_its_lines_around_the_contributions() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tpl = template(
+        tmp.path(),
+        &[("linear", &linear()), ("lightdash", &lightdash())],
+    );
+    let file = amend_owner(&tpl, &[]);
+    // Every filler's lines are there, whatever their gates say.
+    let shown = fs::read_to_string(&file).unwrap();
+    assert_eq!(
+        shown,
+        "{\n  \"mcpServers\": {\n    \
+         \"lightdash\": { \"url\": \"https://app.lightdash.cloud/api/v1/mcp\" },\n    \
+         \"linear\": { \"url\": \"https://mcp.linear.app/mcp\" }\n  }\n}\n"
+    );
+    fs::write(&file, shown.replace("\"mcpServers\"", "\"servers\"")).unwrap();
+    commit_amend(&tpl).success();
+    let owner: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(tpl.join("patches/mcp.json")).unwrap()).unwrap();
+    assert_eq!(
+        owner["ops"],
+        serde_json::json!([{
+            "op": "create_file",
+            "path": ".mcp.json",
+            "omit_when_empty": ["servers"],
+            "content": ["{", "  \"servers\": {", {"slot": "servers", "separator": ","}, "  }", "}"],
+            "mode": 420
+        }])
+    );
+    assert_eq!(
+        fs::read_to_string(tpl.join("patches/linear.json")).unwrap(),
+        linear(),
+        "the fillers are left alone"
+    );
+}
+
+#[test]
+fn amending_an_owner_refuses_a_change_to_a_contribution() {
     let tmp = tempfile::tempdir().unwrap();
     let tpl = template(tmp.path(), &[("linear", &linear())]);
-    weft()
-        .args(["patch", "amend", "mcp", "--non-interactive"])
-        .arg("--template")
-        .arg(&tpl)
-        .assert()
+    let file = amend_owner(&tpl, &[]);
+    let shown = fs::read_to_string(&file).unwrap();
+    fs::write(&file, shown.replace("mcp.linear.app", "linear.example")).unwrap();
+    commit_amend(&tpl)
         .failure()
         .stderr(predicates::str::contains(
-            "patch `mcp` declares slot(s) `servers` in `.mcp.json`, which a recording cannot \
-             reproduce",
+            "slot `servers` of `.mcp.json` held the lines `linear` add, and they are no longer \
+             in the file as they were",
         ));
+    assert_eq!(
+        fs::read_to_string(tpl.join("patches/mcp.json")).unwrap(),
+        MCP
+    );
+}
+
+#[test]
+fn amending_an_owner_keeps_the_place_of_a_slot_nobody_fills() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tpl = template(tmp.path(), &[]);
+    let file = amend_owner(&tpl, &[]);
+    let shown = fs::read_to_string(&file).unwrap();
+    assert!(
+        shown.contains("⟪slot servers: other patches add their lines here⟫"),
+        "{shown}"
+    );
+    fs::write(&file, format!("// MCP servers\n{shown}")).unwrap();
+    commit_amend(&tpl).success();
+    let owner: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(tpl.join("patches/mcp.json")).unwrap()).unwrap();
+    assert_eq!(
+        owner["ops"][0]["content"],
+        serde_json::json!(["// MCP servers", "{", "  \"mcpServers\": {",
+            {"slot": "servers", "separator": ","}, "  }", "}"])
+    );
 }

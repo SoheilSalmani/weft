@@ -32,6 +32,7 @@ pub mod refine;
 pub mod refresh;
 pub mod secrets;
 pub mod session;
+pub mod share;
 pub mod source;
 pub mod squash;
 pub mod stage;

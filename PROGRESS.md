@@ -3,6 +3,60 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Shared files: `weft share`, `weft commit --share`, amending an owner
+
+- **The gap**: a slot's declaration existed only in the owner's patch file,
+  so authors hand-edited JSON to create one, and `weft patch amend` refused
+  owners. A second patch creating a file another patch creates committed
+  silently; only `weft check` under answers turning both on said anything.
+- **Decided** (ADR-0005, Proposed): weft derives the owner from the patches'
+  versions of the file and a combined file the author confirms. A "virtual
+  patch" that applies only while a dependent does was declined: activation
+  would flow up as well as down, and `omit_when_empty` already leaves the
+  file out. Marker syntax typed into files and structured merging per format
+  were declined too.
+- **`share.rs`**: the versions' shared first and last lines (compared with
+  adjacent literals merged) bound one slot, `entries`; each patch keeps its
+  own lines. The proposal takes the most shared lines that leave every
+  contribution bracket-balanced (so a multi-line JSON entry keeps its `}`)
+  and `,` for `.json`. A combined file is matched exactly over every cut and
+  separator up to 16 characters, newlines allowed (a blank line between
+  TOML tables); several matches prefer balanced contributions, then a
+  one-line separator (`},` read as a separator would span lines and break
+  later recordings), then the most shared lines. Out-of-order examples and
+  changed lines are refused with the order or the first differing line.
+- **Plan and write**: creators must be the template's own, independent,
+  not foreach, not generated, and the file untouched by anything else. The
+  owner is ungated, `omit_when_empty` on its slot, and depends on what every
+  creator depended on; creators' `create_file` becomes `fill_slot` keyed by
+  name, and each depends on the owner in place of the dependencies the owner
+  already carries. Each creator alone renders byte for
+  byte what it did. Writes are undone if the reload (or, at commit, writing
+  the new patch) fails.
+- **`weft commit`**: after the replay guard, a created file other patches
+  create is a clash. `--share NAME` shares it (the whole worktree must be in
+  the commit and no other session open), re-replaying base + owner + the
+  patch as a fill before writing; in a terminal commit asks "share or
+  alternatives"; otherwise it commits and prints the `weft share` command.
+  `weft check`'s pair report for `CreateExists` suggests it too.
+- **Amending an owner**: the seed applies every root patch's fills of its
+  slots (a `⟪slot …⟫` marker under key `~` where none does). Commit re-renders
+  that seed traced, finds each slot's lines in the worktree exactly, swaps
+  them for a stand-in line of control characters (no answer value can match
+  it, so abstraction never touches it), records, turns the stand-ins back
+  into slot lines, restores `omit_when_empty`, and replays with the fills.
+  `weft diff` notes where each slot's lines are, or why commit will refuse.
+- `Interaction` gained `interactive`, `choose`, `text` and `edit` (defaults
+  take the default); MCP has `share_file` and `session_commit.share`.
+- Tests: solver units (one-line and multi-line JSON, TOML blank-line
+  separator, order and edit refusals, answer references kept, and the real
+  renderer reproducing each version alone and the combined file), e2e
+  `share.rs` (renders unchanged per creator, dry run, example separator,
+  order refusal, a file another patch changes, `commit --share`, the commit
+  note and the check hint), and owner amends in `slots.rs` (edit kept, a
+  changed contribution refused, an empty slot's place kept). The commit
+  prompt, editor and name/title prompts were driven through a pty.
+
 ## Post-MVP — Hook `before`
 
 - **Why**: a template that `extends` a base inherits its hooks, and the

@@ -226,6 +226,11 @@ enum Command {
         /// Depend on exactly this patch — sugar for `--depends-on NAME`.
         #[arg(long, conflicts_with = "depends_on")]
         after: Option<String>,
+        /// Share each file this patch creates with the patches that already
+        /// create it: NAME is the new patch that owns the lines they share
+        /// (see `weft share`).
+        #[arg(long, value_name = "NAME")]
+        share: Option<String>,
     },
     /// Show the session's changes before committing: the concrete diff with
     /// abstraction candidates highlighted.
@@ -242,6 +247,36 @@ enum Command {
         /// instead of the whole worktree.
         #[arg(long, visible_alias = "cached")]
         staged: bool,
+    },
+    /// Share a file that several independent patches create: a new patch
+    /// owns the lines they have in common, and each of them adds its own
+    /// lines to a slot in it, so they can all be on at once. In a terminal,
+    /// weft opens the combined file in $EDITOR for you to confirm.
+    Share {
+        /// The file(s), as paths in the project (`.mcp.json`).
+        #[arg(required = true)]
+        paths: Vec<String>,
+        #[arg(long, default_value = ".")]
+        template: Utf8PathBuf,
+        /// Name of the new patch that owns the shared lines.
+        #[arg(long)]
+        name: Option<String>,
+        /// Title of the new patch (metadata, not hashed).
+        #[arg(long)]
+        title: Option<String>,
+        /// Description of the new patch (metadata, not hashed).
+        #[arg(long)]
+        describe: Option<String>,
+        /// Split a file as a combined file shows it, instead of confirming
+        /// weft's proposal: PATH=FILE (repeatable).
+        #[arg(long = "example", value_name = "PATH=FILE")]
+        examples: Vec<String>,
+        /// Accept weft's proposal without opening the editor.
+        #[arg(long)]
+        yes: bool,
+        /// Print each combined file and write nothing.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Stage worktree changes into the session index (like `git add`). The
     /// next `weft commit` commits only what is staged.
@@ -1335,6 +1370,7 @@ fn main() -> anyhow::Result<()> {
             sibling,
             depends_on,
             after,
+            share,
         } => {
             let depends_on = match (depends_on.is_empty(), after) {
                 (true, None) => None,
@@ -1367,6 +1403,7 @@ fn main() -> anyhow::Result<()> {
                 keep_literal,
                 link,
                 depends_on,
+                share,
             };
             let mut interaction = auto_interaction(yes);
             let mut resolver = source::RemoteResolver::new(hub::registry_url(None).ok(), false);
@@ -1376,6 +1413,64 @@ fn main() -> anyhow::Result<()> {
             if under_shell && !weft_engine::session::Session::exists(&opts.template, &opts.session)
             {
                 shell::exit_hint();
+            }
+            Ok(())
+        }
+        Command::Share {
+            paths,
+            template,
+            name,
+            title,
+            describe,
+            examples,
+            yes,
+            dry_run,
+        } => {
+            let examples = examples
+                .iter()
+                .map(|spec| {
+                    let (path, file) = spec
+                        .split_once('=')
+                        .with_context(|| format!("--example expects PATH=FILE, got `{spec}`"))?;
+                    let text = std::fs::read_to_string(file)
+                        .with_context(|| format!("reading the combined file {file}"))?;
+                    Ok((path.trim_start_matches("./").to_owned(), text))
+                })
+                .collect::<anyhow::Result<_>>()?;
+            let opts = weft_engine::share::ShareOptions {
+                template,
+                paths,
+                name,
+                title,
+                describe,
+                examples,
+                dry_run,
+            };
+            let mut interaction = auto_interaction(yes);
+            let mut resolver = source::RemoteResolver::new(hub::registry_url(None).ok(), false);
+            let report = weft_engine::share::run(&opts, &mut resolver, interaction.as_mut());
+            resolver.flush()?;
+            let report = report?;
+            if dry_run {
+                for (path, text) in &report.files {
+                    println!("{path}, with every patch on:");
+                    print!("{text}");
+                }
+                eprintln!(
+                    "dry run: would create patch `{}` and rewrite {}",
+                    report.owner,
+                    report
+                        .rewritten
+                        .iter()
+                        .map(|n| format!("`{n}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            } else {
+                for line in &report.lines {
+                    eprintln!("{line}");
+                }
+                eprintln!("run `weft check` with answers that turn them on");
             }
             Ok(())
         }

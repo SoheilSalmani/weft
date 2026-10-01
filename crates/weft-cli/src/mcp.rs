@@ -204,6 +204,31 @@ pub struct CommitParams {
     /// Occurrences to keep literal, as ANSWER@PATH:LINE[:NTH].
     #[serde(default)]
     keep_literal: Vec<String>,
+    /// Share each file the patch creates with the patches that already
+    /// create it, under a new patch with this name that owns the lines they
+    /// share (see share_file).
+    #[serde(default)]
+    share: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct ShareParams {
+    template: String,
+    /// The file(s) to share, as paths in the project (`.mcp.json`).
+    paths: Vec<String>,
+    /// Name of the new patch that owns the lines the patches share.
+    name: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    /// Combined files by path, to correct weft's split: each file as a
+    /// project with every one of the patches on gets it (see dry_run).
+    #[serde(default)]
+    examples: BTreeMap<String, String>,
+    /// Return each combined file without writing anything.
+    #[serde(default)]
+    dry_run: bool,
 }
 
 // ---- tools -------------------------------------------------------------
@@ -512,11 +537,43 @@ impl WeftMcp {
             keep_literal: p.keep_literal.clone(),
             link: None,
             depends_on: None,
+            share: p.share.clone(),
         };
         crate::source::with_resolver(|r| weft_engine::commit::run(&opts, r, &mut NonInteractive))
             .map_err(|e| invalid(format!("{e:#}")))?;
         Ok(CallToolResult::structured(
             serde_json::json!({ "patch": p.name, "committed": true }),
+        ))
+    }
+
+    #[tool(
+        name = "share_file",
+        description = "Share a file that several independent patches create, so they can \
+                       all be on at once: a new patch owns the lines they have in common and \
+                       each adds its own lines to a slot in it, with nothing written by hand. \
+                       Run with dry_run first to read each combined file (the file with every \
+                       patch on); if weft split it wrong, pass the corrected file in examples."
+    )]
+    fn share_file(
+        &self,
+        Parameters(p): Parameters<ShareParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let dir = self.template_dir(&p.template)?;
+        let opts = weft_engine::share::ShareOptions {
+            template: dir,
+            paths: p.paths,
+            name: Some(p.name),
+            title: p.title,
+            describe: p.description,
+            examples: p.examples,
+            dry_run: p.dry_run,
+        };
+        let report = crate::source::with_resolver(|r| {
+            weft_engine::share::run(&opts, r, &mut NonInteractive)
+        })
+        .map_err(|e| invalid(format!("{e:#}")))?;
+        Ok(CallToolResult::structured(
+            serde_json::to_value(&report).map_err(internal)?,
         ))
     }
 

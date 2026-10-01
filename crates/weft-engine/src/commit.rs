@@ -45,6 +45,10 @@ pub struct CommitOptions {
     /// Place the patch in the graph explicitly instead of depending on the
     /// base's active leaves. Names must be patches in the session's base.
     pub depends_on: Option<Vec<String>>,
+    /// Share the files this patch creates that other patches create too:
+    /// the name of the new patch that owns their shared lines (`weft
+    /// share`). `None` asks a person, and only notes the clash otherwise.
+    pub share: Option<String>,
 }
 
 /// After a commit that leaves more work, how the next patch relates to it.
@@ -245,15 +249,29 @@ pub fn run(
         keys: &keys,
         names: &names,
     };
+    // An amend of a patch with slots records against the worktree with each
+    // slot's lines swapped for a stand-in, and puts the slots back after.
+    let stand_in = match (&sess.amend, previous) {
+        (Some(_), Some(previous)) => crate::amend::stand_in(
+            &template,
+            previous,
+            &base_patches,
+            &parts,
+            &answers,
+            &work_tree,
+        )?,
+        _ => None,
+    };
+    let recorded = stand_in.as_ref().map_or(&work_tree, |s| &s.tree);
     let ops = match &opts.decisions {
         Some(decisions) => {
-            let texts = diff::collect_texts(&base_tree, &work_tree);
+            let texts = diff::collect_texts(&base_tree, recorded);
             let decisions = decisions
                 .iter()
                 .map(|(k, v)| (weft_core::AnswerId(k.clone()), *v))
                 .collect();
             let confirmed = abstractor.confirmed_from_decisions(&texts, &decisions);
-            diff::build_ops_decided(&rec, &work_tree, &abstractor, &confirmed, &keep_literal)?
+            diff::build_ops_decided(&rec, recorded, &abstractor, &confirmed, &keep_literal)?
         }
         // Generator sessions always take the scripted path (confirm-all
         // minus --keep-literal): interactive per-occurrence choices can't be
@@ -261,11 +279,15 @@ pub fn run(
         None if !keep_literal.is_empty() || sess.generator.is_some() => {
             // Scripted per-occurrence decisions: confirm everything (the
             // --yes semantics) minus the kept-literal occurrences.
-            let texts = diff::collect_texts(&base_tree, &work_tree);
+            let texts = diff::collect_texts(&base_tree, recorded);
             let confirmed = abstractor.confirmed_from_decisions(&texts, &Default::default());
-            diff::build_ops_decided(&rec, &work_tree, &abstractor, &confirmed, &keep_literal)?
+            diff::build_ops_decided(&rec, recorded, &abstractor, &confirmed, &keep_literal)?
         }
-        None => diff::build_ops(&rec, &work_tree, &abstractor, interaction)?,
+        None => diff::build_ops(&rec, recorded, &abstractor, interaction)?,
+    };
+    let ops = match &stand_in {
+        Some(stand_in) => stand_in.restore(ops)?,
+        None => ops,
     };
     if ops.is_empty() {
         bail!("worktree has no changes against the base state; nothing to commit");
@@ -285,6 +307,7 @@ pub fn run(
             &answers,
             &work_tree,
             ops,
+            stand_in.map(|s| s.shown).unwrap_or_default(),
             &crate::amend::MetaEdits {
                 title: opts.title.as_deref(),
                 describe: opts.describe.as_deref(),
@@ -394,28 +417,155 @@ pub fn run(
         );
     }
 
-    // A generator session stores the command + record-time answers (secrets
-    // as source refs) so `weft patch resync` can reproduce this patch.
-    let generator = sess.generator.as_ref().map(|p| weft_core::Generator {
-        command: p.command.clone(),
-        answers: sess.answers.clone(),
-        secrets: sess.secrets.clone(),
-        keep_literal: opts.keep_literal.clone(),
-    });
-    template.write_patch_full(
-        &name,
-        depends_on,
-        when,
-        foreach_include,
-        ops.clone(),
-        weft_core::PatchMeta {
-            title: opts.title.clone(),
-            description: opts.describe.clone(),
-            tags: opts.tags.clone(),
-            hooks: vec![],
-            generator,
-        },
-    )?;
+    let meta = weft_core::PatchMeta {
+        title: opts.title.clone(),
+        description: opts.describe.clone(),
+        tags: opts.tags.clone(),
+        hooks: vec![],
+        // A generator session stores the command + record-time answers
+        // (secrets as source refs) so `weft patch resync` can reproduce it.
+        generator: sess.generator.as_ref().map(|p| weft_core::Generator {
+            command: p.command.clone(),
+            answers: sess.answers.clone(),
+            secrets: sess.secrets.clone(),
+            keep_literal: opts.keep_literal.clone(),
+        }),
+    };
+
+    // A file this patch creates that other patches create too clashes with
+    // them in a project that has them all on. Share it when asked to
+    // (`--share`) or when a person says so; otherwise commit and say how.
+    let clashes = crate::share::clashes(&template, &ops);
+    if opts.share.is_some() && clashes.is_empty() {
+        bail!("--share: no other patch creates a file this patch creates");
+    }
+    let mut notes = Vec::new();
+    if !clashes.is_empty() {
+        let paths: Vec<String> = clashes.iter().map(|c| c.path.clone()).collect();
+        let pending = crate::share::Pending {
+            name: &name,
+            ops: &ops,
+            depends_on: &depends_on,
+        };
+        let others_open: Vec<String> = Session::list(&opts.template)?
+            .into_iter()
+            .map(|(n, _)| format!("`{n}`"))
+            .filter(|n| *n != format!("`{}`", opts.session))
+            .collect();
+        let shared = if !remaining.is_empty() {
+            Err(anyhow::anyhow!(
+                "{} file(s) are still uncommitted in this session, and sharing ends it",
+                remaining.len()
+            ))
+        } else if !others_open.is_empty() {
+            Err(anyhow::anyhow!(
+                "session(s) {} are open, and sharing rewrites patches under them",
+                others_open.join(", ")
+            ))
+        } else if sess.generator.is_some() || sess.foreach.is_some() {
+            Err(anyhow::anyhow!(
+                "a generated or foreach patch cannot fill a shared file"
+            ))
+        } else {
+            crate::share::prepare(&template, &paths, Some(&pending))
+        };
+        let shared = match shared {
+            Ok(shared) => Some(shared),
+            Err(e) if opts.share.is_some() => return Err(e.context("--share")),
+            Err(e) => {
+                notes = crate::share::hint(&clashes, Some(&format!("{e:#}")));
+                None
+            }
+        };
+        let share = match shared {
+            Some(_) if opts.share.is_some() => true,
+            Some(_) if interaction.interactive() => crate::share::ask(&clashes, interaction)?,
+            Some(_) => {
+                notes = crate::share::hint(&clashes, None);
+                false
+            }
+            None => false,
+        };
+        if let (true, Some(shared)) = (share, shared) {
+            let splits =
+                crate::share::confirm(&shared, &std::collections::BTreeMap::new(), interaction)?;
+            let owner = crate::share::owner(
+                &shared,
+                opts.share.as_deref(),
+                None,
+                None,
+                opts.share.is_none(),
+                interaction,
+            )?;
+            let plan = crate::share::build(&template, &shared, &splits, owner, Some(&pending))?;
+            let filling_ops = plan.pending_ops.clone().expect("a pending patch");
+            // Replay before writing: the base, the owner, and this patch
+            // filling its slot must still reproduce the worktree.
+            let owner_patch = weft_core::Patch::new(
+                plan.owner_depends_on
+                    .iter()
+                    .map(|n| template.name_to_id[n])
+                    .collect(),
+                None,
+                plan.owner_ops.clone(),
+            );
+            let filling_deps = plan.pending_depends_on.clone().expect("a pending patch");
+            let ids: Vec<_> = filling_deps
+                .iter()
+                .map(|n| {
+                    if *n == plan.owner.name {
+                        owner_patch.id
+                    } else {
+                        template.name_to_id[n]
+                    }
+                })
+                .collect();
+            let filling = weft_core::Patch::new_foreach(
+                ids,
+                when.clone(),
+                foreach_include.clone(),
+                filling_ops.clone(),
+            );
+            let mut with_shared = base_patches.clone();
+            with_shared.push(owner_patch);
+            with_shared.push(filling);
+            let replayed = crate::compose::render_composed(&with_shared, &answers, &parts, &eval)
+                .context("replaying this patch as a fill of the shared file")?;
+            if gate_open && replayed.hash() != work_tree.hash() {
+                bail!("sharing the file would change what this patch renders; nothing was written");
+            }
+            let written = crate::share::write(&template, &plan)?;
+            let result = (|| -> Result<()> {
+                let reloaded = Template::load_with(&opts.template, resolver)?;
+                reloaded.write_patch_full(
+                    &name,
+                    filling_deps,
+                    when,
+                    foreach_include,
+                    filling_ops,
+                    meta,
+                )?;
+                Ok(())
+            })();
+            if let Err(e) = result {
+                written.undo();
+                return Err(e);
+            }
+            crate::stage::clear(&opts.template, &opts.session)?;
+            sess.end(&opts.template, &opts.session)?;
+            for line in crate::share::report(&plan) {
+                eprintln!("{line}");
+            }
+            eprintln!(
+                "committed patch `{name}`: adds its lines to {}, depends on `{}`",
+                paths.join(", "),
+                plan.owner.name
+            );
+            return Ok(());
+        }
+    }
+
+    template.write_patch_full(&name, depends_on, when, foreach_include, ops.clone(), meta)?;
     // The index is now empty against whatever base we end at.
     crate::stage::clear(&opts.template, &opts.session)?;
 
@@ -428,6 +578,9 @@ pub fn run(
             "committed patch `{name}` with {} op(s) to `{noun}`",
             ops.len()
         );
+        for note in &notes {
+            eprintln!("{note}");
+        }
         return Ok(());
     }
 
@@ -493,6 +646,9 @@ pub fn run(
                 remaining.len()
             );
         }
+    }
+    for note in &notes {
+        eprintln!("{note}");
     }
     Ok(())
 }
@@ -811,6 +967,36 @@ pub fn preview_target(
             binary: base_entry.is_some_and(|e| e.content.is_binary()),
             notes: Vec::new(),
         });
+    }
+    // An amend of a patch with slots: say which lines belong to the patches
+    // that fill them, or why the commit cannot record the slots.
+    let previous = trees
+        .sess
+        .amend
+        .as_ref()
+        .and_then(|target| template.name_to_id.get(target))
+        .and_then(|id| template.patches.iter().find(|p| p.id == *id));
+    if let Some(previous) = previous {
+        let notes = match crate::amend::stand_in(
+            template,
+            previous,
+            &trees.base_patches,
+            &trees.parts,
+            &trees.answers,
+            &after,
+        ) {
+            Ok(stand_in) => stand_in.map(|s| s.notes).unwrap_or_default(),
+            Err(e) => files
+                .iter()
+                .filter(|f| format!("{e:#}").contains(&format!("`{}`", f.path)))
+                .map(|f| (f.path.clone(), format!("cannot record: {e:#}")))
+                .collect(),
+        };
+        for (path, note) in notes {
+            if let Some(file) = files.iter_mut().find(|f| f.path == path) {
+                file.notes.push(note);
+            }
+        }
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(Preview {

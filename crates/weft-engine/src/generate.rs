@@ -154,15 +154,15 @@ pub fn resync(
             continue;
         }
         // Regenerated ops come from the command's text, which cannot carry a
-        // slot: rewriting would drop the slots someone added by hand.
+        // slot: rewriting would drop the patch's slots.
         let slots = crate::amend::declared_slots(&patch);
         if !slots.is_empty() {
             skip(
                 &mut report,
                 format!(
                     "it declares slot(s) {}, which regenerating from the command would drop; \
-                     move the slot to a hand-written patch, or `weft patch detach {name}` and \
-                     edit it by hand",
+                     to keep them, `weft patch detach {name}` and change it with `weft patch \
+                     amend {name}`",
                     slots.join(", ")
                 ),
             );

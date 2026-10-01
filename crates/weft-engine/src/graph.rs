@@ -394,13 +394,18 @@ pub(crate) fn op_summary(op: &Op) -> OpSummary {
 
 /// Symbolic display of a possibly-abstracted path.
 pub fn display_path(path: &TemplatePath) -> String {
-    path.0
+    display_segments(&path.0)
+}
+
+/// Symbolic display of segments: literal text as is, an answer reference as
+/// `{id}`, an expression as `{=source}`.
+pub fn display_segments(segments: &[Segment]) -> String {
+    segments
         .iter()
         .map(|seg| match seg {
             Segment::Literal(s) => s.clone(),
             Segment::Answer(id) => format!("{{{id}}}"),
             Segment::Expr(e) => format!("{{={}}}", e.as_str()),
-            // Paths never parse with a slot in them.
             Segment::Slot(decl) => format!("{{slot {}}}", decl.slot),
         })
         .collect()

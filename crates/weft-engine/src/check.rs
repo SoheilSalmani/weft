@@ -1250,8 +1250,15 @@ fn check_commutation(
                     }
                     None => report.issues.push(format!(
                         "independent patches `{name_p}` and `{name_q}` do not commute: \
-                         one application order fails: {}",
-                        named(template, nodes, &e.to_string())
+                         one application order fails: {}{}",
+                        named(template, nodes, &e.to_string()),
+                        match &e {
+                            RenderError::CreateExists { path, .. } => format!(
+                                "; if both belong in one project, run `weft share {path} \
+                                 --name NAME` so each adds its lines to one shared file"
+                            ),
+                            _ => String::new(),
+                        }
                     )),
                 },
             }

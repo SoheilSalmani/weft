@@ -1,6 +1,18 @@
 use anyhow::{bail, Context, Result};
 use weft_core::{AnswerKind, Question, SecretValue, Value};
 
+/// An editor on `$VISUAL`, else `$EDITOR`, else `vi`, skipping a variable
+/// that is set but empty, which dialoguer would otherwise panic on.
+fn editor() -> dialoguer::Editor {
+    let mut editor = dialoguer::Editor::new();
+    let chosen = ["VISUAL", "EDITOR"]
+        .iter()
+        .filter_map(|var| std::env::var(var).ok())
+        .find(|cmd| !cmd.trim().is_empty());
+    editor.executable(chosen.as_deref().unwrap_or("vi"));
+    editor
+}
+
 /// Open `$VISUAL`/`$EDITOR` (fallback `vi`) on a seeded `.sh` buffer and
 /// return the entered command: the seed `instructions` become `#` comment
 /// lines, comments are stripped from the result, and multi-line commands
@@ -8,7 +20,7 @@ use weft_core::{AnswerKind, Question, SecretValue, Value};
 /// nothing was entered.
 pub fn edit_command(instructions: &str) -> Result<String> {
     let seed: String = instructions.lines().map(|l| format!("# {l}\n")).collect();
-    let edited = dialoguer::Editor::new()
+    let edited = editor()
         .extension(".sh")
         .require_save(true)
         .edit(&seed)
@@ -53,6 +65,31 @@ pub trait Interaction {
         } else {
             crate::abstraction::CandidateDecision::None
         })
+    }
+
+    /// Whether a person answers the prompts. Non-interactive runs take each
+    /// prompt's default.
+    fn interactive(&self) -> bool {
+        false
+    }
+
+    /// Pick one of `items`; `default` is the index taken without a person.
+    fn choose(&mut self, prompt: &str, items: &[&str], default: usize) -> Result<usize> {
+        let _ = (prompt, items);
+        Ok(default)
+    }
+
+    /// A line of text, `default` when nobody types one.
+    fn text(&mut self, prompt: &str, default: &str) -> Result<String> {
+        let _ = prompt;
+        Ok(default.to_owned())
+    }
+
+    /// Let a person edit `text` in their editor, as a file ending in
+    /// `extension` (`.json`, or empty); returns it unchanged without one.
+    fn edit(&mut self, text: &str, extension: &str) -> Result<String> {
+        let _ = extension;
+        Ok(text.to_owned())
     }
 }
 
@@ -181,6 +218,37 @@ impl Interaction for TerminalInteraction {
             .with_prompt(message)
             .default(default)
             .interact()?)
+    }
+
+    fn interactive(&self) -> bool {
+        true
+    }
+
+    fn choose(&mut self, prompt: &str, items: &[&str], default: usize) -> Result<usize> {
+        Ok(dialoguer::Select::new()
+            .with_prompt(prompt)
+            .items(items)
+            .default(default)
+            .interact()?)
+    }
+
+    fn text(&mut self, prompt: &str, default: &str) -> Result<String> {
+        Ok(dialoguer::Input::<String>::new()
+            .with_prompt(prompt)
+            .default(default.to_owned())
+            .interact_text()?)
+    }
+
+    fn edit(&mut self, text: &str, extension: &str) -> Result<String> {
+        let mut editor = editor();
+        editor.require_save(false);
+        if !extension.is_empty() {
+            editor.extension(extension);
+        }
+        Ok(editor
+            .edit(text)
+            .context("opening $VISUAL/$EDITOR")?
+            .unwrap_or_else(|| text.to_owned()))
     }
 
     fn decide_candidate(
