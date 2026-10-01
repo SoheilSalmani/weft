@@ -46,7 +46,7 @@ Option B was not chosen because it needs code for every format, takes the layout
 
 Independent contributions to one file become sibling patches that each depend only on the owner. The owner can be ungated, and dependency chains that existed only to order lines can be removed.
 
-Slot declarations are written by hand, like expressions. Re-recording a patch from a worktree cannot reproduce them, so amending or regenerating a patch that declares a slot is refused and such a patch is edited by hand.
+A worktree holds text, so recording alone cannot reproduce a slot declaration. How the declaration gets written without the author editing a patch file, and how an owner is amended, is decided separately in ADR-0005. Regenerating a patch from a command's output cannot carry a slot either, so a generated patch that declares one is left alone by regeneration.
 
 Every line added between a slot's neighbours belongs to the slot. An owner that wants room for other additions next to a slot has to put a literal line between the two.
 

@@ -11,6 +11,7 @@ Records are numbered permanently. Numbers are never reused, including for reject
 | [ADR-0002](0002-extenders-narrow-inherited-questions.md): Let an extending template narrow the questions it inherits | Accepted | An extender can re-default, lock, and restrict the choices of inherited questions, never widen them |
 | [ADR-0003](0003-independent-patches-fill-named-slots.md): Let independent patches add lines to one file through named slots | Proposed | A file can declare slots that other patches fill; contributions render sorted by key, so fill-only patches commute |
 | [ADR-0004](0004-worktree-commands-name-their-session.md): Take a worktree command's session from where it runs or from its name | Accepted | Status, add, reset, diff and commit act on the worktree they run in or on a named session, never on a template's only session |
+| [ADR-0005](0005-weft-writes-slots-from-example-files.md): Derive a shared file's slot from the files its patches write | Proposed | Weft writes the owner and its slot from the patches' versions of a file and a combined file the author confirms, so nobody declares a slot by hand |
 
 ADR-0000 is a baseline rather than a decision. It describes the starting architecture so later records have a historical reference point, and it may be cited as evidence of what existed on that date, never as evidence that any of it was chosen deliberately. Decision records begin at ADR-0001.
 

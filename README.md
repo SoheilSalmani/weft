@@ -254,17 +254,31 @@ See `fixtures/templates/hello/` for a complete example and `PLAN.md` /
 
 ## Slots: several patches adding to one file
 
-Two independent patches inserting after the same line do not commute, so a
-file that many patches add to (MCP server lists, `[tools]`, a Gradle
-`dependencies {}` block) declares a **slot**: a line of its own in
-`create_file` content (or a hunk's `added` lines), written by hand like an
-`expr` segment. Other patches fill it with `fill_slot`:
+Two independent patches inserting after the same line do not commute, and
+two that each create one file clash. When several patches each create a
+file (one MCP server list per tracker, say), it gets an owner with a
+**slot**, and each of them fills it with `fill_slot`. Nobody writes the
+slot: record each patch creating the file the way it wants it, then share it.
+
+```sh
+weft share .mcp.json --name mcp            # or: weft commit … --share mcp
+```
+
+Weft compares the patches' versions of the file: the lines they share
+become the owner `mcp`, with a slot where their own lines were, and each
+patch now fills that slot under its name. In a terminal weft first opens the
+combined file (every patch on) in `$EDITOR` to confirm where the shared lines
+end and what separates the patches' lines (`,` in JSON); `--example
+PATH=FILE` gives it that file instead. Each patch alone still renders exactly
+what it did. `weft commit` notices a second patch creating one file and asks
+whether to share it (or prints the `weft share` command), and `weft check`
+suggests it for two creators that clash.
 
 ```json
-{ "op": "create_file", "path": ".mcp.json", "omit_when_empty": ["servers"],
-  "content": ["{", "  \"mcpServers\": {", { "slot": "servers", "separator": "," }, "  }", "}"] }
+{ "op": "create_file", "path": ".mcp.json", "omit_when_empty": ["entries"],
+  "content": ["{", "  \"mcpServers\": {", { "slot": "entries", "separator": "," }, "  }", "}"] }
 
-{ "op": "fill_slot", "path": ".mcp.json", "slot": "servers", "key": "lightdash",
+{ "op": "fill_slot", "path": ".mcp.json", "slot": "entries", "key": "lightdash",
   "lines": [["    \"lightdash\": { \"url\": \"", { "answer": "lightdash_url" }, "/api/v1/mcp\" }"]] }
 ```
 
@@ -278,9 +292,13 @@ file that many patches add to (MCP server lists, `[tools]`, a Gradle
   keyed by the patch name. Place them where the key sorts (`weft diff` says
   which slot they fill); hunk context never comes from slot content, or from
   lines an `expr` rendered.
-- Slots do not nest. `weft patch amend` refuses a patch that declares one and
-  `weft patch resync` skips it, since re-recording would drop the slot: edit
-  such a patch's JSON by hand.
+- `weft patch amend` on an owner shows every patch's lines in its slots (a
+  marker line where none fills one); edit the lines around them, and commit
+  puts the slot back where they are. Slots do not nest, and `weft patch
+  resync` skips a generated patch that declares one.
+- `weft share` takes only a file the patches each create. Lines several
+  patches add to a file one patch created (a Gradle `dependencies {}` block)
+  still need hunks that anchor apart, or a dependency chain.
 
 ## Composition: extends and include nodes
 
