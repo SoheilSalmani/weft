@@ -38,11 +38,11 @@
     {
       "id": 4,
       "prompt": "The docker and ci patches both append to README.md and weft check says they don't commute. Fix it.",
-      "expected_output": "Either one patch is re-recorded against the other (weft session new ci --base docker, or weft commit --depends-on docker) so the dependency is explicit, or the two hunks are moved at least three lines apart so they anchor on different context. The agent explains that independent patches must commute and that the context radius is two lines.",
+      "expected_output": "One patch is re-recorded against the other (weft session new ci --base docker, or weft commit --depends-on docker) so the dependency is explicit, or the two hunks are moved at least three lines apart so they anchor on different context. The agent explains that independent patches must commute and that the context radius is two lines. It does not reach for a slot: weft share only shares a file several patches each create, and base creates README.md while docker and ci change it.",
       "assertions": [
         "Explains the commutation rule and why two appends to the same spot conflict",
-        "Offers the dependency fix with the correct flags (--base or --depends-on)",
-        "Offers the alternative of separating the hunks so they stay independent",
+        "Offers the dependency fix with the correct flags (--base or --depends-on) or separating the hunks, and does not suggest expr lines to merge the two",
+        "Does not tell anyone to write a slot into base by hand, and does not propose weft share for hunks on a file base creates",
         "Runs weft check again after the fix"
       ]
     },
@@ -127,11 +127,12 @@
     {
       "id": 13,
       "prompt": "Can I put this patch that installs our agent skills into both the java and the fastapi templates?",
-      "expected_output": "Yes, as a portable patch, which is how the house shares root-level files today: if it has no depends_on and only create_file ops at paths nothing else touches, copy the JSON file into each template's patches/; it becomes a second root, keeps the same id everywhere, and weft check proves it commutes. The agent may mention that extends is the engine's mechanism for a shared base, without migrating the templates.",
+      "expected_output": "No copy is needed: java and fastapi both extend base, which installs the agent skills, so the patch is already part of both under its own name and id. The agent checks each template's weft.toml for extends = \"../base\" rather than copying, because a copied patch file clashes with the inherited one and the template stops loading. A skill for one stack goes into base behind a stack_skills choice, which that stack offers through [refine.stack_skills].",
       "assertions": [
-        "States the two constraints (no depends_on, only new files at untouched paths)",
-        "Does not claim that weft has no way to share a base or to mount at the root",
-        "Runs weft check in each template after copying"
+        "Finds that both templates extend base, which already carries the skills patch",
+        "Does not copy a patch file into a template that inherits it",
+        "Puts a skill for one stack in base behind stack_skills rather than in the stack template",
+        "Does not claim that weft has no way to share a base or to mount at the root"
       ]
     },
     {
@@ -141,6 +142,16 @@
       "assertions": [
         "Says weft record was replaced by weft session new",
         "Verifies against weft --help rather than asserting from memory"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "The linear and jira patches both create .mcp.json, and weft check says create_file target .mcp.json already exists. A project can use both trackers. Fix it.",
+      "expected_output": "The agent runs weft share .mcp.json --name mcp (after a --dry-run to see the combined file): weft writes a new patch mcp holding the shared lines around a slot, rewrites linear and jira as fillers that depend on it, and the agent runs weft check with both on, each alone and neither. It writes no slot by hand, and names weft commit --share for the next time a commit clashes.",
+      "assertions": [
+        "Uses weft share with --name rather than editing patches/*.json",
+        "Runs weft check under answers that turn each patch on and off",
+        "Does not propose expr lines, complementary gated copies or a chain to merge the two files"
       ]
     }
   ]

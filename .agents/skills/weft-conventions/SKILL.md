@@ -5,7 +5,7 @@ description: House conventions and the mental model for Weft, the record-based t
 
 # Weft conventions
 
-Weft is a personal project. No model has seen it in training and its documentation is not online, so nothing about it may be assumed from memory. Everything here was verified against `weft 0.1.0` on 2026-09-25, the composition facts again on 2026-09-27, after `extends` and include nodes landed, session resolution and session entry on 2026-09-30, the prompting facts the same day, after the full-screen wizard and forms were removed, and the `[refine]` facts the same day against a build of `5c73e00`. `[refine]` exists only in a weft built from source after 0.1.0, and the 0.1.0 release does not reject it: it ignores the table and renders the base's questions unnarrowed. Where the docs and the binary disagree, the binary wins, and `weft <command> --help` is the check to run before relying on any flag. `references/cli.md` is the verified command sheet.
+Weft is a personal project. No model has seen it in training and its documentation is not online, so nothing about it may be assumed from memory. Everything here was verified against `weft 0.1.0` on 2026-09-25, the composition facts again on 2026-09-27, after `extends` and include nodes landed, the slot, context, resync and amend facts on 2026-09-29 against a weft built from source after 0.1.0, session resolution and session entry on 2026-09-30, the prompting facts the same day, after the full-screen wizard and forms were removed, the `[refine]` facts the same day against a build of `5c73e00`, and the shared-file facts (`weft share`, `weft commit --share`, amending a patch that declares a slot) the same day against a build of `e11dcba` with that feature. Slots, `fill_slot`, `omit_when_empty`, `weft patch resync --yes` and `weft share` exist only in a weft built from source after 0.1.0: the 0.1.0 release has no `weft share` and rejects the rest, so a template whose CI pins the 0.1.0 release cannot use them. `[refine]` exists only in such a build too, and the 0.1.0 release does not reject it: it ignores the table and renders the base's questions unnarrowed. The house templates' CI builds weft from source at `WEFT_REF`, so it renders them once they are on that ref. Where the docs and the binary disagree, the binary wins, and `weft <command> --help` is the check to run before relying on any flag. `references/cli.md` is the verified command sheet.
 
 ## The model
 
@@ -13,7 +13,7 @@ Weft is a personal project. No model has seen it in training and its documentati
 - A patch is a function from answers to tree edits: `depends_on` (the **names** of other patches), an optional Starlark `when` gate, `foreach` on an integration patch, and `ops`. Its id is a blake3 hash of exactly those, computed on every load and never stored. Change the behaviour of a patch and every descendant's id changes. That is intended: a scaffolded project pins the ids it was rendered from and carries its own copy of their bodies in `.weft/base.json`, so `weft update` still merges after amend, squash or rename.
 - `title`, `description`, `tags`, `hooks` and `generator` are metadata. Never hashed, editable at any time, and how future readers understand the patch.
 - Rendering replays the active patches over an empty tree in dependency order, ties broken by id. Two patches with no dependency path between them must produce the same tree in either order. `weft check` tests every independent pair under the answers you pass it, and only those answers.
-- File content is lines of segments: a literal string, `{"answer": "id"}`, or `{"expr": "…"}`. A `modify_file` hunk anchors on two lines of context each side and must match exactly once in the rendered file.
+- File content is lines of segments: a literal string, `{"answer": "id"}`, or `{"expr": "…"}`. A line may instead be a **slot**, `{"slot": "servers", "separator": ","}`: a named place other patches add lines to with `fill_slot`, rendered sorted by each contribution's key. `weft share` writes slots; nobody types one. A `modify_file` hunk anchors on up to two lines of context each side and must match exactly once in the rendered file. Commit never takes context from a line an `expr` rendered or from slot content, because those read differently under other answers or other active patches.
 - Nothing in a template contains template syntax. You **record**: render a base into a worktree, edit real files with real values, then `weft commit` diffs the worktree, replaces occurrences of answer values with references, replays the result to prove it reproduces the worktree, and writes the patch. Abstraction only matches values of answers that already exist in the session, so a question is declared before the value it should capture is typed.
 - Questions live in `weft.toml`. Answers arrive from Starlark defaults, an answers file, `--answer`, `--answers-json`, then prompts; later wins. A preset locks what it answers.
 - Hooks belong to patches. `pre` runs before any file is written, `post` after; the effect is `check`, `setup` or `deploy`. Hooks are the only place shell exists.
@@ -45,6 +45,8 @@ Facts that shape the loop, all observed on the binary:
 - After a failed commit the staged set is still staged. Run `weft status` and `weft reset` before staging the next piece, or the next commit takes both.
 - `status`, `add`, `reset`, `diff` and `commit` act on the worktree you stand in. Anywhere else, the template root included, they need `-s NAME` even when only one session exists, and their paths are then relative to the worktree root. A pattern that matches no file is an error that stages nothing, never an empty stage the next commit would read as the whole worktree.
 - Record with distinctive answer values (`Demo Service`, not `test`) and check `weft diff --abstracted` before committing. A generator that names the project after its directory writes the literal `worktree` into files; pass the name explicitly (`uv init --name ${package_name}`) or the answer is never used and every project inherits the leak.
+- Lines typed inside a slot are recorded as a `fill_slot` keyed by the patch name, so name the session after the patch: `weft diff` prints ``note: line 3 fill slot `servers` under key `lightdash` `` with the session's name as the key. Place the block where that key sorts, with the separator ending every contribution but the last. Commit refuses a block out of key order (showing the layout it expects), two blocks in one slot, and edits to another patch's contribution. Pass `--depends-on <owner>`, so every filler is a sibling of the others rather than a link in a chain.
+- A commit whose patch creates a file that an independent patch already creates says so. Scripted, it commits anyway and prints ``note: patch `linear` (when use_linear) also creates .mcp.json. The two clash in a project that has both on; if they belong together, run `weft share .mcp.json --name NAME` ``. If both can be on in one project, pass `--share mcp` to that commit, or run `weft share .mcp.json --name mcp` afterwards: weft writes a new patch `mcp` holding the lines the creators share around a slot, and turns each creator into a filler of it. If they are alternatives, gate them so they are never on together.
 
 ## One patch is one increment
 
@@ -52,10 +54,10 @@ A patch is the smallest change that leaves the rendered project in a state someo
 
 1. **The title needs no "and".** "JUnit 6 + AssertJ" is one test stack; "Docker and CI" is two patches.
 2. **Gating it off leaves a coherent project.** If it would not, it belongs in the patch it completes, or it depends on that patch.
-3. **New files over hunks.** Files at distinct paths commute for free. A hunk must anchor on lines its own dependency wrote, and sit at least three lines from any sibling's hunk in the same file, because the context radius is two.
-4. **It depends only on what it anchors on or needs at runtime.** Record with `--base <ancestor>`, not the default `latest`, unless the change genuinely builds on the last patch. `weft commit --depends-on a,b` declares parents at commit time and refuses a claim the content cannot honour. A chain forced by one shared config block is legitimate; a chain that exists because nobody passed `--base` is not.
+3. **New files over hunks, a shared file over a clash.** Files at distinct paths commute for free. Where several independent patches each create one file (MCP servers in `.mcp.json`), record each as it is, then `weft share PATH --name NAME`: the new owner holds the common lines, and each creator becomes a filler that depends on it and commutes with every other filler. Lines several patches add to a file one patch created (a Gradle `dependencies {}` block) have no such path: each hunk must anchor on lines its own dependency wrote, and sit at least three lines from any sibling's hunk in the same file, because the context radius is two.
+4. **It depends only on what it anchors on or needs at runtime.** Record with `--base <ancestor>`, not the default `latest`, unless the change genuinely builds on the last patch. `weft commit --depends-on a,b` declares parents at commit time and refuses a claim the content cannot honour. A chain forced by one shared config block is legitimate; a chain that exists because nobody passed `--base` is not. Neither `expr` lines on several bools nor complementary gated copies of an owner are the way to let several patches add to one file; record one patch per contributor that creates the file, and share it.
 5. **Structure is a gate, value is a segment.** A feature whose presence changes which files exist is its own patch under `--when`. A value that changes inside one edit is an answer reference. An `{"expr": "'a' if flag else 'b'"}` around whole blocks is two patches.
-6. **Recorded, not hand-written**, except `{"expr"}` segments (commit never emits them), test fixtures, and typo fixes in `added` lines. After any hand edit, `weft check`.
+6. **Recorded, not hand-written**, except `{"expr"}` segments (commit never emits one), test fixtures, and typo fixes in `added` lines. Slots are written by `weft share`, never by hand. After any hand edit, `weft check`.
 7. **It carries its own hooks.** The patch that introduces a tool owns `verify-<tool>`; the patch whose files a setup step reads owns that step, with `inputs` so `weft update` re-fires it.
 8. **Nothing derived, secret, or accidental.** `.weftignore` lists build output, virtualenvs, lockfiles and caches before the first recording. A lockfile is regenerated by a `setup` hook, never stored. A secret only ever reaches content through a `kind = "secret"` question, which weft abstracts unconditionally.
 9. **Named, titled, described.** Never the `patch-NNN` auto-name.
@@ -112,10 +114,11 @@ Patches are mutable. Projects survive because they carry their own base.
 
 | Want | Do | Ids |
 | --- | --- | --- |
-| different behaviour | `weft patch amend NAME`, edit the scratch worktree, `weft commit --yes` inside it | patch and descendants change; dependents replay, a broken one is named |
+| different behaviour | `weft patch amend NAME`, edit the scratch worktree, `weft commit --yes` inside it (`--title`, `--describe`, `--tag` apply too; `--when`, `--depends-on` and another `--name` are refused) | patch and descendants change; dependents replay, but one that no longer applies is not named and the amend is written anyway, so set it aside first (`references/cli.md`) |
+| different behaviour of a patch that declares a slot | `weft patch amend NAME` as above: the worktree shows the fillers' lines in each slot, whatever their gates, or ``⟪slot entries: other patches add their lines here⟫`` for an empty one. Edit the lines around them; commit refuses a change to those lines (``slot `entries` of `.mcp.json` held the lines `jira`, `linear` add, and they are no longer in the file as they were: …``). A filler amends normally and keeps its key | patch and descendants change |
 | better words | `weft patch set NAME --title … --describe …` | unchanged |
 | two patches that always travel together | `weft patch squash A B --into A --title …` | one new id |
-| a generated patch, regenerated | `weft patch resync NAME` or `weft patch set-command NAME "…" --resync` | changes |
+| a generated patch, regenerated | `weft patch resync NAME` or `weft patch set-command NAME "…" --resync`; a new answer reference skips it until `--yes` or `--keep-literal` | changes |
 | a rename | `mv patches/old.json patches/new.json`, then fix every `"old"` in other patches' `depends_on` | unchanged |
 | a different parent | edit `depends_on` by hand (there is no `weft patch rebase`), then check that it still renders | patch and descendants change |
 | gone | `rm patches/NAME.json` | descendants become roots or break; check |
@@ -124,23 +127,23 @@ Never fork a `docker-v2`. Run `weft check` after every one of these: amend, re-p
 
 ## Prove it
 
-- `weft check --answer … [--preset …]` after every commit, once per preset and per answer combination you ship. It renders and tests commutation only under the answers it is given.
-- `weft graph --answer …` to see the shape. A star around `base` is the usual healthy shape; a chain is a smell unless each link anchors on the previous one.
+- `weft check --answer … [--preset …]` after every commit, once per preset and per answer combination you ship. It renders and tests commutation only under the answers it is given. It first renders each patch on top of its own dependencies; one that fails there is reported once, as ``patch `mine` does not apply under these answers: …`` with the line its hunk expected and the patch and `expr` segment that rendered the line actually there, and is left out of the pair reports. Pairs that only fill the same slots are counted, not rendered: `commutation ok for 2 independent pair(s); 1 more only fill the same slots, which commutes by construction`.
+- `weft graph --answer …` to see the shape. A star around `base` is the usual healthy shape; a chain is a smell unless each link anchors on the previous one. Fillers of one slot are a star around the slot's owner.
 - `weft new TEMPLATE /tmp/out --answers-json '{…}' --non-interactive`, then run the project's own setup, because check proves the render, not that the result builds.
 - `weft describe --agents-md` after the questions or patches change; it writes the template's `AGENTS.md`.
 
 ## Never invent
 
-- A stored `id`, a numeric prefix, or ordering by file name. Order comes from `depends_on` alone.
-- Op types beyond `create_file`, `create_binary_file`, `modify_file`, `delete_file`, `rename_path`, `set_mode`; line-numbered hunks; fuzzy matching.
+- A stored `id`, a numeric prefix, or ordering by file name. Patch order comes from `depends_on` alone; the lines in a slot are ordered by their keys.
+- Op types beyond `create_file` (with its optional `omit_when_empty`), `create_binary_file`, `modify_file`, `delete_file`, `rename_path`, `set_mode`, `fill_slot`; line kinds beyond segments and a whole-line `{"slot": …, "separator": …}`; line-numbered hunks; fuzzy matching; nested slots.
 - Question kinds beyond `string`, `bool`, `int`, `choice`, `multichoice`, `secret`; validation keys; secret sources beyond `env:`, `cmd:`, `prompt`.
 - `[refine]` keys beyond `prompt`, `description`, `example`, `default`, `lock`, `choices`, `blocked`, `fixed`; a `[refine]` table for a question the template declares itself, a secret, or a question of an include.
 - Hooks in `weft.toml`, a `[[task]]` table, hook fields such as `cwd` or `env`, phases or effects beyond the three named.
-- `weft record` (now `weft session new`), `weft patch split`, `rebase`, `rename`, `gate`, `weft question add`, `weft reset -p`, or `layers` in `weft.toml`.
+- `weft record` (now `weft session new`), `weft patch split`, `rebase`, `rename`, `gate`, `weft question add`, `weft reset -p`, or `layers` in `weft.toml`. `weft describe --json` from the 0.1.0 release still prints `weft record` under `usage.author`; later builds print `weft session new` there.
 - Abstraction of ints or bools, or a question weft proposed on its own. It never does.
 - A live documentation URL. The docs are the `docs/` directory of the weft-cloud repository; `weft --help`, `weft <cmd> --help` and `weft describe --json` are what is reachable from a shell.
 
-`references/patch-format.md` is the file format for the times a hand edit is right, including the portable-patch recipe.
+`references/patch-format.md` is the file format for the times a hand edit is right, how slots render and where they come from, and the portable-patch recipe.
 
 ## Before you finish
 

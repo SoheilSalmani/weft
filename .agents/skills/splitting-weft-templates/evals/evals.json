@@ -1,6 +1,6 @@
 {
   "skill_name": "splitting-weft-templates",
-  "notes": "Score the decision first: the agent must name which of the three outcomes applies (include, portable patch, gates and presets) or that nothing should change, with the reason. Promising an overlay, or a parent patch that edits a mounted child's files without depending on the child node that owns them, fails. So does claiming that weft has no root mount or no base-template mechanism. For an include split, both templates must be checked and the before/after renders diffed. For a portable patch, the two constraints must be stated and checked in every host.",
+  "notes": "Score the decision first: the agent must name which of the three outcomes applies (include, the shared base, gates and presets) or that nothing should change, with the reason. Promising an overlay, or a parent patch that edits a mounted child's files without depending on the child node that owns them, fails. So does claiming that weft has no root mount or no base-template mechanism. For an include split, both templates must be checked and the before/after renders diffed. For the shared base, the scaffolding must live in base alone, with no stack keeping a copy, and base and every template that extends it must be checked.",
   "evals": [
     {
       "id": 1,
@@ -15,13 +15,12 @@
     {
       "id": 2,
       "prompt": "I want the skills patch and the editorconfig from the java template in the fastapi and dbt templates too, like a shared base template.",
-      "expected_output": "The house shares root-level scaffolding as portable patches, so the agent does that: it confirms each patch has no depends_on and only create_file ops at untouched paths, copies the JSON files into the other templates, runs weft check in each, and notes that updating means re-copying. Any hunk on a shared file such as .gitignore is handed to each host's base instead. It may name extends as the engine's mechanism for a shared base, as a proposal, without migrating the templates.",
+      "expected_output": "Nothing to copy: java, fastapi and dbt all extend base, and base carries both the skills patch and the editorconfig, so every template already has them under the same names and ids. The agent reads the templates' weft.toml to confirm the extends line and says so. Had java kept scaffolding of its own that the others want, the agent would move it into base, gated if only some stacks want it and narrowed per stack with [refine], and then weft check base and every template that extends it. Copying the patch files into the other templates is wrong: they would clash with the inherited patches.",
       "assertions": [
-        "Follows the house practice of portable patches for root-level files",
-        "States the two portability constraints and verifies them on the actual patch files",
-        "Copies the files and runs weft check in every host template",
-        "Does not claim that weft cannot mount at the root or has no base-template mechanism",
-        "Does not migrate the templates to extends without being asked"
+        "Finds that the templates extend base, which already carries both patches",
+        "Does not copy a patch file into a template that inherits it",
+        "Moves scaffolding several templates want into base rather than copying it between templates",
+        "Does not claim that weft cannot mount at the root or has no base-template mechanism"
       ]
     },
     {
@@ -79,7 +78,7 @@
     {
       "id": 8,
       "prompt": "The java template is a six-deep chain: base, gradle, gradle-wrapper, testing, formatter, linter. Split it up.",
-      "expected_output": "Not a template split but a graph repair inside one template: the agent explains chains come from recording on latest, checks which links anchor on the previous patch's lines (the build.gradle.kts edits), and re-parents the independent ones by editing their depends_on to base by hand (there is no weft patch rebase), or re-records them with --base base, leaving the legitimate chain. weft check proves the render and commutation afterwards.",
+      "expected_output": "Not a template split but a graph repair inside one template: the agent explains chains come from recording on latest, checks which links anchor on the previous patch's lines (the build.gradle.kts edits), and re-parents the independent ones by editing their depends_on to base by hand (there is no weft patch rebase), or re-records them with --base base. Links that anchor on the previous patch's lines in the plugins and dependencies blocks stay: weft share does not apply, because one patch creates build.gradle.kts and the others change it. weft check proves the render and commutation afterwards.",
       "assertions": [
         "Identifies this as a dependency-shape problem, not a composition problem",
         "Distinguishes links that anchor on the previous patch from links recorded on latest by habit",

@@ -5,12 +5,13 @@
     {
       "id": 1,
       "prompt": "Create a weft template for a FastAPI service.",
-      "expected_output": "First a check that no fastapi template already exists in the templates directory and that uv is installed. Then a written patch list (base via uv init --exec, app, ruff, pytest, ci gated on use_ci, docker gated on use_docker), a weft.toml with project_name, a computed package_name and the two use_* bools with defaults, a .weftignore covering .venv, uv.lock and caches, one session per patch with --base base, hooks verify-uv and uv-sync, a with-docker preset, AGENTS.md, and a scaffold whose import succeeds.",
+      "expected_output": "First a check that no fastapi template already exists in the templates directory and that uv is installed. Then a written patch list (fastapi as the root via uv init --exec on base's root, app, ruff, pytest, ci gated on use_ci, docker gated on use_docker), a weft.toml that extends ../base with a computed package_name, the two use_* bools with defaults and [refine] tables rather than redeclared base questions, a .weftignore covering .venv, uv.lock and caches, one session per patch with --base fastapi, hooks verify-uv and uv-sync with uv-sync before git-commit, a with-docker preset, AGENTS.md, and a scaffold whose import succeeds.",
       "assertions": [
         "Lists the patches with names, titles, gates and bases before starting a session",
-        "Records base with --exec and passes the project name to uv init explicitly",
-        "Declares no question for the package manager, linter, or Python version",
-        "Records ruff, pytest and ci with --base base rather than the default latest",
+        "Extends base and names the root after the template, not base",
+        "Records the root with --exec and passes the project name to uv init explicitly",
+        "Declares no question for the package manager, linter, or Python version, and does not redeclare base's questions",
+        "Records ruff, pytest and ci with --base on the root rather than the default latest",
         "Runs weft check with answers and with the preset, and scaffolds once with hooks to prove the result imports"
       ]
     },
