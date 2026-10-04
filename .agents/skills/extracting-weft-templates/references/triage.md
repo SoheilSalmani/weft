@@ -70,7 +70,7 @@ Read `Makefile`, `justfile`, `package.json` scripts, `scripts/`, the CI workflow
 | `uv sync`, `pnpm install`, `gradle build`, `dbt deps`, code generation | `<tool>-<verb>` post / setup with `--input glob:<the manifest it reads>` |
 | `pre-commit install`, `husky`, hooks installation | post / setup with no inputs (once) |
 | a format target | `<tool>-format` post / setup, `--after` the install hook |
-| `git init`, first commit | `git-init`, `git-commit` on `base`, no inputs, `--after` the setup hooks |
+| `git init`, first commit | nothing: base's `git-init` and `git-commit`; a setup hook whose output belongs in the first commit takes `--before git-commit` |
 | deploy, publish, release | post / deploy, `--when deploy_to_<target>`, described as external and irreversible |
 | a target that runs the product (`make run`, `make test` on product tests) | not a hook; leave it |
 

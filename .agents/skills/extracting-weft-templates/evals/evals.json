@@ -5,12 +5,13 @@
     {
       "id": 1,
       "prompt": "Turn ~/code/payments (a FastAPI service) into a weft template.",
-      "expected_output": "The agent checks .weft/state.toml (absent) and the templates directory, copies the project to a disposable directory, declares project_name (answer Payments), a computed package_name, use_docker and use_ci, seeds .weftignore from .gitignore plus uv.lock, adopts the copy with a scope covering pyproject.toml, main.py, README.md, .gitignore, Dockerfile and .github/**, trims pyproject.toml and main.py of stripe and the charge route, commits base, docker (--when use_docker) and ci (--when use_ci --depends-on base), adds verify-uv and uv-sync hooks from the Makefile, then renders fresh and diffs against the project, reporting src/, tests/, .env and Makefile as what stayed behind.",
+      "expected_output": "The agent checks .weft/state.toml (absent) and the templates directory, copies the project to a disposable directory, writes a template that extends ../base and declares project_name only through [refine], with a computed package_name, use_docker and use_ci, seeds .weftignore from .gitignore plus uv.lock, adopts the copy with a scope covering pyproject.toml, main.py, README.md, .gitignore, Dockerfile and .github/**, trims pyproject.toml and main.py of stripe and the charge route, keeps base's lines in README.md and .gitignore, commits the root svc with --depends-on base, then docker (--when use_docker) and ci (--when use_ci) with --depends-on svc, adds verify-uv and a uv-sync hook ordered --before git-commit from the Makefile, then renders fresh and diffs against the project, reporting src/, tests/, .env and Makefile as what stayed behind.",
       "assertions": [
         "Works on a copy, not on ~/code/payments itself",
         "Passes --scope on adopt and answers the gates true",
         "Trims product dependencies and routes before staging rather than promoting them",
-        "Uses --depends-on base to keep ci independent of docker",
+        "Names the root after the template, depends it on base, and keeps ci independent of docker with --depends-on on the root",
+        "Records README.md and .gitignore as additions to base's files, not replacements",
         "Does not promote .env, uv.lock, src/ or tests/",
         "Runs the coverage diff and reads it back"
       ]

@@ -105,7 +105,7 @@ weft hook add app --id uv-sync --phase post --effect setup \
 
 - `check` is read-only and safe to auto-run. `setup` must be idempotent. `deploy` is external and irreversible; it is confirmed, never assumed, and gated with `--when` on an explicit answer.
 - A post hook without `inputs` runs only on the first `weft new`. Use that for `git init`. Anything else declares `glob:`, `answer:` or `hook:` inputs.
-- Ordering across patches is `--after <hook-id>`; references to hooks on inactive patches are ignored, so a finalize hook lists every possible predecessor.
+- Ordering across patches is `--after <hook-id>`, or `--before <hook-id>` from the other side: a template that extends a base orders its setup hooks ahead of the base's `git-commit` with `--before git-commit`, because a base cannot name its extenders' hooks. References to hooks on inactive patches are ignored, so a finalize hook lists every possible predecessor.
 - Recording and committing never run hooks. `weft new --skip-tasks` renders without them.
 
 ## Changing a patch that already shipped
