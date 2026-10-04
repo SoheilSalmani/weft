@@ -509,6 +509,56 @@ fn a_plain_directory_needs_a_template_and_honours_its_scope() {
         .stdout(contains("src/lib.rs"));
 }
 
+#[test]
+fn a_scoped_adopt_commits_one_patch_after_another_on_a_template_with_patches() {
+    let tmp = tempfile::tempdir().unwrap();
+    // The template already renders README.md, which the scope leaves out.
+    let (tpl, _proj) = template_and_project(tmp.path());
+    let plain = tmp.path().join("plain");
+    fs::create_dir_all(plain.join("docker")).unwrap();
+    fs::write(plain.join("docker/Dockerfile"), "FROM alpine\n").unwrap();
+    fs::write(plain.join("docker/entrypoint.sh"), "exec \"$@\"\n").unwrap();
+    weft()
+        .args(["session", "adopt", ".", "-n", "dk", "--template"])
+        .arg(&tpl)
+        .args([
+            "--answer",
+            "project_name=Demo",
+            "--scope",
+            "docker/**",
+            "--non-interactive",
+        ])
+        .current_dir(&plain)
+        .assert()
+        .success();
+    weft()
+        .args(["add", "docker/Dockerfile"])
+        .current_dir(&plain)
+        .assert()
+        .success();
+
+    weft()
+        .args(["commit", "--name", "docker", "--yes"])
+        .current_dir(&plain)
+        .assert()
+        .success()
+        .stderr(contains("1 file(s) still uncommitted"));
+    let patch = fs::read_to_string(tpl.join("patches/docker.json")).unwrap();
+    assert!(patch.contains("docker/Dockerfile"), "{patch}");
+    assert!(!patch.contains("README.md"), "{patch}");
+
+    // The session stacked on `docker` and still sees only its scope.
+    weft()
+        .args(["commit", "--name", "entrypoint", "--yes"])
+        .current_dir(&plain)
+        .assert()
+        .success();
+    let patch = fs::read_to_string(tpl.join("patches/entrypoint.json")).unwrap();
+    assert!(patch.contains("docker/entrypoint.sh"), "{patch}");
+    assert!(patch.contains("\"docker\""), "stacked on docker: {patch}");
+    assert!(!patch.contains("Dockerfile"), "{patch}");
+}
+
 // ---- placing the patch ----------------------------------------------------
 
 /// Two independent patches in the base, so a third can choose its parents.

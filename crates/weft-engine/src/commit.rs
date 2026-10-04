@@ -130,6 +130,7 @@ pub fn run(
         base_tree,
         base_trace,
         work_tree: full_work,
+        scope,
         worktree_root,
     } = session_trees(&template, &opts.session, interaction)?;
     let eval = StarlarkEval;
@@ -410,7 +411,7 @@ pub fn run(
              the answers with `weft session refresh`"
         );
     }
-    if gate_open && replayed.hash() != work_tree.hash() {
+    if gate_open && seen_hash(&replayed, scope.as_ref()) != work_tree.hash() {
         bail!(
             "replaying the recorded patch does not reproduce the worktree \
              (likely an ambiguous hunk context); refusing to write a broken patch"
@@ -531,7 +532,7 @@ pub fn run(
             with_shared.push(filling);
             let replayed = crate::compose::render_composed(&with_shared, &answers, &parts, &eval)
                 .context("replaying this patch as a fill of the shared file")?;
-            if gate_open && replayed.hash() != work_tree.hash() {
+            if gate_open && seen_hash(&replayed, scope.as_ref()) != work_tree.hash() {
                 bail!("sharing the file would change what this patch renders; nothing was written");
             }
             let written = crate::share::write(&template, &plan)?;
@@ -611,14 +612,15 @@ pub fn run(
     match link {
         CommitLink::Stack => {
             // Advance the base to include this patch; the next patch depends on
-            // it. The stored tree hash is the staged tree, which is exactly
-            // `render(base + patch)`.
+            // it. The stored tree hash is the full `render(base + patch)`: the
+            // replay check proved it is the staged tree, cut to the session's
+            // scope when the session has one.
             let mut base = sess.session.base.clone();
             base.push(new_id);
             Session {
                 session: SessionMeta {
                     base,
-                    tree_hash: work_tree.hash(),
+                    tree_hash: replayed.hash(),
                     ..sess.session
                 },
                 answers: sess.answers.clone(),
@@ -688,6 +690,15 @@ fn eval_gate(expr: &StarlarkExpr, answers: &AnswerSet) -> Result<bool> {
     Ok(StarlarkEval.eval_bool(expr, answers)?)
 }
 
+/// The hash of `tree`, a full render, as the session sees it: cut to the
+/// globs an adopted project opted in with, if it has any.
+fn seen_hash(tree: &weft_core::Tree, scope: Option<&globset::GlobSet>) -> String {
+    match scope {
+        None => tree.hash(),
+        Some(scope) => crate::stage::in_scope(tree, scope, false).hash(),
+    }
+}
+
 /// The reconstructed state of the active record session: resolved answers,
 /// the pinned base (root patches + mounted single includes, plus the foreach
 /// sample), the composed base tree, and the current worktree. Shared by
@@ -701,6 +712,10 @@ pub struct SessionTrees<'t> {
     /// Where every line of the base came from (the same render).
     pub base_trace: weft_core::Trace,
     pub work_tree: weft_core::Tree,
+    /// The globs an adopted project opted in with (`None`: the whole tree).
+    /// `base_tree` and `work_tree` are already cut to them; a fresh render of
+    /// the template must be cut the same way before it is compared.
+    pub scope: Option<globset::GlobSet>,
     /// Where this session's worktree lives (it may be anywhere on disk).
     pub worktree_root: Utf8PathBuf,
 }
@@ -750,6 +765,7 @@ pub fn session_trees<'t>(
         base_tree,
         base_trace,
         work_tree,
+        scope: (!unrestricted).then_some(scope),
         worktree_root,
     })
 }
