@@ -147,9 +147,9 @@ pub fn plan<'a>(
 }
 
 /// Topologically order one phase's hooks: base order is the input order
-/// (composed render order + declaration order); `after` and `before` add
-/// edges, resolved to namespaced ids. References to hooks outside this set
-/// (other phase / inactive node / unknown) are ignored.
+/// (composed render order + declaration order); `after`, `before` and
+/// `hook:` inputs add edges, resolved to namespaced ids. References to hooks
+/// outside this set (other phase / inactive node / unknown) are ignored.
 fn order_phase(hooks: Vec<PlannedHook<'_>>) -> Result<Vec<PlannedHook<'_>>> {
     let index: BTreeMap<&str, usize> = hooks
         .iter()
@@ -160,7 +160,7 @@ fn order_phase(hooks: Vec<PlannedHook<'_>>) -> Result<Vec<PlannedHook<'_>>> {
     let mut indegree = vec![0usize; hooks.len()];
     let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); hooks.len()];
     for (i, h) in hooks.iter().enumerate() {
-        for dep in &h.hook.after {
+        for dep in runs_after(h.hook) {
             if let Some(&j) = index.get(h.qualify(dep).as_str()) {
                 indegree[i] += 1;
                 dependents[j].push(i);
@@ -203,21 +203,35 @@ fn order_phase(hooks: Vec<PlannedHook<'_>>) -> Result<Vec<PlannedHook<'_>>> {
         .collect())
 }
 
+/// The hooks `hook` runs after: its `after` list, and the hooks its `hook:`
+/// inputs name (such an input fires only once the hook it names has run, so
+/// it orders the two the same way).
+fn runs_after(hook: &Hook) -> impl Iterator<Item = &HookId> {
+    hook.after
+        .iter()
+        .chain(hook.inputs.iter().filter_map(|input| match input {
+            HookInput::Hook(id) => Some(id),
+            HookInput::Glob(_) | HookInput::Answer(_) => None,
+        }))
+}
+
 /// Restrict post-hooks to those that should fire on `weft update`: the hook
 /// is on (`when`, in its frame) and one of its inputs changed. Glob inputs
 /// match `changes.paths` under the hook's mount with the mount stripped;
 /// answer inputs consult the changed answers of the hook's frame (a frame
-/// with no entry has no changed answers); `hook:` inputs name planned
-/// post-hooks. A hook with no inputs never re-fires on update (only on
-/// initial scaffold), which mirrors "copy-only" tasks.
+/// with no entry has no changed answers); a `hook:` input fires when the
+/// hook it names fires in this run. A hook with no inputs never re-fires on
+/// update (only on initial scaffold), which mirrors "copy-only" tasks.
 pub fn fire_on_update_planned<'p, 't>(
     post: &'p [PlannedHook<'t>],
     changes: &ChangeSet,
     changed_answers_by_frame: &BTreeMap<Vec<(String, String)>, BTreeSet<AnswerId>>,
     eval: &dyn ExprEval,
 ) -> Result<Vec<&'p PlannedHook<'t>>> {
-    let planned: BTreeSet<&str> = post.iter().map(|h| h.id.as_str()).collect();
     let no_answers = BTreeSet::new();
+    // `post` is ordered, and a `hook:` input orders its hook after the one it
+    // names, so every upstream hook is decided before its dependents.
+    let mut fired: BTreeSet<&str> = BTreeSet::new();
     let mut fire = Vec::new();
     for hook in post {
         // hook-level gate first
@@ -241,11 +255,12 @@ pub fn fire_on_update_planned<'p, 't>(
                             .any(|p| matcher.is_match(p.as_std_path()))
                     }
                     HookInput::Answer(id) => changed_answers.contains(id),
-                    HookInput::Hook(id) => planned.contains(hook.qualify(id).as_str()),
+                    HookInput::Hook(id) => fired.contains(hook.qualify(id).as_str()),
                 },
             )
         })?;
         if changed {
+            fired.insert(hook.id.as_str());
             fire.push(hook);
         }
     }
@@ -454,7 +469,8 @@ fn static_hooks<'t>(template: &'t Template, prefix: &str, out: &mut Vec<StaticHo
 /// post-hooks, parseable `when`/command expressions, known answers, and
 /// `after`/`inputs:hook:` references that resolve against the composed
 /// namespaced id set (root ids plus every include's `<include>/<id>`,
-/// recursively); no `after`/`before` cycle anywhere in the composed set. Included
+/// recursively); no cycle among the `after`, `before` and `hook:` input
+/// edges anywhere in the composed set. Included
 /// templates' own hooks are validated by their own check (which `weft
 /// check` recurses into), not repeated here. Returns human-readable issue
 /// strings.
@@ -549,7 +565,7 @@ pub fn validate_all(template: &Template) -> Vec<String> {
     let mut indegree = vec![0usize; all.len()];
     let mut deps: Vec<Vec<usize>> = vec![Vec::new(); all.len()];
     for (i, h) in all.iter().enumerate() {
-        for a in &h.hook.after {
+        for a in runs_after(h.hook) {
             if let Some(&j) = index.get(namespaced(&h.prefix, &a.0).as_str()) {
                 indegree[i] += 1;
                 deps[j].push(i);
@@ -801,6 +817,31 @@ mod tests {
             fire_on_update_planned(&post, &changes, &by_frame, &weft_lang::StarlarkEval).unwrap();
         let ids: Vec<&str> = fired.iter().map(|h| h.id.as_str()).collect();
         assert_eq!(ids, ["web/cfg"]);
+    }
+
+    #[test]
+    fn a_hook_input_fires_only_when_the_hook_it_names_ran() {
+        // `codegen` is declared first; its `hook:install` input must still
+        // run it after `install`, and only on an update that ran `install`.
+        let mut codegen = hook("codegen", &[]);
+        codegen.inputs = vec![HookInput::Hook("install".into())];
+        let mut install = hook("install", &[]);
+        install.inputs = vec![HookInput::Glob("package.json".into())];
+        let post =
+            order_phase(vec![planned(&codegen, &[], ""), planned(&install, &[], "")]).unwrap();
+        let fired = |changed: &str| -> Vec<String> {
+            let changes = ChangeSet {
+                paths: [Utf8PathBuf::from(changed)].into(),
+                answers: BTreeSet::new(),
+            };
+            fire_on_update_planned(&post, &changes, &BTreeMap::new(), &weft_lang::StarlarkEval)
+                .unwrap()
+                .iter()
+                .map(|h| h.id.clone())
+                .collect()
+        };
+        assert!(fired("README.md").is_empty());
+        assert_eq!(fired("package.json"), ["install", "codegen"]);
     }
 
     /// A parent mounting a child at `apps/web`; the child has one `guard`
