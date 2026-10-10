@@ -82,6 +82,7 @@ pub fn run(
     let answers::Gathered {
         answers: resolved,
         entered,
+        ..
     } = answers::gather_reviewed(
         &template,
         &parent_provided,

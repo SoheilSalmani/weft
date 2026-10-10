@@ -319,7 +319,8 @@ impl State {
     }
 
     /// Every stored answer — the root's, then each instance's — with where
-    /// it came from (what `weft answers` lists).
+    /// it came from (what `weft answers` lists, and `weft update` offers to
+    /// change).
     pub fn answer_rows(&self) -> Vec<AnswerRow> {
         let mut rows = frame_rows(&self.answers, &self.derived, &self.secrets, |id| {
             id.to_string()

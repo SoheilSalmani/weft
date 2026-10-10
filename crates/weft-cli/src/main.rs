@@ -71,7 +71,8 @@ enum Command {
     },
     /// Re-render against the current template state (and, with `--answer`
     /// & co., changed answers) and 3-way merge the changes over local edits.
-    /// In a terminal it puts each conflict to you before writing markers.
+    /// In a terminal it first offers the project's answers to change, asks
+    /// what the project never answered, and puts each conflict to you.
     Update {
         /// Scaffolded project directory (defaults to `.`).
         #[arg(default_value = ".")]
@@ -116,8 +117,8 @@ enum Command {
         /// Do not run template tasks after merging.
         #[arg(long)]
         skip_tasks: bool,
-        /// Never prompt: fail if new questions lack answers, and leave
-        /// conflicts marked in the files.
+        /// Never prompt: keep every answer, take new questions' defaults
+        /// (fail on one without), and leave conflicts marked in the files.
         #[arg(long)]
         non_interactive: bool,
         /// Fail if a remote include isn't already pinned in weft.lock (CI).
@@ -959,22 +960,32 @@ fn main() -> anyhow::Result<()> {
                 Some(dir) => (dir, None),
                 None => {
                     let located = source::locate_project(&state, to.as_deref(), offline)?;
-                    // Nothing to re-render when neither the source nor the
-                    // answers move, and no pending hook waits to run.
-                    let still = changes.is_empty() && state.state.pending_hooks.is_empty();
-                    if let (true, Some(s)) = (still, &located.stored) {
-                        if let Some(commit) = &s.commit {
-                            if s.template == state.state.template
-                                && state.state.commit.as_deref() == Some(commit)
-                            {
-                                eprintln!("up to date: {} at {}", s.template, git::short(commit));
-                                return Ok(());
-                            }
-                        }
-                    }
                     (located.dir, located.stored)
                 }
             };
+            let mut interaction = auto_interaction(non_interactive);
+            // A bare update in a terminal first offers the project's answers
+            // to change; flags already say what changes, and a dry run only
+            // previews.
+            let review = if !dry_run && changes.is_empty() && interaction.interactive() {
+                offer_answer_review(&state, interaction.as_mut())?
+            } else {
+                weft_engine::update::Review::default()
+            };
+            // Nothing to re-render when neither the source nor the answers
+            // move, and no held-back hook waits to run.
+            if changes.is_empty() && review.is_empty() && state.state.pending_hooks.is_empty() {
+                if let Some(s) = &stored {
+                    if let Some(commit) = &s.commit {
+                        if s.template == state.state.template
+                            && state.state.commit.as_deref() == Some(commit)
+                        {
+                            eprintln!("up to date: {} at {}", s.template, git::short(commit));
+                            return Ok(());
+                        }
+                    }
+                }
+            }
 
             let opts = weft_engine::update::UpdateOptions {
                 dest,
@@ -986,8 +997,8 @@ fn main() -> anyhow::Result<()> {
                 drop_instances: vec![],
                 answers: changes,
                 allow_dirty,
+                review,
             };
-            let mut interaction = auto_interaction(non_interactive);
             let mut resolver =
                 source::RemoteResolver::new(hub::registry_url(None).ok(), frozen).offline(offline);
             let report = weft_engine::update::run(&opts, &mut resolver, interaction.as_mut())?;
@@ -1008,26 +1019,12 @@ fn main() -> anyhow::Result<()> {
                 );
                 return Ok(());
             }
-            let width = rows.iter().map(|r| r.id.len()).max().unwrap_or(0);
-            let shown: Vec<String> = rows
-                .iter()
-                .map(|r| match (&r.value, &r.source) {
-                    (Some(v), _) => weft_engine::update::show_value(v),
-                    (None, Some(src)) => src.clone(),
-                    (None, None) => String::new(),
-                })
-                .collect();
-            let value_width = shown.iter().map(|s| s.chars().count()).max().unwrap_or(0);
-            for (row, value) in rows.iter().zip(&shown) {
-                println!(
-                    "{:width$}  {value:value_width$}  {}",
-                    row.id,
-                    row.origin.label()
-                );
+            for line in answer_lines(&rows) {
+                println!("{line}");
             }
             eprintln!(
-                "change one with `weft update --answer ID=VALUE`, or hand one back to its \
-                 default with `--unset ID`"
+                "change them with `weft update` in a terminal, one with `weft update --answer \
+                 ID=VALUE`, or hand one back to its default with `--unset ID`"
             );
             Ok(())
         }
@@ -2265,6 +2262,105 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
+}
+
+/// List the project's answers and ask whether to change any. On a yes, a
+/// project with include instances is asked whose answers to go through (its
+/// own, checked, and each instance's); `weft update` then asks every
+/// question of those again, offering its current value. Secrets are left
+/// out: they resolve from their source, never from an answer.
+fn offer_answer_review(
+    state: &weft_engine::state::State,
+    interaction: &mut dyn weft_engine::interact::Interaction,
+) -> anyhow::Result<weft_engine::update::Review> {
+    use weft_engine::state::AnswerOrigin;
+    use weft_engine::update::Review;
+    let rows: Vec<_> = state
+        .answer_rows()
+        .into_iter()
+        .filter(|row| row.origin != AnswerOrigin::Secret)
+        .collect();
+    if rows.is_empty() {
+        return Ok(Review::default());
+    }
+    eprintln!("answers:");
+    for line in answer_lines(&rows) {
+        eprintln!("  {line}");
+    }
+    if !interaction.confirm("Change any of these answers?", false)? {
+        return Ok(Review::default());
+    }
+    // The frames with answers to change, named as their answers are: the
+    // root, `svc`, `connector.stripe` (a key other than its include's name is
+    // a repeat instance, as `weft answers` reads it).
+    let mut frames: Vec<(Option<(String, String)>, String)> = Vec::new();
+    if rows.iter().any(|row| !row.id.contains('.')) {
+        frames.push((None, "the project's own".to_owned()));
+    }
+    for inst in &state.instances {
+        let label = if inst.key == inst.include {
+            inst.include.clone()
+        } else {
+            format!("{}.{}", inst.include, inst.key)
+        };
+        let prefix = format!("{label}.");
+        if rows.iter().any(|row| row.id.starts_with(&prefix)) {
+            frames.push((Some((inst.include.clone(), inst.key.clone())), label));
+        }
+    }
+    let picked = if frames.len() == 1 {
+        vec![0]
+    } else {
+        let labels: Vec<&str> = frames.iter().map(|(_, label)| label.as_str()).collect();
+        let mut checked = vec![false; frames.len()];
+        checked[0] = true;
+        interaction.pick(
+            "Whose answers? (space toggles, enter confirms)",
+            &labels,
+            &checked,
+        )?
+    };
+    let mut review = Review::default();
+    for i in picked {
+        match &frames[i].0 {
+            None => review.root = true,
+            Some(slot) => {
+                review.instances.insert(slot.clone());
+            }
+        }
+    }
+    if !review.is_empty() {
+        eprintln!(
+            "Enter keeps each value; giving a question its template default makes it follow \
+             the template again."
+        );
+    }
+    Ok(review)
+}
+
+/// Stored answers as aligned `id  value  origin` lines, values as you would
+/// type them (a secret shows its source reference).
+fn answer_lines(rows: &[weft_engine::state::AnswerRow]) -> Vec<String> {
+    let width = rows.iter().map(|r| r.id.len()).max().unwrap_or(0);
+    let shown: Vec<String> = rows
+        .iter()
+        .map(|r| match (&r.value, &r.source) {
+            (Some(v), _) => weft_engine::answers::show_value(v),
+            (None, Some(src)) => src.clone(),
+            (None, None) => String::new(),
+        })
+        .collect();
+    let value_width = shown.iter().map(|s| s.chars().count()).max().unwrap_or(0);
+    rows.iter()
+        .zip(&shown)
+        .map(|(row, value)| {
+            format!(
+                "{:width$}  {value:value_width$}  {}",
+                row.id,
+                row.origin.label()
+            )
+        })
+        .collect()
 }
 
 /// After `weft new` against a *local* template asked something, offer once

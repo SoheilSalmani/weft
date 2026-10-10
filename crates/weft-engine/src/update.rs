@@ -8,8 +8,13 @@
 //! starts from the *given* answers plus this run's changes, so defaults,
 //! computed values, and include binds re-derive.
 //!
-//! With a person at the terminal the update puts each conflict to them
-//! before writing it with markers; unattended, it leaves the markers.
+//! With a person at the terminal the update asks what the project never
+//! answered (questions new to the template, or behind a gate that opened),
+//! offering each default; asks every question of the frames in
+//! [`UpdateOptions::review`] again, offering its current value (giving a
+//! question its template default hands the answer back); and puts each
+//! conflict to them before writing it with markers. Unattended, it takes the
+//! defaults and leaves the markers.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -21,6 +26,7 @@ use weft_core::render::{narrow, ExprEval, RenderError, ValueOrigin};
 use weft_core::{AnswerId, AnswerSet, FileEntry, Question, Value};
 use weft_lang::StarlarkEval;
 
+use crate::answers::show_value;
 use crate::hooks::{self, ChangeSet};
 use crate::interact::Interaction;
 use crate::state::{State, StoredSource};
@@ -48,6 +54,24 @@ pub struct UpdateOptions {
     /// Write even when files this update touches have uncommitted git
     /// changes (otherwise refused, so git can review and undo the merge).
     pub allow_dirty: bool,
+    /// Whose answers a person asked to change in the terminal.
+    pub review: Review,
+}
+
+/// Whose answers a person asks to change in the terminal: every open
+/// question of these frames is asked again, offering its current value.
+#[derive(Debug, Clone, Default)]
+pub struct Review {
+    /// The project's own questions.
+    pub root: bool,
+    /// Include instances, as `(include, key)`.
+    pub instances: BTreeSet<(String, String)>,
+}
+
+impl Review {
+    pub fn is_empty(&self) -> bool {
+        !self.root && self.instances.is_empty()
+    }
 }
 
 /// Answer changes requested with an update: new values layered exactly like
@@ -193,13 +217,39 @@ pub fn run(
     old_answers.overlay(&presolved_secrets);
 
     // New side: the given answers plus this run's changes are the inputs;
-    // derived values re-derive, new questions get defaults or prompts.
+    // derived values re-derive. A person is asked what the project never
+    // answered (or, reviewing, everything), each offered its current value;
+    // a dry run previews with the defaults instead.
     let given = requested.root.apply(&state.answers);
-    let new_answers = answers::gather(&template, &given, &presolved_secrets, &eval, interaction)
-        .map_err(|e| stored_answer_hint(e, &requested.root.set, |id| id.to_string()))?;
+    let revisit = if opts.review.root {
+        answers::Revisit::all()
+    } else if opts.dry_run {
+        answers::Revisit::only(BTreeSet::new())
+    } else {
+        answers::Revisit::only(unanswered_questions(
+            &template.manifest.questions,
+            &old_answers,
+            &eval,
+        ))
+    };
+    let gathered = answers::gather_revisited(
+        &template,
+        &given,
+        &presolved_secrets,
+        &revisit,
+        &eval,
+        interaction,
+    )
+    .map_err(|e| stored_answer_hint(e, &requested.root.set, |id| id.to_string()))?;
+    // What a person typed at a prompt is set on this run, like `--answer`;
+    // what they handed back follows the template again, like `--unset`.
+    let mut set_now = requested.root.set.clone();
+    set_now.overlay(&gathered.entered);
+    let supplied = gathered.supplied(&given);
+    let new_answers = gathered.answers;
     let root_answers = answers::provenance(
         &template.manifest.questions,
-        &given,
+        &supplied,
         &BTreeSet::new(),
         &new_answers,
         &eval,
@@ -219,7 +269,7 @@ pub fn run(
             &old_answers,
             &new_answers,
             &root_answers,
-            &requested.root.set,
+            &set_now,
             |q, new_side| {
                 let scope = if new_side { &new_answers } else { &old_answers };
                 let default = q.default.as_ref().and_then(|d| eval.eval(d, scope).ok())?;
@@ -229,13 +279,7 @@ pub fn run(
         ),
         ..UpdateReport::default()
     };
-    note_gated_off(
-        &mut report,
-        &requested.root.set,
-        &root_answers,
-        &new_answers,
-        root_id,
-    );
+    note_gated_off(&mut report, &set_now, &root_answers, &new_answers, root_id);
 
     // Reconstruct the old composed tree: pinned parent base + per-instance
     // pinned child bases, all with the stored answers. Then produce the new
@@ -313,20 +357,25 @@ pub fn run(
         let slot = (inst.include.clone(), inst.key.clone());
         let changes = requested.instances.get(&slot).unwrap_or(&no_changes);
         let provided = changes.apply(&inst.answers);
-        let new_child_answers = compose::resolve_instance_answers(
+        let gathered = compose::resolve_instance_answers_revisited(
             inc,
             &inst.key,
             &new_answers,
             &provided,
             &child_secrets,
+            opts.review.instances.contains(&slot),
             &eval,
             interaction,
         )
         .map_err(|e| stored_answer_hint(e, &changes.set, |id| inst.flat_id(inc.decl.repeat, id)))?;
+        let mut set_now = changes.set.clone();
+        set_now.overlay(&gathered.entered);
+        let supplied = gathered.supplied(&provided);
+        let new_child_answers = gathered.answers;
         let binds = compose::bind_ids(&template, &inst.include);
         let child_answers = answers::provenance(
             &inc.template.manifest.questions,
-            &provided,
+            &supplied,
             &binds,
             &new_child_answers,
             &eval,
@@ -354,7 +403,7 @@ pub fn run(
                 &old_child_answers,
                 &new_child_answers,
                 &child_answers,
-                &changes.set,
+                &set_now,
                 |q, new_side| match inc.decl.bind.get(&q.id.0) {
                     Some(bind) => eval
                         .eval(bind, if new_side { &new_scope } else { &old_scope })
@@ -374,7 +423,7 @@ pub fn run(
             ));
             note_gated_off(
                 &mut report,
-                &changes.set,
+                &set_now,
                 &child_answers,
                 &new_child_answers,
                 flat,
@@ -1011,20 +1060,6 @@ fn print_answer_report(report: &UpdateReport) {
     }
 }
 
-/// An answer value as the user would type it: strings quoted.
-pub fn show_value(value: &Value) -> String {
-    match value {
-        Value::String(s) => format!("{s:?}"),
-        Value::Bool(b) => b.to_string(),
-        Value::Int(i) => i.to_string(),
-        Value::List(items) => format!(
-            "[{}]",
-            items.iter().map(show_value).collect::<Vec<_>>().join(", ")
-        ),
-        Value::Secret(_) => "<secret>".to_owned(),
-    }
-}
-
 fn show_opt(value: Option<&Value>) -> String {
     value.map(show_value).unwrap_or_else(|| "(none)".to_owned())
 }
@@ -1213,6 +1248,27 @@ fn changed_answers(old: &AnswerSet, new: &AnswerSet) -> BTreeSet<AnswerId> {
             (a, b) => a != b,
         })
         .cloned()
+        .collect()
+}
+
+/// The root questions the project never answered under an open gate: new to
+/// the template, or gated off when it last rendered. A person is asked these
+/// on update, each offered its default (or the answer they gave before its
+/// gate closed), instead of having the default taken for them.
+fn unanswered_questions(
+    questions: &[Question],
+    old: &AnswerSet,
+    eval: &dyn ExprEval,
+) -> BTreeSet<AnswerId> {
+    questions
+        .iter()
+        .filter(|q| {
+            !old.contains(&q.id)
+                || q.when
+                    .as_ref()
+                    .is_some_and(|when| !eval.eval_bool(when, old).unwrap_or(false))
+        })
+        .map(|q| q.id.clone())
         .collect()
 }
 
@@ -1424,7 +1480,45 @@ pub fn finish(report: &UpdateReport) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use weft_core::{AnswerKind, StarlarkExpr};
+    use weft_lang::StarlarkEval;
+
     use super::*;
+
+    fn question(id: &str, when: Option<&str>) -> Question {
+        Question {
+            id: AnswerId::from(id),
+            kind: AnswerKind::String,
+            prompt: None,
+            description: None,
+            example: None,
+            default: Some(StarlarkExpr("'x'".to_owned())),
+            when: when.map(|w| StarlarkExpr(w.to_owned())),
+            computed: false,
+            section: None,
+            narrowing: Default::default(),
+        }
+    }
+
+    #[test]
+    fn unanswered_questions_are_new_ones_and_ones_whose_gate_was_closed() {
+        let questions = vec![
+            question("name", None),
+            question("use_docker", None),
+            question("registry", Some("use_docker")),
+            question("license", None),
+        ];
+        let mut old = AnswerSet::new();
+        old.insert(AnswerId::from("name"), Value::String("Acme".into()));
+        old.insert(AnswerId::from("use_docker"), Value::Bool(false));
+        // The stand-in a gated-off question renders with.
+        old.insert(AnswerId::from("registry"), Value::String("x".into()));
+        let ids: Vec<String> = unanswered_questions(&questions, &old, &StarlarkEval)
+            .into_iter()
+            .map(|id| id.0)
+            .collect();
+        assert_eq!(ids, ["license", "registry"]);
+    }
 
     /// Picks menu entries in order and saves `edited` from the editor.
     struct Picker {

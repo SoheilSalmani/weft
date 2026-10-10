@@ -358,6 +358,7 @@ impl WeftMcp {
                 ..Default::default()
             },
             allow_dirty: p.allow_dirty,
+            review: Default::default(),
         };
         let report = crate::source::with_resolver(|r| {
             weft_engine::update::run(&opts, r, &mut NonInteractive)

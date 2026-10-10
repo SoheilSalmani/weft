@@ -79,6 +79,17 @@ pub trait Interaction {
         Ok(default)
     }
 
+    /// Pick any of `items`, starting from `checked`; an unattended run keeps
+    /// what is checked.
+    fn pick(&mut self, prompt: &str, items: &[&str], checked: &[bool]) -> Result<Vec<usize>> {
+        let _ = (prompt, items);
+        Ok(checked
+            .iter()
+            .enumerate()
+            .filter_map(|(i, on)| on.then_some(i))
+            .collect())
+    }
+
     /// A line of text, `default` when nobody types one.
     fn text(&mut self, prompt: &str, default: &str) -> Result<String> {
         let _ = prompt;
@@ -229,6 +240,14 @@ impl Interaction for TerminalInteraction {
             .with_prompt(prompt)
             .items(items)
             .default(default)
+            .interact()?)
+    }
+
+    fn pick(&mut self, prompt: &str, items: &[&str], checked: &[bool]) -> Result<Vec<usize>> {
+        Ok(dialoguer::MultiSelect::new()
+            .with_prompt(prompt)
+            .items(items)
+            .defaults(checked)
             .interact()?)
     }
 

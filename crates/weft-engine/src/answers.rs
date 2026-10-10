@@ -194,6 +194,20 @@ pub fn placeholder_secrets(questions: &[Question]) -> AnswerSet {
         .collect()
 }
 
+/// An answer value as the user would type it: strings quoted.
+pub fn show_value(value: &Value) -> String {
+    match value {
+        Value::String(s) => format!("{s:?}"),
+        Value::Bool(b) => b.to_string(),
+        Value::Int(i) => i.to_string(),
+        Value::List(items) => format!(
+            "[{}]",
+            items.iter().map(show_value).collect::<Vec<_>>().join(", ")
+        ),
+        Value::Secret(_) => "<secret>".to_owned(),
+    }
+}
+
 /// Walk questions in declaration order and produce the complete answer set:
 /// `when`-gated questions are skipped, provided answers win, secrets resolve
 /// through their source, defaults evaluate, and anything left is prompted.
@@ -214,20 +228,38 @@ pub fn gather(
         questions,
         provided,
         presolved_secrets,
-        None,
+        Ask::Unanswered,
         eval,
         interaction,
     )?
     .answers)
 }
 
-/// What [`gather_reviewed`] resolved, and which of it a person typed.
+/// What [`gather_reviewed`] and [`gather_revisited`] resolved, and what a
+/// person did at the prompts.
 pub struct Gathered {
     /// Every question's answer, as [`gather`] resolves it.
     pub answers: AnswerSet,
     /// The answers typed at a prompt. A default accepted as offered is not
     /// among them, so it stays derived and keeps following the template.
     pub entered: AnswerSet,
+    /// Answers a person handed back to the template ([`gather_revisited`]):
+    /// asked a question whose current answer is an input, they gave the
+    /// value its bind or default gives. They are stored as derived again.
+    pub released: BTreeSet<AnswerId>,
+}
+
+impl Gathered {
+    /// The inputs a frame keeps after the prompts: `provided` with what was
+    /// typed laid over it and what was handed back taken out.
+    pub fn supplied(&self, provided: &AnswerSet) -> AnswerSet {
+        let mut supplied = provided.clone();
+        supplied.overlay(&self.entered);
+        for id in &self.released {
+            supplied.remove(id);
+        }
+        supplied
+    }
 }
 
 /// [`gather`] for a person choosing answers from scratch (`weft new`,
@@ -252,24 +284,135 @@ pub fn gather_reviewed(
         questions,
         provided,
         &none,
-        Some(constraints),
+        Ask::Open(constraints),
         eval,
         interaction,
     )
 }
 
-/// The question walk behind [`gather`] and [`gather_reviewed`]. `review`
-/// holds the presets' constraints when a person reviews every open question.
+/// How [`gather_revisited`] puts a frame's questions to a person again.
+pub struct Revisit {
+    /// The questions asked again, each offering its current value; `None`
+    /// asks every open question.
+    pub questions: Option<BTreeSet<AnswerId>>,
+    /// The values an include's binds give its questions: what an answer goes
+    /// back to when a person hands it back. A question without one goes back
+    /// to its default.
+    pub binds: AnswerSet,
+    /// Names the include instance the questions belong to, ahead of each
+    /// prompt (`svc`, `connector.stripe`).
+    pub label: Option<String>,
+}
+
+impl Revisit {
+    /// Ask every open question again: a person reviewing the answers.
+    pub fn all() -> Self {
+        Revisit {
+            questions: None,
+            binds: AnswerSet::new(),
+            label: None,
+        }
+    }
+
+    /// Ask only these again: the questions the project never answered under
+    /// an open gate (new to the template, or behind a gate that has just
+    /// opened).
+    pub fn only(ids: BTreeSet<AnswerId>) -> Self {
+        Revisit {
+            questions: Some(ids),
+            ..Revisit::all()
+        }
+    }
+
+    fn includes(&self, id: &AnswerId) -> bool {
+        self.questions.as_ref().is_none_or(|ids| ids.contains(id))
+    }
+
+    /// What `q`'s answer goes back to when handed back: its bind, else its
+    /// default over the answers resolved so far.
+    fn fallback(&self, q: &Question, resolved: &AnswerSet, eval: &dyn ExprEval) -> Option<Value> {
+        match self.binds.get(&q.id) {
+            Some(bound) => narrow(q, bound.clone(), ValueOrigin::Input).ok(),
+            None => {
+                let value = eval.eval(q.default.as_ref()?, resolved).ok()?;
+                narrow(q, value, ValueOrigin::Default).ok()
+            }
+        }
+    }
+
+    /// `q` as a person is asked it: under the instance's label, and naming
+    /// the template's default when giving it would hand the answer back.
+    fn shown<'q>(&self, q: &'q Question, fallback: Option<&Value>) -> Cow<'q, Question> {
+        if self.label.is_none() && fallback.is_none() {
+            return Cow::Borrowed(q);
+        }
+        let mut prompt = q.prompt.clone().unwrap_or_else(|| q.id.to_string());
+        if let Some(label) = &self.label {
+            prompt = format!("{label} · {prompt}");
+        }
+        if let Some(value) = fallback {
+            prompt = format!("{prompt} (template default: {})", show_value(value));
+        }
+        let mut shown = q.clone();
+        shown.prompt = Some(prompt);
+        Cow::Owned(shown)
+    }
+}
+
+/// [`gather`] for a project whose answers a person revisits (`weft update`):
+/// each question `revisit` names is asked, offering its current value (the
+/// provided answer, else its default) rather than taking it; every other
+/// question resolves as [`gather`] resolves it, so only a question nothing
+/// answers is asked besides. A revisited question whose answer is an input
+/// that differs from its bind or default names that value, and giving it
+/// hands the answer back ([`Gathered::released`]).
+///
+/// [`NonInteractive`](crate::interact::NonInteractive) takes every offered
+/// value, so an unattended run resolves exactly as [`gather`] does.
+pub fn gather_revisited(
+    template: &Template,
+    provided: &AnswerSet,
+    presolved_secrets: &AnswerSet,
+    revisit: &Revisit,
+    eval: &dyn ExprEval,
+    interaction: &mut dyn Interaction,
+) -> Result<Gathered> {
+    walk(
+        &template.manifest.questions,
+        provided,
+        presolved_secrets,
+        Ask::Revisit(revisit),
+        eval,
+        interaction,
+    )
+}
+
+/// Which questions a [`walk`] puts to a person.
+#[derive(Clone, Copy)]
+enum Ask<'a> {
+    /// [`gather`]: only a question nothing answers (no input, no default).
+    Unanswered,
+    /// [`gather_reviewed`]: every open question no input answered, offering
+    /// its default, with the presets' constraints applied.
+    Open(&'a PresetConstraints),
+    /// [`gather_revisited`]: the questions named, offering their current
+    /// value, plus any question nothing answers.
+    Revisit(&'a Revisit),
+}
+
+/// The question walk behind [`gather`], [`gather_reviewed`] and
+/// [`gather_revisited`]; `ask` decides which questions a person sees.
 fn walk(
     questions: &[Question],
     provided: &AnswerSet,
     presolved_secrets: &AnswerSet,
-    review: Option<&PresetConstraints>,
+    ask: Ask<'_>,
     eval: &dyn ExprEval,
     interaction: &mut dyn Interaction,
 ) -> Result<Gathered> {
     let mut resolved = AnswerSet::new();
     let mut entered = AnswerSet::new();
+    let mut released = BTreeSet::new();
     for q in questions {
         if let Some(when) = &q.when {
             let asked = eval
@@ -309,10 +452,15 @@ fn walk(
             continue;
         }
         // A preset's starting selection answers the question for `gather`,
-        // and is only an offer to a person reviewing.
-        let prefilled = review.is_some_and(|r| r.prefilled.contains(&q.id));
+        // and is only an offer to a person reviewing; so is the current
+        // answer of a question a person revisits.
+        let offer_input = match ask {
+            Ask::Unanswered => false,
+            Ask::Open(r) => r.prefilled.contains(&q.id),
+            Ask::Revisit(r) => r.includes(&q.id),
+        };
         let value = match provided.get(&q.id) {
-            Some(v) if !prefilled => narrow(q, v.clone(), ValueOrigin::Input)?,
+            Some(v) if !offer_input => narrow(q, v.clone(), ValueOrigin::Input)?,
             start => {
                 let offered = if let Some(v) = start {
                     Some(narrow(q, v.clone(), ValueOrigin::Input)?)
@@ -326,13 +474,27 @@ fn walk(
                 } else {
                     None
                 };
-                let shown = review.map_or(Cow::Borrowed(q), |r| r.shown(q));
+                // A revisited input that differs from what handing it back
+                // gives names that value; giving it hands the answer back.
+                let fallback = match ask {
+                    Ask::Revisit(r) if start.is_some() && r.includes(&q.id) => r
+                        .fallback(q, &resolved, eval)
+                        .filter(|f| offered.as_ref().is_some_and(|o| !same_answer(o, f))),
+                    _ => None,
+                };
+                let (shown, asking) = match ask {
+                    Ask::Unanswered => (Cow::Borrowed(q), false),
+                    Ask::Open(r) => (r.shown(q), true),
+                    Ask::Revisit(r) => (r.shown(q, fallback.as_ref()), r.includes(&q.id)),
+                };
                 match offered {
-                    Some(v) if review.is_none() || !shown.is_promptable() => v,
+                    Some(v) if !asking || !shown.is_promptable() => v,
                     offered => {
                         let answer = interaction.ask(&shown, offered.as_ref())?;
                         let answer = narrow(q, answer, ValueOrigin::Input)?;
-                        if !offered.is_some_and(|o| same_answer(&o, &answer)) {
+                        if fallback.as_ref().is_some_and(|f| same_answer(f, &answer)) {
+                            released.insert(q.id.clone());
+                        } else if !offered.is_some_and(|o| same_answer(&o, &answer)) {
                             entered.insert(q.id.clone(), answer.clone());
                         }
                         answer
@@ -343,7 +505,11 @@ fn walk(
         resolved.insert(q.id.clone(), value);
     }
     let answers = weft_core::render::resolve_answers(questions, &resolved, eval)?;
-    Ok(Gathered { answers, entered })
+    Ok(Gathered {
+        answers,
+        entered,
+        released,
+    })
 }
 
 /// Split one frame's resolved answers into what a project stores:
@@ -682,7 +848,7 @@ mod tests {
             &docker_questions(),
             &none,
             &none,
-            Some(&PresetConstraints::default()),
+            Ask::Open(&PresetConstraints::default()),
             &StarlarkEval,
             &mut person,
         )
@@ -705,30 +871,166 @@ mod tests {
     }
 
     #[test]
-    fn an_unattended_review_resolves_like_gather() {
+    fn an_unattended_review_or_revisit_resolves_like_gather() {
         let provided = set(&[("name", "Acme")]);
         let none = AnswerSet::new();
         let questions = docker_questions();
-        let reviewed = walk(
-            &questions,
-            &provided,
+        let unattended = |ask: Ask<'_>| {
+            walk(
+                &questions,
+                &provided,
+                &none,
+                ask,
+                &StarlarkEval,
+                &mut crate::interact::NonInteractive,
+            )
+            .unwrap()
+        };
+        let gathered = unattended(Ask::Unanswered);
+        for walked in [
+            unattended(Ask::Open(&PresetConstraints::default())),
+            unattended(Ask::Revisit(&Revisit::all())),
+        ] {
+            assert_eq!(walked.answers, gathered.answers);
+            assert!(walked.entered.is_empty());
+        }
+    }
+
+    #[test]
+    fn revisiting_offers_each_current_answer_and_enters_only_changes() {
+        let mut person = Scripted {
+            replies: vec![
+                Value::String("Acme Corp".into()),
+                Value::String("acme corp".into()), // the re-derived slug, accepted
+                Value::Bool(true),                 // accepted
+                Value::String("ghcr.io".into()),
+            ],
+            ..Default::default()
+        };
+        let none = AnswerSet::new();
+        let revisited = walk(
+            &docker_questions(),
+            &set(&[("name", "Acme")]),
             &none,
-            Some(&PresetConstraints::default()),
+            Ask::Revisit(&Revisit::all()),
             &StarlarkEval,
-            &mut crate::interact::NonInteractive,
+            &mut person,
         )
         .unwrap();
-        let gathered = walk(
-            &questions,
-            &provided,
+        let offered: Vec<_> = person
+            .asked
+            .iter()
+            .map(|(q, offered)| (q.id.0.as_str(), offered.clone()))
+            .collect();
+        // The stored answer is offered, not taken; a derived value is offered
+        // as its default re-derives from what was just typed.
+        assert_eq!(
+            offered,
+            vec![
+                ("name", Some(Value::String("Acme".into()))),
+                ("slug", Some(Value::String("acme corp".into()))),
+                ("use_docker", Some(Value::Bool(true))),
+                ("registry", Some(Value::String("docker.io".into()))),
+            ]
+        );
+        assert_eq!(ids(&revisited.entered), vec!["name", "registry"]);
+    }
+
+    #[test]
+    fn revisiting_some_questions_takes_every_other_answer() {
+        let mut person = Scripted {
+            replies: vec![Value::Bool(false)],
+            ..Default::default()
+        };
+        let none = AnswerSet::new();
+        let only = Revisit::only([AnswerId::from("use_docker")].into());
+        let revisited = walk(
+            &docker_questions(),
+            &set(&[("name", "Acme")]),
             &none,
-            None,
+            Ask::Revisit(&only),
             &StarlarkEval,
-            &mut crate::interact::NonInteractive,
+            &mut person,
         )
         .unwrap();
-        assert_eq!(reviewed.answers, gathered.answers);
-        assert!(reviewed.entered.is_empty());
+        let asked: Vec<_> = person.asked.iter().map(|(q, _)| q.id.0.as_str()).collect();
+        assert_eq!(asked, vec!["use_docker"]);
+        assert_eq!(
+            revisited.answers.get(&AnswerId::from("slug")),
+            Some(&Value::String("acme".into()))
+        );
+        assert_eq!(ids(&revisited.entered), vec!["use_docker"]);
+    }
+
+    #[test]
+    fn giving_the_template_default_hands_a_given_answer_back() {
+        let provided = set(&[("name", "Acme"), ("slug", "custom")]);
+        let mut person = Scripted {
+            replies: vec![
+                Value::String("Acme".into()),
+                Value::String("acme".into()), // what the default gives
+                Value::Bool(true),
+                Value::String("docker.io".into()),
+            ],
+            ..Default::default()
+        };
+        let none = AnswerSet::new();
+        let revisited = walk(
+            &docker_questions(),
+            &provided,
+            &none,
+            Ask::Revisit(&Revisit::all()),
+            &StarlarkEval,
+            &mut person,
+        )
+        .unwrap();
+        let (shown, offered) = &person.asked[1];
+        assert_eq!(
+            shown.prompt.as_deref(),
+            Some("slug (template default: \"acme\")")
+        );
+        assert_eq!(offered, &Some(Value::String("custom".into())));
+        assert_eq!(revisited.released, [AnswerId::from("slug")].into());
+        assert!(revisited.entered.is_empty());
+        assert_eq!(ids(&revisited.supplied(&provided)), vec!["name"]);
+    }
+
+    #[test]
+    fn an_include_revisit_names_the_instance_and_hands_back_to_the_bind() {
+        // What `compose` seeds: the bind's value under the project's own.
+        let provided = set(&[("name", "Acme"), ("slug", "custom")]);
+        let revisit = Revisit {
+            binds: set(&[("slug", "from-parent")]),
+            label: Some("svc".into()),
+            ..Revisit::all()
+        };
+        let mut person = Scripted {
+            replies: vec![
+                Value::String("Acme".into()),
+                Value::String("from-parent".into()),
+                Value::Bool(true),
+                Value::String("docker.io".into()),
+            ],
+            ..Default::default()
+        };
+        let none = AnswerSet::new();
+        let revisited = walk(
+            &docker_questions(),
+            &provided,
+            &none,
+            Ask::Revisit(&revisit),
+            &StarlarkEval,
+            &mut person,
+        )
+        .unwrap();
+        let prompts: Vec<_> = person
+            .asked
+            .iter()
+            .map(|(q, _)| q.prompt.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(prompts[0], "svc · name");
+        assert_eq!(prompts[1], "svc · slug (template default: \"from-parent\")");
+        assert_eq!(revisited.released, [AnswerId::from("slug")].into());
     }
 
     #[test]
@@ -759,7 +1061,7 @@ mod tests {
             &questions,
             &provided,
             &none,
-            Some(&constraints),
+            Ask::Open(&constraints),
             &StarlarkEval,
             &mut person,
         )
@@ -780,7 +1082,7 @@ mod tests {
             &questions,
             &provided,
             &none,
-            None,
+            Ask::Unanswered,
             &StarlarkEval,
             &mut crate::interact::NonInteractive,
         )

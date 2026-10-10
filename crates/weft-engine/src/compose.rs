@@ -265,11 +265,39 @@ pub fn resolve_instance_answers(
     eval: &dyn ExprEval,
     interaction: &mut dyn Interaction,
 ) -> Result<AnswerSet> {
+    let gathered = resolve_instance_answers_revisited(
+        inc,
+        key,
+        parent_resolved,
+        provided,
+        presolved,
+        false,
+        eval,
+        interaction,
+    )?;
+    Ok(gathered.answers)
+}
+
+/// [`resolve_instance_answers`], with every open child question put to a
+/// person again when `review` is set (`weft update`): each offers its current
+/// value under the instance's name, and giving a project answer the value
+/// its bind or default gives hands it back ([`answers::Revisit`]).
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_instance_answers_revisited(
+    inc: &LoadedInclude,
+    key: &str,
+    parent_resolved: &AnswerSet,
+    provided: &AnswerSet,
+    presolved: &AnswerSet,
+    review: bool,
+    eval: &dyn ExprEval,
+    interaction: &mut dyn Interaction,
+) -> Result<answers::Gathered> {
     // Bind scope: parent answers plus the instance key.
     let mut scope = parent_resolved.clone();
     scope.insert(AnswerId::from("key"), Value::String(key.to_owned()));
 
-    let mut seed = AnswerSet::new();
+    let mut binds = AnswerSet::new();
     for (child_id, expr) in &inc.decl.bind {
         let value = eval.eval(expr, &scope).with_context(|| {
             format!(
@@ -277,18 +305,39 @@ pub fn resolve_instance_answers(
                 inc.decl.name
             )
         })?;
-        seed.insert(AnswerId(child_id.clone()), value);
+        binds.insert(AnswerId(child_id.clone()), value);
     }
     // Explicit per-instance answers win over binds.
+    let mut seed = binds.clone();
     seed.overlay(provided);
 
-    answers::gather(&inc.template, &seed, presolved, eval, interaction).with_context(|| {
+    let context = || {
         format!(
             "resolving answers for include `{}` (instance `{key}`); pass child answers as \
                  --answer {}.{{id}}=...",
             inc.decl.name, inc.decl.name
         )
-    })
+    };
+    if !review {
+        let answers = answers::gather(&inc.template, &seed, presolved, eval, interaction)
+            .with_context(context)?;
+        return Ok(answers::Gathered {
+            answers,
+            entered: AnswerSet::new(),
+            released: Default::default(),
+        });
+    }
+    let revisit = answers::Revisit {
+        binds,
+        label: Some(if inc.decl.repeat {
+            format!("{}.{key}", inc.decl.name)
+        } else {
+            inc.decl.name.clone()
+        }),
+        ..answers::Revisit::all()
+    };
+    answers::gather_revisited(&inc.template, &seed, presolved, &revisit, eval, interaction)
+        .with_context(context)
 }
 
 /// How child secrets are pre-resolved when building nested parts.
