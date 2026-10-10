@@ -161,3 +161,34 @@ fn connector_fleet_lifecycle() {
     let state = read(&out, ".weft/state.toml");
     assert!(!state.contains("stripe"));
 }
+
+#[test]
+fn an_added_instance_runs_its_hooks_as_on_scaffold() {
+    let tpl_root = tempfile::tempdir().unwrap();
+    for name in ["workspace", "hello"] {
+        copy_dir(&fixtures().join(name), &tpl_root.path().join(name));
+    }
+    let out = tpl_root.path().join("out");
+    weft()
+        .arg("new")
+        .arg(tpl_root.path().join("workspace"))
+        .arg(&out)
+        .args(["--answer", "workspace_name=Acme"])
+        .args(["--instance", "connector=github"])
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    std::fs::remove_file(out.join("connectors/github/.deployed")).unwrap();
+
+    weft()
+        .args(["instance", "add", "connector", "stripe", "--dest"])
+        .arg(&out)
+        .arg("--non-interactive")
+        .assert()
+        .success();
+
+    // The child's `deploy` hook has no inputs: it runs where its instance is
+    // created, as `weft new` ran it for github, and nowhere else.
+    assert_eq!(read(&out, "connectors/stripe/.deployed").trim(), "deployed");
+    assert!(!out.join("connectors/github/.deployed").exists());
+}

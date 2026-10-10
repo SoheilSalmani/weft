@@ -216,16 +216,19 @@ fn runs_after(hook: &Hook) -> impl Iterator<Item = &HookId> {
 }
 
 /// Restrict post-hooks to those that should fire on `weft update`: the hook
-/// is on (`when`, in its frame) and one of its inputs changed. Glob inputs
-/// match `changes.paths` under the hook's mount with the mount stripped;
-/// answer inputs consult the changed answers of the hook's frame (a frame
-/// with no entry has no changed answers); a `hook:` input fires when the
-/// hook it names fires in this run. A hook with no inputs never re-fires on
-/// update (only on initial scaffold), which mirrors "copy-only" tasks.
+/// is on (`when`, in its frame) and either its frame is one this update
+/// creates (`created`: an instance `weft instance add` adds, whose hooks run
+/// as on `weft new`) or one of its inputs changed. Glob inputs match
+/// `changes.paths` under the hook's mount with the mount stripped; answer
+/// inputs consult the changed answers of the hook's frame (a frame with no
+/// entry has no changed answers); a `hook:` input fires when the hook it
+/// names fires in this run. A hook with no inputs therefore runs only where
+/// its frame is created.
 pub fn fire_on_update_planned<'p, 't>(
     post: &'p [PlannedHook<'t>],
     changes: &ChangeSet,
     changed_answers_by_frame: &BTreeMap<Vec<(String, String)>, BTreeSet<AnswerId>>,
+    created: &BTreeSet<Vec<(String, String)>>,
     eval: &dyn ExprEval,
 ) -> Result<Vec<&'p PlannedHook<'t>>> {
     let no_answers = BTreeSet::new();
@@ -243,22 +246,29 @@ pub fn fire_on_update_planned<'p, 't>(
         let changed_answers = changed_answers_by_frame
             .get(&hook.frame)
             .unwrap_or(&no_answers);
-        let changed = hook.hook.inputs.iter().try_fold(false, |acc, input| {
-            anyhow::Ok(
-                acc || match input {
-                    HookInput::Glob(pattern) => {
-                        let matcher = glob_matcher(pattern)?;
-                        changes
-                            .paths
-                            .iter()
-                            .filter_map(|p| p.strip_prefix(&hook.mount).ok())
-                            .any(|p| matcher.is_match(p.as_std_path()))
-                    }
-                    HookInput::Answer(id) => changed_answers.contains(id),
-                    HookInput::Hook(id) => fired.contains(hook.qualify(id).as_str()),
-                },
-            )
-        })?;
+        let created_here = created
+            .iter()
+            .any(|frame| hook.frame.starts_with(frame.as_slice()));
+        let changed = hook
+            .hook
+            .inputs
+            .iter()
+            .try_fold(created_here, |acc, input| {
+                anyhow::Ok(
+                    acc || match input {
+                        HookInput::Glob(pattern) => {
+                            let matcher = glob_matcher(pattern)?;
+                            changes
+                                .paths
+                                .iter()
+                                .filter_map(|p| p.strip_prefix(&hook.mount).ok())
+                                .any(|p| matcher.is_match(p.as_std_path()))
+                        }
+                        HookInput::Answer(id) => changed_answers.contains(id),
+                        HookInput::Hook(id) => fired.contains(hook.qualify(id).as_str()),
+                    },
+                )
+            })?;
         if changed {
             fired.insert(hook.id.as_str());
             fire.push(hook);
@@ -788,9 +798,14 @@ mod tests {
             paths: [Utf8PathBuf::from("apps/web/package.json")].into(),
             answers: BTreeSet::new(),
         };
-        let fired =
-            fire_on_update_planned(&post, &changes, &BTreeMap::new(), &weft_lang::StarlarkEval)
-                .unwrap();
+        let fired = fire_on_update_planned(
+            &post,
+            &changes,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            &weft_lang::StarlarkEval,
+        )
+        .unwrap();
         let ids: Vec<&str> = fired.iter().map(|h| h.id.as_str()).collect();
         // The root's `package.json` did not change; the child's did.
         assert_eq!(ids, ["web/install"]);
@@ -813,8 +828,14 @@ mod tests {
             vec![("web".to_owned(), "web".to_owned())],
             [AnswerId::from("port")].into(),
         );
-        let fired =
-            fire_on_update_planned(&post, &changes, &by_frame, &weft_lang::StarlarkEval).unwrap();
+        let fired = fire_on_update_planned(
+            &post,
+            &changes,
+            &by_frame,
+            &BTreeSet::new(),
+            &weft_lang::StarlarkEval,
+        )
+        .unwrap();
         let ids: Vec<&str> = fired.iter().map(|h| h.id.as_str()).collect();
         assert_eq!(ids, ["web/cfg"]);
     }
@@ -834,11 +855,17 @@ mod tests {
                 paths: [Utf8PathBuf::from(changed)].into(),
                 answers: BTreeSet::new(),
             };
-            fire_on_update_planned(&post, &changes, &BTreeMap::new(), &weft_lang::StarlarkEval)
-                .unwrap()
-                .iter()
-                .map(|h| h.id.clone())
-                .collect()
+            fire_on_update_planned(
+                &post,
+                &changes,
+                &BTreeMap::new(),
+                &BTreeSet::new(),
+                &weft_lang::StarlarkEval,
+            )
+            .unwrap()
+            .iter()
+            .map(|h| h.id.clone())
+            .collect()
         };
         assert!(fired("README.md").is_empty());
         assert_eq!(fired("package.json"), ["install", "codegen"]);

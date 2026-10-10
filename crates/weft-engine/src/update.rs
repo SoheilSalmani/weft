@@ -469,10 +469,19 @@ pub fn run(
             changed_answers(&old.instance.answers, &new.instance.answers),
         );
     }
-    // Pre-hooks always run on update (they're guards); post-hooks re-fire only
-    // when one of their inputs changed.
+    // Pre-hooks always run on update (they're guards). Post-hooks re-fire
+    // when one of their inputs changed, or, all of them, in an instance this
+    // update creates: `weft instance add` pins it with an empty base, and its
+    // hooks run as they would have on `weft new`.
+    let created: BTreeSet<Vec<(String, String)>> = state
+        .instances
+        .iter()
+        .filter(|inst| inst.base.is_empty())
+        .map(|inst| vec![(inst.include.clone(), inst.key.clone())])
+        .collect();
     let plan = hooks::plan(&template, &new_answers, &new_parts, &eval)?;
-    let post_plan = hooks::fire_on_update_planned(&plan.post, &changes, &changed_by_frame, &eval)?;
+    let post_plan =
+        hooks::fire_on_update_planned(&plan.post, &changes, &changed_by_frame, &created, &eval)?;
 
     // Files with uncommitted git changes that this update would write: the
     // merge could be neither reviewed nor undone with git.
