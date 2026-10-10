@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{bail, Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
-use weft_core::merge::merge3;
+use weft_core::merge::{merge3, MergeOutcome};
 use weft_core::render::{narrow, ExprEval, RenderError, ValueOrigin};
 use weft_core::{AnswerId, AnswerSet, FileEntry, Question, Value};
 use weft_lang::StarlarkEval;
@@ -568,11 +568,15 @@ pub fn run(
                 fsio::remove_file(&opts.dest, &path)?;
                 report.notes.push(format!("deleted {path}"));
             }
-            Action::Conflict(entry, n) => {
+            Action::Conflict { merge, mode, left } => {
+                let entry = FileEntry {
+                    content: merge.text().into(),
+                    mode,
+                };
                 fsio::write_file(&opts.dest, &path, &entry)?;
-                report
-                    .notes
-                    .push(format!("{n} conflict(s) in {path} — resolve the markers"));
+                report.notes.push(format!(
+                    "{left} conflict(s) in {path} — resolve the markers"
+                ));
                 report.conflicts.push(path);
             }
             Action::Note(msg) => report.notes.push(format!("{path}: {msg}")),
@@ -1006,37 +1010,26 @@ fn guard_conflicts(dest: &Utf8Path, state: &State) -> Result<()> {
         .state
         .conflicts
         .iter()
-        .filter(|path| has_markers(&dest.join(path)))
+        .filter(|path| {
+            std::fs::read_to_string(dest.join(path))
+                .is_ok_and(|text| weft_core::merge::has_conflict_markers(&text))
+        })
         .map(|path| path.as_str())
         .collect();
     if !unresolved.is_empty() {
         bail!(
             "the last update left conflict markers that are still there: {}\n\
-             resolve them first (keep the lines you want, delete the `{}` / `{}` / `{}` \
-             lines), then run the update again",
+             resolve them first (keep the lines you want; delete the `{}`, `{}`, `{}` and \
+             `{}` lines and the base's lines between the second and third), then run the \
+             update again",
             unresolved.join(", "),
             weft_core::merge::MARKER_OURS,
+            weft_core::merge::MARKER_BASE,
             weft_core::merge::MARKER_SEP,
             weft_core::merge::MARKER_THEIRS
         );
     }
     Ok(())
-}
-
-/// Does this file still contain a conflict block weft wrote?
-fn has_markers(path: &Utf8Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    let mut ours = false;
-    for line in text.lines() {
-        if line == weft_core::merge::MARKER_OURS {
-            ours = true;
-        } else if ours && line == weft_core::merge::MARKER_THEIRS {
-            return true;
-        }
-    }
-    false
 }
 
 fn dirty_message(dirty: &[Utf8PathBuf]) -> String {
@@ -1055,13 +1048,17 @@ fn dirty_message(dirty: &[Utf8PathBuf]) -> String {
 /// The unified diff of one planned action against the file as it is now
 /// (stdout, so it pipes into a pager or `git apply --check`).
 fn print_diff(path: &Utf8Path, ours: Option<&FileEntry>, action: &Action) {
-    let theirs = match action {
-        Action::Write(entry) | Action::Conflict(entry, _) => Some(entry),
+    let marked;
+    let after = match action {
+        Action::Write(entry) => Some(entry.content.text()),
+        Action::Conflict { merge, .. } => {
+            marked = merge.text();
+            Some(Some(marked.as_str()))
+        }
         Action::Delete => None,
         Action::Note(_) => return,
     };
     let before = ours.map(|e| e.content.text());
-    let after = theirs.map(|e| e.content.text());
     if matches!(before, Some(None)) || matches!(after, Some(None)) {
         println!("Binary file {path} changes");
         return;
@@ -1070,7 +1067,7 @@ fn print_diff(path: &Utf8Path, ours: Option<&FileEntry>, action: &Action) {
         Some(_) => format!("a/{path}"),
         None => "/dev/null".to_owned(),
     };
-    let b = match theirs {
+    let b = match after {
         Some(_) => format!("b/{path}"),
         None => "/dev/null".to_owned(),
     };
@@ -1122,7 +1119,12 @@ fn frame_suffix(hook: &hooks::PlannedHook<'_>) -> String {
 enum Action {
     Write(FileEntry),
     Delete,
-    Conflict(FileEntry, usize),
+    /// A merge that left conflicts; `left` blocks still carry markers.
+    Conflict {
+        merge: MergeOutcome,
+        mode: u32,
+        left: usize,
+    },
     Note(String),
 }
 
@@ -1131,7 +1133,7 @@ impl Action {
         match self {
             Action::Write(_) => "update",
             Action::Delete => "delete",
-            Action::Conflict(..) => "conflict in",
+            Action::Conflict { .. } => "conflict in",
             Action::Note(_) => "note:",
         }
     }
@@ -1184,14 +1186,17 @@ fn plan_file(
             } else {
                 o.mode
             };
-            let entry = FileEntry {
-                content: outcome.text.into(),
-                mode,
-            };
-            if outcome.conflicts == 0 {
-                Some(Action::Write(entry))
+            if outcome.is_clean() {
+                Some(Action::Write(FileEntry {
+                    content: outcome.text().into(),
+                    mode,
+                }))
             } else {
-                Some(Action::Conflict(entry, outcome.conflicts))
+                Some(Action::Conflict {
+                    left: outcome.conflicts(),
+                    merge: outcome,
+                    mode,
+                })
             }
         }
         (None, None) => unreachable!("path came from some tree"),

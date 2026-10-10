@@ -1,23 +1,97 @@
 //! Line-based 3-way merge (diff3-flavored), used by `weft update` to overlay
-//! template changes onto a user-edited tree. Conflicts render as standard
-//! conflict markers; nothing is ever silently clobbered.
+//! template changes onto a user-edited tree. The result is a sequence of
+//! chunks: settled lines and conflicts kept as data, so a caller can resolve
+//! them one at a time. Unresolved conflicts render as diff3-style conflict
+//! blocks (local, base, template); nothing is ever silently clobbered.
 
 use similar::{DiffOp, TextDiff};
 
 pub const MARKER_OURS: &str = "<<<<<<< local";
+pub const MARKER_BASE: &str = "||||||| base";
 pub const MARKER_SEP: &str = "=======";
 pub const MARKER_THEIRS: &str = ">>>>>>> template";
 
-#[derive(Debug, PartialEq, Eq)]
+/// A stretch of a 3-way merge result, in file order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Chunk {
+    /// Lines the merge settled: unchanged, changed on one side, or changed alike on both.
+    Clean(Vec<String>),
+    /// A region both sides changed differently.
+    Conflict(Conflict),
+}
+
+/// A region both sides changed differently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Conflict {
+    /// The region as the base had it; empty when both sides inserted at the same spot.
+    pub base: Vec<String>,
+    /// The local version of the region.
+    pub ours: Vec<String>,
+    /// The template's version of the region.
+    pub theirs: Vec<String>,
+}
+
+impl Conflict {
+    /// The region as a conflict block: `MARKER_OURS`, ours, `MARKER_BASE`,
+    /// base, `MARKER_SEP`, theirs, `MARKER_THEIRS`.
+    pub fn marked(&self) -> Vec<String> {
+        let mut out = Vec::with_capacity(self.ours.len() + self.base.len() + self.theirs.len() + 4);
+        out.push(MARKER_OURS.to_owned());
+        out.extend(self.ours.iter().cloned());
+        out.push(MARKER_BASE.to_owned());
+        out.extend(self.base.iter().cloned());
+        out.push(MARKER_SEP.to_owned());
+        out.extend(self.theirs.iter().cloned());
+        out.push(MARKER_THEIRS.to_owned());
+        out
+    }
+}
+
+/// The result of [`merge3`].
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeOutcome {
-    pub text: String,
-    pub conflicts: usize,
+    /// The merge in file order. A caller resolves a conflict by replacing its chunk with `Chunk::Clean(lines)`.
+    pub chunks: Vec<Chunk>,
 }
 
 impl MergeOutcome {
-    pub fn is_clean(&self) -> bool {
-        self.conflicts == 0
+    /// Conflicts still in `chunks`.
+    pub fn conflicts(&self) -> usize {
+        self.chunks
+            .iter()
+            .filter(|c| matches!(c, Chunk::Conflict(_)))
+            .count()
     }
+
+    pub fn is_clean(&self) -> bool {
+        self.conflicts() == 0
+    }
+
+    /// The merged text, each remaining conflict written as its marked block.
+    pub fn text(&self) -> String {
+        let mut out: Vec<String> = Vec::new();
+        for chunk in &self.chunks {
+            match chunk {
+                Chunk::Clean(lines) => out.extend(lines.iter().cloned()),
+                Chunk::Conflict(c) => out.extend(c.marked()),
+            }
+        }
+        crate::segment::join_lines(&out)
+    }
+}
+
+/// Does `text` hold a conflict block: a line equal to `MARKER_OURS` followed
+/// later by a line equal to `MARKER_THEIRS`?
+pub fn has_conflict_markers(text: &str) -> bool {
+    let mut ours = false;
+    for line in text.lines() {
+        if line == MARKER_OURS {
+            ours = true;
+        } else if ours && line == MARKER_THEIRS {
+            return true;
+        }
+    }
+    false
 }
 
 /// One side's edit against the base: replace base lines `[start, end)` with
@@ -96,7 +170,9 @@ fn region_text(base: &[&str], edits: &[Edit], start: usize, end: usize) -> Vec<S
 
 /// 3-way merge `ours` and `theirs` against `base`. Line-granular; overlapping
 /// (or directly adjacent) edit regions from both sides that produce different
-/// text become conflicts with `<<<<<<< local` / `>>>>>>> template` markers.
+/// text become [`Conflict`] chunks holding the local, base, and template
+/// versions of the region. Written out, a conflict shows all three between
+/// `<<<<<<< local`, `||||||| base`, `=======`, and `>>>>>>> template` markers.
 pub fn merge3(base: &str, ours: &str, theirs: &str) -> MergeOutcome {
     let base_lines: Vec<&str> = base.lines().collect();
     let ours_lines: Vec<&str> = ours.lines().collect();
@@ -105,8 +181,8 @@ pub fn merge3(base: &str, ours: &str, theirs: &str) -> MergeOutcome {
     let a = edits(&base_lines, &ours_lines);
     let b = edits(&base_lines, &theirs_lines);
 
-    let mut out: Vec<String> = Vec::new();
-    let mut conflicts = 0;
+    let mut chunks: Vec<Chunk> = Vec::new();
+    let mut clean: Vec<String> = Vec::new();
     let mut cursor = 0usize; // position in base
     let (mut ai, mut bi) = (0usize, 0usize);
 
@@ -146,7 +222,7 @@ pub fn merge3(base: &str, ours: &str, theirs: &str) -> MergeOutcome {
             }
         }
 
-        out.extend(base_lines[cursor..start].iter().map(|s| s.to_string()));
+        clean.extend(base_lines[cursor..start].iter().map(|s| s.to_string()));
         cursor = end;
 
         let a_involved = ai > a_from;
@@ -155,26 +231,31 @@ pub fn merge3(base: &str, ours: &str, theirs: &str) -> MergeOutcome {
         let theirs_region = region_text(&base_lines, &b[b_from..bi], start, end);
 
         match (a_involved, b_involved) {
-            (true, false) => out.extend(ours_region),
-            (false, true) => out.extend(theirs_region),
-            (true, true) if ours_region == theirs_region => out.extend(ours_region),
+            (true, false) => clean.extend(ours_region),
+            (false, true) => clean.extend(theirs_region),
+            (true, true) if ours_region == theirs_region => clean.extend(ours_region),
             (true, true) => {
-                conflicts += 1;
-                out.push(MARKER_OURS.to_owned());
-                out.extend(ours_region);
-                out.push(MARKER_SEP.to_owned());
-                out.extend(theirs_region);
-                out.push(MARKER_THEIRS.to_owned());
+                if !clean.is_empty() {
+                    chunks.push(Chunk::Clean(std::mem::take(&mut clean)));
+                }
+                chunks.push(Chunk::Conflict(Conflict {
+                    base: base_lines[start..end]
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                    ours: ours_region,
+                    theirs: theirs_region,
+                }));
             }
             (false, false) => unreachable!("region always has at least one edit"),
         }
     }
-    out.extend(base_lines[cursor..].iter().map(|s| s.to_string()));
-
-    MergeOutcome {
-        text: crate::segment::join_lines(&out),
-        conflicts,
+    clean.extend(base_lines[cursor..].iter().map(|s| s.to_string()));
+    if !clean.is_empty() {
+        chunks.push(Chunk::Clean(clean));
     }
+
+    MergeOutcome { chunks }
 }
 
 #[cfg(test)]
@@ -187,8 +268,8 @@ mod tests {
         let ours = "A\nb\nc\nd\ne\nf\ng\nh\n"; // change first line
         let theirs = "a\nb\nc\nd\ne\nf\ng\nH\n"; // change last line
         let m = merge3(base, ours, theirs);
-        assert!(m.is_clean(), "{}", m.text);
-        assert_eq!(m.text, "A\nb\nc\nd\ne\nf\ng\nH\n");
+        assert!(m.is_clean(), "{}", m.text());
+        assert_eq!(m.text(), "A\nb\nc\nd\ne\nf\ng\nH\n");
     }
 
     #[test]
@@ -197,7 +278,7 @@ mod tests {
         let changed = "a\nB\nc\n";
         let m = merge3(base, changed, changed);
         assert!(m.is_clean());
-        assert_eq!(m.text, "a\nB\nc\n");
+        assert_eq!(m.text(), "a\nB\nc\n");
     }
 
     #[test]
@@ -206,11 +287,51 @@ mod tests {
         let ours = "a\nOURS\nc\n";
         let theirs = "a\nTHEIRS\nc\n";
         let m = merge3(base, ours, theirs);
-        assert_eq!(m.conflicts, 1);
+        assert_eq!(m.conflicts(), 1);
         assert_eq!(
-            m.text,
-            format!("a\n{MARKER_OURS}\nOURS\n{MARKER_SEP}\nTHEIRS\n{MARKER_THEIRS}\nc\n")
+            m.text(),
+            format!(
+                "a\n{MARKER_OURS}\nOURS\n{MARKER_BASE}\nb\n{MARKER_SEP}\nTHEIRS\n{MARKER_THEIRS}\nc\n"
+            )
         );
+    }
+
+    #[test]
+    fn conflict_chunk_holds_each_side_and_base() {
+        let m = merge3("a\nb\nc\n", "a\nOURS\nc\n", "a\nTHEIRS\nc\n");
+        let conflict = m
+            .chunks
+            .iter()
+            .find_map(|c| match c {
+                Chunk::Conflict(c) => Some(c),
+                Chunk::Clean(_) => None,
+            })
+            .expect("a conflict chunk");
+        assert_eq!(conflict.base, ["b"]);
+        assert_eq!(conflict.ours, ["OURS"]);
+        assert_eq!(conflict.theirs, ["THEIRS"]);
+    }
+
+    #[test]
+    fn resolving_a_conflict_chunk_clears_markers() {
+        let mut m = merge3("a\nb\nc\n", "a\nOURS\nc\n", "a\nTHEIRS\nc\n");
+        for chunk in &mut m.chunks {
+            if matches!(chunk, Chunk::Conflict(_)) {
+                *chunk = Chunk::Clean(vec!["picked".to_owned()]);
+            }
+        }
+        assert_eq!(m.conflicts(), 0);
+        assert!(m.is_clean());
+        assert_eq!(m.text(), "a\npicked\nc\n");
+        assert!(!has_conflict_markers(&m.text()));
+    }
+
+    #[test]
+    fn has_conflict_markers_needs_a_full_block() {
+        let m = merge3("a\nb\nc\n", "a\nOURS\nc\n", "a\nTHEIRS\nc\n");
+        assert!(has_conflict_markers(&m.text()));
+        assert!(!has_conflict_markers("a\nb\nc\n"));
+        assert!(!has_conflict_markers(&format!("a\n{MARKER_OURS}\nb\n")));
     }
 
     #[test]
@@ -219,7 +340,7 @@ mod tests {
         let ours = "a\nb\nmine\n";
         let m = merge3(base, ours, base);
         assert!(m.is_clean());
-        assert_eq!(m.text, "a\nb\nmine\n");
+        assert_eq!(m.text(), "a\nb\nmine\n");
     }
 
     #[test]
@@ -228,7 +349,7 @@ mod tests {
         let theirs = "a\nnew\nb\n";
         let m = merge3(base, base, theirs);
         assert!(m.is_clean());
-        assert_eq!(m.text, "a\nnew\nb\n");
+        assert_eq!(m.text(), "a\nnew\nb\n");
     }
 
     #[test]
@@ -237,8 +358,14 @@ mod tests {
         let ours = "a\nours\n";
         let theirs = "a\ntheirs\n";
         let m = merge3(base, ours, theirs);
-        assert_eq!(m.conflicts, 1);
-        assert!(m.text.contains(MARKER_OURS));
+        assert_eq!(m.conflicts(), 1);
+        assert_eq!(
+            m.text(),
+            format!(
+                "a\n{MARKER_OURS}\nours\n{MARKER_BASE}\n{MARKER_SEP}\ntheirs\n{MARKER_THEIRS}\n"
+            )
+        );
+        assert!(matches!(&m.chunks[1], Chunk::Conflict(c) if c.base.is_empty()));
     }
 
     #[test]
@@ -247,8 +374,8 @@ mod tests {
         let ours = "one\ntwo\nthree\nuser line\nfour\nfive\nsix\nseven\n";
         let theirs = "one\ntwo\nthree\nfour\nfive\nsix\nseven\ntemplate line\n";
         let m = merge3(base, ours, theirs);
-        assert!(m.is_clean(), "{}", m.text);
-        assert!(m.text.contains("user line"));
-        assert!(m.text.contains("template line"));
+        assert!(m.is_clean(), "{}", m.text());
+        assert!(m.text().contains("user line"));
+        assert!(m.text().contains("template line"));
     }
 }

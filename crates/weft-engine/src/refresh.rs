@@ -177,11 +177,11 @@ pub fn run(
                     o.mode
                 };
                 let entry = FileEntry {
-                    content: outcome.text.into(),
+                    content: outcome.text().into(),
                     mode,
                 };
                 fsio::write_file(&worktree, &path, &entry)?;
-                if outcome.conflicts == 0 {
+                if outcome.is_clean() {
                     report.updated += 1;
                 } else {
                     report.conflicts.push(path);

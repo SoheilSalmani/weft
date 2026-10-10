@@ -198,9 +198,14 @@ fn a_conflict_gets_markers_and_blocks_the_next_update_until_resolved() {
     .stderr(predicates::str::contains(
         "conflicts in 1 file(s): README.md",
     ));
+    // Each block shows what the template rendered before, between yours and
+    // its new version.
     let marked = read(&proj, "README.md");
     assert!(
-        marked.contains("<<<<<<< local\n# Old Name (fork)\n=======\n# New Name\n>>>>>>> template")
+        marked.contains(
+            "<<<<<<< local\n# Old Name (fork)\n||||||| base\n# Old Name\n=======\n# New Name\n>>>>>>> template"
+        ),
+        "{marked}"
     );
 
     update(&proj, &["--skip-tasks"])
