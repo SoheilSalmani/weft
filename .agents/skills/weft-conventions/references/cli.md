@@ -103,10 +103,10 @@ weft share PATH... [--name NAME] [--title T] [--describe D] [--example PATH=FILE
 weft hook add PATCH --id ID --phase pre|post --effect check|setup|deploy --label TEXT --action CMD
               [--description TEXT] [--when EXPR] [--after HOOK_ID]... [--before HOOK_ID]... [--input glob:P|answer:ID|hook:ID]...
 weft hook rm PATCH ID
-weft hook ls                                               # every hook, in execution order
+weft hook ls                                               # every hook, in execution order, with when it runs
 ```
 
-`--input` is post-only. Bad `--after` or `--input` references are rejected and the patch file is rolled back. Leaving out `--action` opens `$EDITOR` for the command, so a script always passes it.
+`--input` is post-only. Bad `--after` or `--input` references are rejected and the patch file is rolled back. Leaving out `--action` opens `$EDITOR` for the command, so a script always passes it. `hook ls` ends each line with when the hook runs: `(runs: create + every update)` for a pre hook, `(runs: create only)` for a post hook without inputs, `(runs: create + update on glob:pyproject.toml)` otherwise; `hook add` prints the same, and `describe --json` carries it as `runs`.
 
 ## Presets
 
@@ -137,13 +137,17 @@ weft schema [--out DIR]                                    # weft-patch.schema.j
 ```text
 weft new TEMPLATE [DEST] [--preset P]... [--answer K=V]... [--answers-file F] [--answers-json J|@file|-]
          [--instance INCLUDE=KEY]... [--skip-tasks] [--non-interactive] [--frozen] [--offline]
-weft update [DEST] [--dry-run] [--template DIR] [--skip-tasks] [--non-interactive] [--frozen]
+weft update [DEST] [--dry-run [--diff]] [--template DIR | --to REV] [--answer K=V]... [--preset P]... [--answers-file F]
+            [--answers-json J] [--unset ID]... [--allow-dirty] [--skip-tasks] [--non-interactive] [--frozen] [--offline]
+weft answers [DEST] [--json]
 weft instance add INCLUDE KEY [--answer ID=V]... | list | remove INCLUDE KEY
 ```
 
 `DEST` must be empty or absent; two templates cannot be scaffolded into one directory. `--skip-tasks` renders without running hooks. In a terminal, `new` asks every question that no flag, file or preset answered, offering its default; `--non-interactive` takes the defaults and fails only on a question without one.
 
-`update` merges each file three ways: the template's last render, the project's copy and the new render. A file the project deleted stays deleted when the new render changes it (`chapters/tour.mdx: kept it deleted: you deleted it, and the new render changes it`). A file the project rewrote, such as starter content replaced by the user's own, takes every template change to it as a conflict, and the post hooks wait until it is resolved. So starter content a user is meant to replace goes in files of its own, which they delete, never in the file they write in (verified 2026-09-30 on `slides`).
+`update` merges each file three ways: the template's last render, the project's copy and the new render. A file the project deleted stays deleted when the new render changes it (`chapters/tour.mdx: kept it deleted: you deleted it, and the new render changes it`). A file the project rewrote, such as starter content replaced by the user's own, takes every template change to it as a conflict, and the post hooks that update would run are held back until a later update finds the markers gone. So starter content a user is meant to replace goes in files of its own, which they delete, never in the file they write in (verified 2026-09-30 on `slides`).
+
+In a terminal a bare `update` lists the project's answers, include instances' as `svc.port` or `connector.stripe.port`, and asks `Change any of these answers? [y/N]`. On yes, a project with instances asks `Whose answers?` (the project's own is checked; space toggles each instance). Each picked frame's open questions come back offering their current value: the stored answer, or a derived one re-derived from what was just typed; an instance's prompts start with its name (`connector.github · Project name`). What you type is stored as given, an accepted offer keeps its origin, and a prompt that names a `(template default: "my-demo")` hands the answer back to that default or bind when given it, as `--unset` would (the report then marks it `(derived)` or `(bind)`). Either way it asks each root question the project never answered under an open gate (new to the template, or behind a gate that opened), offering the default. Answer flags skip the review question, `--dry-run` asks neither and previews with defaults, and `--non-interactive` or no terminal keeps the answers and takes new questions' defaults (failing on one without). Conflict markers are diff3-style: `<<<<<<< local`, the project's lines, `||||||| base`, the last render's, `=======`, the new render's, `>>>>>>> template`. In a terminal each conflict is shown as `it was`, `you have` and `the template now has`, then `Keep:` offers yours, the template's, both (yours first), an edit of the block in `$VISUAL`/`$EDITOR` (saved with markers, it stays a conflict), or the conflict markers (the default). A file left marked goes into `[state] conflicts` and blocks the next update; that update's post hooks go into `[state] pending_hooks` (``held back post-hook(s) `mark-synced` because of conflicts; the next `weft update` runs them once the markers are gone``) and run on the next update that finds the markers gone, even when nothing else changed. A post hook that fails, on `weft new` or an update, leaves itself and the hooks after it there too (``post-hook `sync` failed; the next `weft update` runs `sync`, `report` ``); the hooks before it stay done. An agent runs `weft update --non-interactive`, or the MCP `update_project`, which never runs hooks (verified 2026-10-09 on a build from source, in a pseudo-terminal).
 
 ## Composition and hub
 

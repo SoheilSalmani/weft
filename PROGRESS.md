@@ -3,6 +3,102 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — Interactive `weft update`, conflict resolution, and when hooks run
+
+- **The gaps**: answers changed only through flags (`--reconfigure` left with
+  the TUI); in a terminal a question new to the template took its default
+  silently, so a template adding `use_ci = True` turned CI on in every
+  project without asking; a conflict left two-sided markers and nothing else;
+  and post hooks an update skipped for conflicts were lost. The note said
+  "re-run them after resolving", but the state was already re-pinned, so the
+  next update fired nothing (reproduced: `mark-synced` never ran after the
+  `pyproject.toml` conflict was resolved).
+- **Decided: `weft update` is interactive in a terminal, like `weft new`.** A
+  bare run lists the answers (include instances' as `svc.port`) and asks
+  `Change any of these answers? [y/N]`; yes walks every open question
+  offering its current value. One question rather than walking everything
+  each time: Copier re-asks every question on update and needed `--defaults`
+  and `--skip-answered` for the common run that only pulls template changes.
+  A project with include instances is then asked `Whose answers?` (its own
+  checked, each instance a toggle), so a fleet of connectors costs one
+  prompt, not one per instance; `weft new` still asks no include question a
+  bind or default answers. Whatever the answer, a root question the project
+  never answered under an open gate is asked, offering its default. Answer
+  flags skip the review question, a dry run asks neither (it previews with
+  defaults, and `--dry-run --diff | less` must not prompt), and unattended
+  runs are unchanged.
+- **Answers**: `walk` takes an `Ask` policy (`Unanswered` for `gather`,
+  `Open` for `gather_reviewed`, `Revisit` for the new `gather_revisited`).
+  A revisited question offers the provided answer, else its default
+  re-derived over what was just typed. Values typed differently from the
+  offer are given, and count as set on this run for the `kept as given`
+  report; an accepted offer keeps its origin. The CLI asks the review
+  question before the git "up to date" exit, so answers change on an
+  unchanged template too. An instance's walk (`compose::
+  resolve_instance_answers_revisited`) prefixes its prompts with its name
+  (`connector.github · Project name`).
+- **Handing an answer back from the prompt** (the wizard's `x`): when a
+  revisited answer is an input that differs from its default (or, in an
+  instance, its bind), the prompt names it, `(template default: "my-demo")`,
+  and giving that value hands the answer back (`Gathered::released`): it is
+  dropped from the inputs as `--unset` would, and the report marks it
+  `(derived)` or `(bind)`. A value equal to the default already counted as
+  derived when accepted on `weft new`, so this is the same rule. Pinning a
+  value that equals the default takes `--answer`.
+- **Conflicts**: `merge3` returns chunks (`Chunk::Clean`,
+  `Chunk::Conflict { base, ours, theirs }`) and writes diff3-style blocks
+  with a `||||||| base` section; `has_conflict_markers` moved to core. In a
+  terminal, after the dirty check and the pre hooks and before any write,
+  each conflict shows `it was` / `you have` / `the template now has` and
+  `Keep:` yours, the template's, both, an edit of the block, or the markers
+  (the default, and what an unattended run keeps). An edit saved with markers
+  stays a conflict.
+- **Held-back hooks**: `[state] pending_hooks` holds the namespaced ids of
+  the post hooks an update held back for conflicts; the note names them. The
+  next update that finds the markers gone runs them whether or not their
+  inputs change again, and the CLI's git "up to date" exit no longer skips
+  them. `--skip-tasks` carries them over untouched; one the template no
+  longer runs is dropped with a note. A post hook that fails, on `weft new`
+  or an update, leaves itself and the hooks after it pending
+  (`update::run_post_hooks`, which `weft new` uses too) and the error names
+  them; the hooks before it stay done. Pending hooks run on every update
+  until they succeed or the template stops running them.
+- **Decided: a hook's lifecycle stays derived from its phase and `inputs`;
+  no `on`-style field.** The 29 hooks in the house templates
+  (`~/Desktop/Projects/templates/*`, `weft-templates/web`) are 9 pre checks
+  that want every run, 5 post hooks without inputs that want creation only
+  (`git-init` and `git-commit` twice, `deploy-vercel`), and 15 post hooks
+  with inputs. The rule expresses every one; a field would restate `inputs`
+  for all of them and add a second way to say "creation only". Copier
+  needed `_copier_operation` because its tasks have no triggers; weft's
+  inputs are the triggers. Revisit when a template needs a creation-only pre
+  check or an every-update post hook with nothing to name as input.
+- **Fixed in that rule**: a `hook:ID` input fired on every update while ID
+  was active; it now fires only when ID ran in the same update, and orders
+  its hook after ID (`order_phase`, and the cycle check in `weft check`). An
+  instance `weft instance add` created never ran its hooks without inputs
+  (reproduced on `workspace`: `connectors/stripe/.deployed` missing); a
+  frame pinned with an empty base now runs its hooks as on `weft new`.
+- **Visible**: `Hook::runs()` (`create + every update`, `create only`,
+  `create + update on …`) ends each `weft hook ls` line and `weft hook add`'s
+  message, is `runs` in `weft describe --json` and a column in the AGENTS.md
+  hooks table. The schema's `inputs` description states the rule; the
+  bundled VS Code schema is regenerated.
+- Tests: unit (revisit all and some, unattended revisit equals `gather`;
+  handing back to a default and to a bind, instance labels; never-answered
+  questions; conflict choices and an edit left marked; `hook:` inputs;
+  merge chunks, the base marker, resolving a chunk) and e2e (a held-back
+  hook runs once after the conflict is resolved; hooks a failing hook
+  stopped on `weft new` run once on the next update; an added instance runs
+  its creation hooks; the marker block carries the base). Smoked in a
+  pseudo-terminal: review walk with stored answers offered, a new question
+  asked after declining review, a conflict left marked, one resolved to the
+  template's lines with its hook run in the same update, one resolved
+  through a scripted `$VISUAL`; a given `package_name` handed back to its
+  default; the instance picker, a connector's bound name overridden and
+  then handed back to its bind; and a `file://` git-sourced project whose
+  held-back hook ran on an unchanged commit.
+
 ## Post-MVP — Shared files: `weft share`, `weft commit --share`, amending an owner
 
 - **The gap**: a slot's declaration existed only in the owner's patch file,

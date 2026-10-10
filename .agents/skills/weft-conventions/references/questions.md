@@ -69,7 +69,7 @@ Nothing else: no `validate`, `regex`, `min`, `max`, `required`, `help`. `require
 
 Every name in an expression is bound before evaluation, including the untaken side of `and`/`or`. So `use_prisma and prisma_driver == 'postgresql'` fails when `prisma_driver` is gated off and has no default. A gated-off question with a default still resolves to that default. The fix is always the same: **give every optional question a safe default** (`''`, `False`, `[]`).
 
-In a terminal, `weft new`, `weft session new` and `weft patch amend` ask every open question that no flag, file or preset answered, offering its default; without a terminal, or with `--non-interactive`, they take the defaults and fail only on a default-less question. A computed, secret or locked question is never asked. On `weft update`, new questions with defaults are filled silently and default-less ones prompt or fail under `--non-interactive`, so a question added to a template in the field wants a default.
+In a terminal, `weft new`, `weft session new` and `weft patch amend` ask every open question that no flag, file or preset answered, offering its default; without a terminal, or with `--non-interactive`, they take the defaults and fail only on a default-less question. A computed, secret or locked question is never asked. In a terminal `weft update` asks a question new to the template, or behind a gate that just opened, offering its default, and offers to review every answer, include instances' too; in that review, giving a question the template default it names hands the answer back to the template. Unattended it fills a new question's default silently and fails on a default-less one, so a question added to a template in the field wants a default.
 
 ## Computed questions
 

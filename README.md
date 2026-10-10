@@ -148,21 +148,59 @@ When the template gains patches, `weft update` re-renders both states and
 ```sh
 weft update /tmp/demo --dry-run          # show the plan
 weft update /tmp/demo --dry-run --diff   # …and the unified diff it would apply
-weft update /tmp/demo                    # apply; conflicts get <<<<<<< markers
+weft update /tmp/demo                    # apply
 ```
 
-Tasks re-fire only when their declared inputs (file globs, answers, upstream
-tasks) actually changed between the two renders. Running `update` twice in a
-row is a no-op.
+In a terminal, `weft update` is interactive. It lists the project's answers
+and asks whether to change any (Enter keeps them), asks every question the
+project never answered, such as one the template added since, offering its
+default, and puts each conflict to you before writing the file. Without a
+terminal, or with `--non-interactive`, it keeps the answers, takes new
+questions' defaults (failing on one without), and leaves conflicts marked in
+the files.
+
+A conflict is a region that you and the template both changed, differently.
+In a terminal you see what the template had there, what you have, and what
+the template has now, and keep yours, the template's, both, an edit of the
+block in `$EDITOR`, or the markers to resolve later. In the file the markers
+carry all three:
+
+```
+<<<<<<< local
+version = "0.2.0"
+||||||| base
+version = "0.1.0"
+=======
+version = "1.0.0"
+>>>>>>> template
+```
 
 A file left with conflict markers blocks the next `weft update` until you
 resolve it. Inside a git work tree, `weft update` also refuses to write over
 files with uncommitted changes, so `git diff` shows exactly what the merge
 did and `git checkout` undoes it; `--allow-dirty` overrides.
 
+Pre hooks run on every update. A post hook runs when its project is created,
+or its include instance (`weft instance add` creates one too), and on a later
+update only when one of its inputs changed: a file its `glob:` matches, its
+`answer:`, or the hook its `hook:` input names ran in the same update. A post
+hook without inputs therefore runs only at creation; `weft hook ls` shows
+when each hook runs. Post hooks an update holds back because it left
+conflicts run on the next `weft update` that finds the markers gone. So does
+a post hook that fails, with the ones after it, whether it failed on `weft
+new` or on an update: fix the cause and run `weft update`. Running `update`
+twice in a row is a no-op.
+
 ### Change a project's answers
 
-The same update changes answers and re-renders:
+Run `weft update` in a terminal and say yes when it asks to change the
+answers. A project with include instances is then asked whose answers to go
+through: its own, and any instance's. Each question comes back with its
+current value offered: Enter keeps it, and what you type replaces it. Where
+one of your answers differs from the template's default (or an include's
+bind), the prompt names that default, and giving it hands the answer back:
+it follows the template again, as `--unset` does. Flags change answers
+without prompts:
 
 ```sh
 weft answers /tmp/demo                                  # what's set, and where it came from
