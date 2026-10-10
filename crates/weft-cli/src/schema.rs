@@ -255,8 +255,10 @@ pub struct Hook {
     /// extender orders its hooks ahead of one it inherits).
     #[serde(default)]
     pub before: Vec<String>,
-    /// Post-only: `glob:PATTERN`, `answer:ID`, or `hook:ID` — on `weft update`
-    /// this hook re-fires only when one changed.
+    /// Post-only update triggers: `glob:PATTERN`, `answer:ID`, or `hook:ID`. A
+    /// post hook runs when its project or include instance is created; on a
+    /// later `weft update` it runs only when one of these changed, so a post
+    /// hook without inputs runs only at creation. `pre` hooks always run.
     #[serde(default)]
     pub inputs: Vec<String>,
 }

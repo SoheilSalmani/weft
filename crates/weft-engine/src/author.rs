@@ -129,6 +129,7 @@ pub fn hook_add(
             .collect::<Result<_, _>>()
             .map_err(|e| anyhow::anyhow!("invalid --input: {e}"))?,
     };
+    let runs = hook.runs();
     edit_patch_file(root, resolver, &opts.patch, |file| {
         if file.hooks.iter().any(|h| h.id == hook.id) {
             bail!("patch `{}` already has a hook `{}`", opts.patch, hook.id);
@@ -136,7 +137,10 @@ pub fn hook_add(
         file.hooks.push(hook);
         Ok(())
     })?;
-    eprintln!("added hook `{}` to patch `{}`", opts.id, opts.patch);
+    eprintln!(
+        "added hook `{}` to patch `{}` (runs: {runs})",
+        opts.id, opts.patch
+    );
     Ok(())
 }
 
@@ -181,10 +185,11 @@ pub fn hook_ls(root: &Utf8Path, resolver: &mut dyn crate::template::IncludeResol
                     .map(|w| format!(" when={}", w.as_str()))
                     .unwrap_or_default();
                 println!(
-                    "{phase_s:4} {effect:6} {id:20} [{patch}] {label}{gate}",
+                    "{phase_s:4} {effect:6} {id:20} [{patch}] {label}{gate} (runs: {runs})",
                     id = hook.id.0,
                     patch = template.id_to_name[&patch.id],
                     label = hook.label,
+                    runs = hook.runs(),
                 );
                 count += 1;
             }

@@ -185,10 +185,29 @@ pub struct Hook {
     /// extender orders its hooks ahead of one it inherits).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub before: Vec<HookId>,
-    /// Post-only: `weft update` re-fires this hook only when one of these
-    /// changed. Ignored for `pre` hooks (they always run).
+    /// Post-only update triggers. A post hook runs when its project or include
+    /// instance is created; on a later `weft update` it runs only when one of
+    /// these changed, so a post hook without inputs runs only at creation.
+    /// Ignored for `pre` hooks, which run on every `weft new` and `weft update`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<HookInput>,
+}
+
+impl Hook {
+    /// When this hook runs, derived from its fields. A `pre` hook runs on every
+    /// `weft new` and `weft update`. A `post` hook runs when its project or
+    /// include instance is created and, on a later `weft update`, only when one
+    /// of its `inputs` changed; without inputs it runs only at creation.
+    pub fn runs(&self) -> String {
+        match self.phase {
+            HookPhase::Pre => "create + every update".to_string(),
+            HookPhase::Post if self.inputs.is_empty() => "create only".to_string(),
+            HookPhase::Post => {
+                let inputs: Vec<String> = self.inputs.iter().map(ToString::to_string).collect();
+                format!("create + update on {}", inputs.join(", "))
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -190,6 +190,9 @@ pub struct HookDescription {
     pub before: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<String>,
+    /// When the hook runs (`create + every update`, `create only`, or
+    /// `create + update on <inputs>`), derived from its phase and inputs.
+    pub runs: String,
 }
 
 #[derive(Serialize)]
@@ -394,6 +397,7 @@ fn hook_descriptions(template: &Template) -> Vec<HookDescription> {
                     after: hook.after.iter().map(ToString::to_string).collect(),
                     before: hook.before.iter().map(ToString::to_string).collect(),
                     inputs: hook.inputs.iter().map(ToString::to_string).collect(),
+                    runs: hook.runs(),
                 },
             ));
         }
@@ -426,6 +430,7 @@ fn clone_desc(d: &HookDescription) -> HookDescription {
         after: d.after.clone(),
         before: d.before.clone(),
         inputs: d.inputs.clone(),
+        runs: d.runs.clone(),
     }
 }
 
@@ -725,20 +730,23 @@ pub fn agents_md(doc: &DescribeDoc) -> String {
         w("## Hooks (side-effects, in run order)");
         w("");
         w("`pre` hooks run before any file is written (a failure aborts); `post`");
-        w("hooks run after. Effects: **check** = read-only/safe, **setup** =");
+        w("hooks run after. A `post` hook runs at creation and, on `weft update`,");
+        w("only when one of its inputs changed; without inputs it runs only at");
+        w("creation. Effects: **check** = read-only/safe, **setup** =");
         w("idempotent local, **deploy** = external/irreversible (confirm first).");
         w("");
-        w("| phase | effect | label | patch | command | when |");
-        w("| --- | --- | --- | --- | --- | --- |");
+        w("| phase | effect | label | patch | command | when | runs |");
+        w("| --- | --- | --- | --- | --- | --- | --- |");
         for h in &doc.hooks {
             w(&format!(
-                "| {} | {} | {} | `{}` | `{}` | {} |",
+                "| {} | {} | {} | `{}` | `{}` | {} | {} |",
                 h.phase,
                 h.effect,
                 h.label,
                 h.patch,
                 h.action,
                 h.when.as_deref().unwrap_or("—"),
+                h.runs,
             ));
         }
         w("");

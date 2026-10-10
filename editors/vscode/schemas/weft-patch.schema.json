@@ -482,7 +482,7 @@
           "default": []
         },
         "inputs": {
-          "description": "Post-only: `glob:PATTERN`, `answer:ID`, or `hook:ID` — on `weft update`\nthis hook re-fires only when one changed.",
+          "description": "Post-only update triggers: `glob:PATTERN`, `answer:ID`, or `hook:ID`. A\npost hook runs when its project or include instance is created; on a\nlater `weft update` it runs only when one of these changed, so a post\nhook without inputs runs only at creation. `pre` hooks always run.",
           "type": "array",
           "items": {
             "type": "string"
