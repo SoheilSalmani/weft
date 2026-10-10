@@ -194,6 +194,67 @@ fn update_conflict_gets_markers_and_nonzero_exit() {
 }
 
 #[test]
+fn post_hooks_held_back_by_a_conflict_run_once_it_is_resolved() {
+    let tmp = tempfile::tempdir().unwrap();
+    let template = tmp.path().join("template");
+    let dest = tmp.path().join("project");
+    copy_template(&template);
+    scaffold(&template, &dest);
+    fs::remove_file(dest.join(".task-ran")).unwrap();
+
+    // Both sides change the line `mark-synced` watches (glob:pyproject.toml).
+    let pyproject = read(&dest, "pyproject.toml");
+    fs::write(
+        dest.join("pyproject.toml"),
+        pyproject.replace("0.1.0", "0.2.0"),
+    )
+    .unwrap();
+    evolve(&template, "bump", |worktree| {
+        let py = fs::read_to_string(worktree.join("pyproject.toml")).unwrap();
+        fs::write(
+            worktree.join("pyproject.toml"),
+            py.replace("0.1.0", "1.0.0"),
+        )
+        .unwrap();
+    });
+
+    weft()
+        .arg("update")
+        .arg(&dest)
+        .arg("--non-interactive")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "held back post-hook(s) `mark-synced` because of conflicts",
+        ));
+    assert!(!dest.join(".task-ran").exists());
+
+    // Resolved by hand, the merge has nothing left to do, and the hook runs.
+    fs::write(
+        dest.join("pyproject.toml"),
+        pyproject.replace("0.1.0", "1.0.0"),
+    )
+    .unwrap();
+    weft()
+        .arg("update")
+        .arg(&dest)
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    assert_eq!(read(&dest, ".task-ran").trim(), "synced");
+
+    // Once.
+    fs::remove_file(dest.join(".task-ran")).unwrap();
+    weft()
+        .arg("update")
+        .arg(&dest)
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    assert!(!dest.join(".task-ran").exists());
+}
+
+#[test]
 fn update_dry_run_changes_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let template = tmp.path().join("template");

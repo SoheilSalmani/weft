@@ -470,18 +470,35 @@ pub fn run(
         );
     }
     // Pre-hooks always run on update (they're guards). Post-hooks re-fire
-    // when one of their inputs changed, or, all of them, in an instance this
-    // update creates: `weft instance add` pins it with an empty base, and its
-    // hooks run as they would have on `weft new`.
+    // when one of their inputs changed, when an earlier update owes them, or,
+    // all of them, in an instance this update creates: `weft instance add`
+    // pins it with an empty base, and its hooks run as they would have on
+    // `weft new`.
     let created: BTreeSet<Vec<(String, String)>> = state
         .instances
         .iter()
         .filter(|inst| inst.base.is_empty())
         .map(|inst| vec![(inst.include.clone(), inst.key.clone())])
         .collect();
+    let pending: BTreeSet<String> = state.state.pending_hooks.iter().cloned().collect();
     let plan = hooks::plan(&template, &new_answers, &new_parts, &eval)?;
-    let post_plan =
-        hooks::fire_on_update_planned(&plan.post, &changes, &changed_by_frame, &created, &eval)?;
+    let post_plan = hooks::fire_on_update_planned(
+        &plan.post,
+        &changes,
+        &changed_by_frame,
+        &created,
+        &pending,
+        &eval,
+    )?;
+    if !opts.skip_tasks {
+        for id in &pending {
+            if !post_plan.iter().any(|hook| hook.id == *id) {
+                report.notes.push(format!(
+                    "dropped pending post-hook `{id}`: the template no longer runs it here"
+                ));
+            }
+        }
+    }
 
     // Files with uncommitted git changes that this update would write: the
     // merge could be neither reviewed nor undone with git.
@@ -563,7 +580,8 @@ pub fn run(
     }
 
     // Pin the new state: source, base, answers with provenance, re-pinned
-    // include instances, and the files left with conflict markers.
+    // include instances, the files left with conflict markers, and the
+    // post-hooks held back until they are gone.
     let secret_specs = collect_secret_specs(&template, &state, &new_answers);
     let instance_states: Vec<crate::state::InstanceState> = new_parts
         .iter()
@@ -595,21 +613,67 @@ pub fn run(
     )
     .with_instances(instance_states);
     next.state.conflicts = report.conflicts.clone();
+    let held_back = !opts.skip_tasks && !report.conflicts.is_empty();
+    next.state.pending_hooks = if opts.skip_tasks {
+        // Nothing ran: what an earlier update held back still waits.
+        state.state.pending_hooks.clone()
+    } else if held_back {
+        post_plan.iter().map(|hook| hook.id.clone()).collect()
+    } else {
+        Vec::new()
+    };
     next.save(&opts.dest)?;
     // Re-pin the self-contained base (root frame and every instance) to the
     // new template state.
     crate::state::BaseSnapshot::from_render(&template.patches, &new_parts).save(&opts.dest)?;
 
-    if !opts.skip_tasks && report.conflicts.is_empty() {
-        hooks::run_planned(post_plan.iter().copied(), &opts.dest, &eval)?;
-    } else if !post_plan.is_empty() && !report.conflicts.is_empty() {
-        report.notes.push(format!(
-            "skipped {} post-hook(s) because of conflicts; re-run them after resolving",
-            post_plan.len()
-        ));
+    if held_back {
+        if !post_plan.is_empty() {
+            let ids: Vec<String> = post_plan
+                .iter()
+                .map(|hook| format!("`{}`", hook.id))
+                .collect();
+            report.notes.push(format!(
+                "held back post-hook(s) {} because of conflicts; the next `weft update` runs \
+                 them once the markers are gone",
+                ids.join(", ")
+            ));
+        }
+    } else if !opts.skip_tasks {
+        run_post_hooks(&post_plan, &opts.dest, &mut next, &eval)?;
     }
 
     Ok(report)
+}
+
+/// Run post-hooks in order. When one fails, it and the hooks after it go
+/// into the project's state as pending, so the next `weft update` runs them
+/// once the cause is fixed, whether or not their inputs change again; the
+/// failure is returned, naming them. Hooks before it ran and stay done.
+pub(crate) fn run_post_hooks(
+    post: &[&hooks::PlannedHook<'_>],
+    dest: &Utf8Path,
+    state: &mut State,
+    eval: &dyn ExprEval,
+) -> Result<()> {
+    for (i, hook) in post.iter().enumerate() {
+        if let Err(err) = hooks::run_planned(std::iter::once(*hook), dest, eval) {
+            state.state.pending_hooks = post[i..].iter().map(|h| h.id.clone()).collect();
+            state.save(dest)?;
+            let ids: Vec<String> = state
+                .state
+                .pending_hooks
+                .iter()
+                .map(|id| format!("`{id}`"))
+                .collect();
+            return Err(err.context(format!(
+                "post-hook `{}` failed; the next `weft update` runs {}",
+                hook.id,
+                ids.join(", ")
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// This run's answer changes for one frame (the root or one instance).

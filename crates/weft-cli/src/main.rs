@@ -958,8 +958,9 @@ fn main() -> anyhow::Result<()> {
                 None => {
                     let located = source::locate_project(&state, to.as_deref(), offline)?;
                     // Nothing to re-render when neither the source nor the
-                    // answers move.
-                    if let (true, Some(s)) = (changes.is_empty(), &located.stored) {
+                    // answers move, and no pending hook waits to run.
+                    let still = changes.is_empty() && state.state.pending_hooks.is_empty();
+                    if let (true, Some(s)) = (still, &located.stored) {
                         if let Some(commit) = &s.commit {
                             if s.template == state.state.template
                                 && state.state.commit.as_deref() == Some(commit)

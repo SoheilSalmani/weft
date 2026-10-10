@@ -157,7 +157,7 @@ pub fn run(
         .stored
         .clone()
         .unwrap_or_else(|| StoredSource::path(&opts.template));
-    let state = State::new(
+    let mut state = State::new(
         source,
         template.patches.iter().map(|p| p.id).collect(),
         tree.hash(),
@@ -173,7 +173,10 @@ pub fn run(
     crate::state::BaseSnapshot::from_render(&template.patches, &parts).save(&opts.dest)?;
 
     if !opts.skip_tasks {
-        hooks::run_planned(&plan.post, &opts.dest, &eval)?;
+        // A post-hook that fails leaves itself and the rest pending in the
+        // state, for the next `weft update` to run.
+        let post: Vec<&hooks::PlannedHook> = plan.post.iter().collect();
+        crate::update::run_post_hooks(&post, &opts.dest, &mut state, &eval)?;
     }
 
     eprintln!(

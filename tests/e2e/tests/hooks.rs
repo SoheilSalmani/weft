@@ -127,3 +127,54 @@ fn extender_hook_runs_before_an_inherited_hook() {
     let ran = std::fs::read_to_string(dest.join("order.txt")).unwrap();
     assert_eq!(ran, "sync\ndeps\ncommit\n");
 }
+
+#[test]
+fn post_hooks_a_failure_stopped_run_on_the_next_update() {
+    let tmpl = tempfile::tempdir().unwrap();
+    // `first` runs, `sync` fails until `ready` exists, `report` runs after
+    // it. None has inputs, so only being left pending runs them on update.
+    write_template(
+        tmpl.path(),
+        r#"{
+          "ops": [{"op":"create_file","path":"file.txt","content":["hi"]}],
+          "hooks": [
+            {"id":"first","phase":"post","effect":"setup","label":"first","action":"echo first >> ran.txt"},
+            {"id":"sync","phase":"post","effect":"setup","label":"sync","action":"test -f ready && echo sync >> ran.txt","after":["first"]},
+            {"id":"report","phase":"post","effect":"setup","label":"report","action":"echo report >> ran.txt","after":["sync"]}
+          ]
+        }"#,
+    );
+    let out = tempfile::tempdir().unwrap();
+    let dest = out.path().join("scaffold");
+
+    weft()
+        .arg("new")
+        .arg(tmpl.path())
+        .arg(&dest)
+        .arg("--non-interactive")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "post-hook `sync` failed; the next `weft update` runs `sync`, `report`",
+        ));
+    let ran = |dest: &Path| std::fs::read_to_string(dest.join("ran.txt")).unwrap();
+    assert_eq!(ran(&dest), "first\n");
+
+    // Fixed, the next update runs what the failure stopped, and only that.
+    std::fs::write(dest.join("ready"), "").unwrap();
+    weft()
+        .arg("update")
+        .arg(&dest)
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    assert_eq!(ran(&dest), "first\nsync\nreport\n");
+
+    weft()
+        .arg("update")
+        .arg(&dest)
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    assert_eq!(ran(&dest), "first\nsync\nreport\n");
+}

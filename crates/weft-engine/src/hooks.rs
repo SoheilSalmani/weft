@@ -218,17 +218,19 @@ fn runs_after(hook: &Hook) -> impl Iterator<Item = &HookId> {
 /// Restrict post-hooks to those that should fire on `weft update`: the hook
 /// is on (`when`, in its frame) and either its frame is one this update
 /// creates (`created`: an instance `weft instance add` adds, whose hooks run
-/// as on `weft new`) or one of its inputs changed. Glob inputs match
-/// `changes.paths` under the hook's mount with the mount stripped; answer
-/// inputs consult the changed answers of the hook's frame (a frame with no
-/// entry has no changed answers); a `hook:` input fires when the hook it
-/// names fires in this run. A hook with no inputs therefore runs only where
-/// its frame is created.
+/// as on `weft new`), an earlier render owes it (`pending`, namespaced ids:
+/// held back for conflicts, or stopped by a failing hook), or one of its
+/// inputs changed. Glob inputs match `changes.paths` under the hook's mount
+/// with the mount stripped; answer inputs consult the changed answers of the
+/// hook's frame (a frame with no entry has no changed answers); a `hook:`
+/// input fires when the hook it names fires in this run. A hook with no
+/// inputs therefore runs only where its frame is created.
 pub fn fire_on_update_planned<'p, 't>(
     post: &'p [PlannedHook<'t>],
     changes: &ChangeSet,
     changed_answers_by_frame: &BTreeMap<Vec<(String, String)>, BTreeSet<AnswerId>>,
     created: &BTreeSet<Vec<(String, String)>>,
+    pending: &BTreeSet<String>,
     eval: &dyn ExprEval,
 ) -> Result<Vec<&'p PlannedHook<'t>>> {
     let no_answers = BTreeSet::new();
@@ -249,11 +251,9 @@ pub fn fire_on_update_planned<'p, 't>(
         let created_here = created
             .iter()
             .any(|frame| hook.frame.starts_with(frame.as_slice()));
-        let changed = hook
-            .hook
-            .inputs
-            .iter()
-            .try_fold(created_here, |acc, input| {
+        let changed = hook.hook.inputs.iter().try_fold(
+            created_here || pending.contains(&hook.id),
+            |acc, input| {
                 anyhow::Ok(
                     acc || match input {
                         HookInput::Glob(pattern) => {
@@ -268,7 +268,8 @@ pub fn fire_on_update_planned<'p, 't>(
                         HookInput::Hook(id) => fired.contains(hook.qualify(id).as_str()),
                     },
                 )
-            })?;
+            },
+        )?;
         if changed {
             fired.insert(hook.id.as_str());
             fire.push(hook);
@@ -803,6 +804,7 @@ mod tests {
             &changes,
             &BTreeMap::new(),
             &BTreeSet::new(),
+            &BTreeSet::new(),
             &weft_lang::StarlarkEval,
         )
         .unwrap();
@@ -833,6 +835,7 @@ mod tests {
             &changes,
             &by_frame,
             &BTreeSet::new(),
+            &BTreeSet::new(),
             &weft_lang::StarlarkEval,
         )
         .unwrap();
@@ -859,6 +862,7 @@ mod tests {
                 &post,
                 &changes,
                 &BTreeMap::new(),
+                &BTreeSet::new(),
                 &BTreeSet::new(),
                 &weft_lang::StarlarkEval,
             )

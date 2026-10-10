@@ -237,6 +237,12 @@ pub struct StateMeta {
     /// refuses to run while any of them still has markers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conflicts: Vec<Utf8PathBuf>,
+    /// Post hooks (namespaced ids, `web/install` for an include's) a render
+    /// owes: held back because the update left conflicts, or stopped by a
+    /// hook that failed. The next update runs them, once any markers are
+    /// gone, whether or not their inputs change again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_hooks: Vec<String>,
 }
 
 /// What `state.toml` records as the template source: the ref to track plus,
@@ -289,6 +295,7 @@ impl State {
                 base,
                 tree_hash,
                 conflicts: Vec::new(),
+                pending_hooks: Vec::new(),
             },
             answers: given,
             derived,
