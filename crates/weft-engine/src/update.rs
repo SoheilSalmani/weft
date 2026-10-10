@@ -7,13 +7,16 @@
 //! exactly what was rendered before (given and derived), the new render
 //! starts from the *given* answers plus this run's changes, so defaults,
 //! computed values, and include binds re-derive.
+//!
+//! With a person at the terminal the update puts each conflict to them
+//! before writing it with markers; unattended, it leaves the markers.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
-use weft_core::merge::{merge3, MergeOutcome};
+use weft_core::merge::{merge3, Chunk, MergeOutcome};
 use weft_core::render::{narrow, ExprEval, RenderError, ValueOrigin};
 use weft_core::{AnswerId, AnswerSet, FileEntry, Question, Value};
 use weft_lang::StarlarkEval;
@@ -558,6 +561,29 @@ pub fn run(
         hooks::run_planned(&plan.pre, &opts.dest, &eval).context("a pre-render hook failed")?;
     }
 
+    // A person settles each conflict now, or leaves its markers.
+    if interaction.interactive() {
+        for (path, action) in &mut actions {
+            let Action::Conflict { merge, mode, left } = action else {
+                continue;
+            };
+            let before = *left;
+            *left = resolve_conflicts(path.as_path(), merge, interaction)?;
+            if *left < before {
+                report
+                    .notes
+                    .push(format!("{path}: {} conflict(s) resolved", before - *left));
+            }
+            if *left == 0 {
+                let entry = FileEntry {
+                    content: merge.text().into(),
+                    mode: *mode,
+                };
+                *action = Action::Write(entry);
+            }
+        }
+    }
+
     for (path, action) in actions {
         match action {
             Action::Write(entry) => {
@@ -1032,6 +1058,89 @@ fn guard_conflicts(dest: &Utf8Path, state: &State) -> Result<()> {
     Ok(())
 }
 
+/// The choices for one conflict, in menu order.
+const KEEP: [&str; 5] = [
+    "yours",
+    "the template's",
+    "both, yours first",
+    "an edit of the block (opens $VISUAL or $EDITOR)",
+    "the conflict markers, to resolve later",
+];
+/// What an unattended run, and a person pressing Enter, keeps.
+const KEEP_MARKERS: usize = 4;
+
+/// Put each conflict in `merge` to a person, in file order: keep their
+/// lines, the template's, both, an edit of the marked block, or the markers.
+/// Returns how many blocks still carry markers, an edit saved with markers
+/// in it included.
+fn resolve_conflicts(
+    path: &Utf8Path,
+    merge: &mut MergeOutcome,
+    interaction: &mut dyn Interaction,
+) -> Result<usize> {
+    let total = merge.conflicts();
+    let extension = path
+        .extension()
+        .map(|e| format!(".{e}"))
+        .unwrap_or_default();
+    // 1-based line of the merged file where the next chunk starts.
+    let mut line = 1;
+    let mut seen = 0;
+    let mut left = 0;
+    for chunk in &mut merge.chunks {
+        let conflict = match chunk {
+            Chunk::Clean(lines) => {
+                line += lines.len();
+                continue;
+            }
+            Chunk::Conflict(conflict) => conflict,
+        };
+        seen += 1;
+        eprintln!("{path}: conflict {seen} of {total}, at line {line}");
+        show_lines("it was", &conflict.base);
+        show_lines("you have", &conflict.ours);
+        show_lines("the template now has", &conflict.theirs);
+        let lines: Vec<String> = match interaction.choose("Keep", &KEEP, KEEP_MARKERS)? {
+            0 => conflict.ours.clone(),
+            1 => conflict.theirs.clone(),
+            2 => conflict
+                .ours
+                .iter()
+                .chain(&conflict.theirs)
+                .cloned()
+                .collect(),
+            3 => {
+                let block = weft_core::segment::join_lines(&conflict.marked());
+                let edited = interaction.edit(&block, &extension)?;
+                if weft_core::merge::has_conflict_markers(&edited) {
+                    eprintln!("{path}: the edit still has conflict markers; they stay in the file");
+                    left += 1;
+                }
+                edited.lines().map(str::to_owned).collect()
+            }
+            _ => {
+                left += 1;
+                line += conflict.marked().len();
+                continue;
+            }
+        };
+        line += lines.len();
+        *chunk = Chunk::Clean(lines);
+    }
+    Ok(left)
+}
+
+/// One side of a conflict, indented under its label.
+fn show_lines(label: &str, lines: &[String]) {
+    eprintln!("  {label}:");
+    if lines.is_empty() {
+        eprintln!("    (nothing)");
+    }
+    for line in lines {
+        eprintln!("    {line}");
+    }
+}
+
 fn dirty_message(dirty: &[Utf8PathBuf]) -> String {
     format!(
         "uncommitted changes in file(s) this update would write: {}\n\
@@ -1310,5 +1419,87 @@ pub fn finish(report: &UpdateReport) -> Result<()> {
                 .collect::<Vec<_>>()
                 .join(", ")
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Picks menu entries in order and saves `edited` from the editor.
+    struct Picker {
+        picks: Vec<usize>,
+        edited: Vec<String>,
+    }
+
+    impl Interaction for Picker {
+        fn ask(&mut self, _: &Question, _: Option<&Value>) -> Result<Value> {
+            unreachable!("resolving conflicts asks no question")
+        }
+
+        fn ask_secret(&mut self, _: &Question) -> Result<weft_core::SecretValue> {
+            unreachable!("resolving conflicts asks no secret")
+        }
+
+        fn confirm(&mut self, _: &str, _: bool) -> Result<bool> {
+            unreachable!("resolving conflicts confirms nothing")
+        }
+
+        fn interactive(&self) -> bool {
+            true
+        }
+
+        fn choose(&mut self, _: &str, _: &[&str], _: usize) -> Result<usize> {
+            Ok(self.picks.remove(0))
+        }
+
+        fn edit(&mut self, _: &str, _: &str) -> Result<String> {
+            Ok(self.edited.remove(0))
+        }
+    }
+
+    #[test]
+    fn each_conflict_keeps_what_the_person_picks() {
+        let base = "a\nx\nb\nc\nd\ny\ne\nf\ng\nz\nh\n";
+        let ours = "a\nX1\nb\nc\nd\nY1\ne\nf\ng\nZ1\nh\n";
+        let theirs = "a\nX2\nb\nc\nd\nY2\ne\nf\ng\nZ2\nh\n";
+        let mut merge = merge3(base, ours, theirs);
+        assert_eq!(merge.conflicts(), 3);
+        let mut person = Picker {
+            // both, an edit, the markers
+            picks: vec![2, 3, KEEP_MARKERS],
+            edited: vec!["Y3\n".to_owned()],
+        };
+        let left = resolve_conflicts(Utf8Path::new("notes.txt"), &mut merge, &mut person).unwrap();
+        assert_eq!(left, 1);
+        let marked = Chunk::Conflict(weft_core::merge::Conflict {
+            base: vec!["z".into()],
+            ours: vec!["Z1".into()],
+            theirs: vec!["Z2".into()],
+        });
+        let expected = MergeOutcome {
+            chunks: vec![
+                Chunk::Clean(vec!["a".into()]),
+                Chunk::Clean(vec!["X1".into(), "X2".into()]),
+                Chunk::Clean(vec!["b".into(), "c".into(), "d".into()]),
+                Chunk::Clean(vec!["Y3".into()]),
+                Chunk::Clean(vec!["e".into(), "f".into(), "g".into()]),
+                marked,
+                Chunk::Clean(vec!["h".into()]),
+            ],
+        };
+        assert_eq!(merge.text(), expected.text());
+    }
+
+    #[test]
+    fn an_edit_saved_with_markers_stays_a_conflict() {
+        let mut merge = merge3("a\nb\nc\n", "a\nB1\nc\n", "a\nB2\nc\n");
+        let mut person = Picker {
+            picks: vec![3],
+            edited: vec!["<<<<<<< local\nB1\n=======\nB2\n>>>>>>> template\n".to_owned()],
+        };
+        let left = resolve_conflicts(Utf8Path::new("notes.txt"), &mut merge, &mut person).unwrap();
+        assert_eq!(left, 1);
+        assert!(weft_core::merge::has_conflict_markers(&merge.text()));
     }
 }

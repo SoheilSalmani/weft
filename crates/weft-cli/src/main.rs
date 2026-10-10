@@ -71,6 +71,7 @@ enum Command {
     },
     /// Re-render against the current template state (and, with `--answer`
     /// & co., changed answers) and 3-way merge the changes over local edits.
+    /// In a terminal it puts each conflict to you before writing markers.
     Update {
         /// Scaffolded project directory (defaults to `.`).
         #[arg(default_value = ".")]
@@ -115,7 +116,8 @@ enum Command {
         /// Do not run template tasks after merging.
         #[arg(long)]
         skip_tasks: bool,
-        /// Never prompt; fail if new questions lack answers.
+        /// Never prompt: fail if new questions lack answers, and leave
+        /// conflicts marked in the files.
         #[arg(long)]
         non_interactive: bool,
         /// Fail if a remote include isn't already pinned in weft.lock (CI).
