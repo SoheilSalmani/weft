@@ -48,7 +48,7 @@ Independent contributions to one file become sibling patches that each depend on
 
 A worktree holds text, so recording alone cannot reproduce a slot declaration. How the declaration gets written without the author editing a patch file, and how an owner is amended, is decided separately in ADR-0005. Regenerating a patch from a command's output cannot carry a slot either, so a generated patch that declares one is left alone by regeneration.
 
-Every line added between a slot's neighbours belongs to the slot. An owner that wants room for other additions next to a slot has to put a literal line between the two.
+Every line added between a slot's neighbours belongs to the slot. So do lines added just past a neighbour that reads like the lines the slot's separator adds, such as an empty line after a slot whose contributions an empty line separates, when the slot already holds a contribution and the lines read the same on either side of that neighbour. An owner that wants room for other additions next to a slot has to put a literal line between the two that its separator does not add.
 
 Contributions appear in key order, which recording takes from the patch name. An author cannot choose a different position, and one patch cannot override another patch's entry.
 

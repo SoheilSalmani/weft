@@ -327,9 +327,10 @@ suggests it for two creators that clash.
   order; `weft check` counts such pairs as commuting by construction. Two
   contributions with one key in one slot are an error naming both patches.
 - `weft commit` records lines added inside a slot's span as a `fill_slot`
-  keyed by the patch name. Place them where the key sorts (`weft diff` says
-  which slot they fill); hunk context never comes from slot content, or from
-  lines an `expr` rendered.
+  keyed by the patch name. Place them where the key sorts, with the
+  separator after every contribution but the last (a `"\n"` separator puts
+  an empty line between them); `weft diff` says which slot they fill. Hunk
+  context never comes from slot content, or from lines an `expr` rendered.
 - `weft patch amend` on an owner shows every patch's lines in its slots (a
   marker line where none fills one); edit the lines around them, and commit
   puts the slot back where they are. Slots do not nest, and `weft patch

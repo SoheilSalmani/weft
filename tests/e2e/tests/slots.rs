@@ -494,3 +494,232 @@ fn amending_an_owner_keeps_the_place_of_a_slot_nobody_fills() {
             {"slot": "servers", "separator": ","}, "  }", "}"])
     );
 }
+
+// ---- separators that take lines of their own ------------------------------
+
+/// A template whose patch `owner` creates `path` as `content`, around slot
+/// `entries`, with `patches` filling it.
+fn owned(
+    root: &Path,
+    path: &str,
+    content: serde_json::Value,
+    patches: &[(&str, serde_json::Value)],
+) -> PathBuf {
+    let tpl = root.join("owned");
+    fs::create_dir_all(tpl.join("patches")).unwrap();
+    fs::write(
+        tpl.join("weft.toml"),
+        "[template]\nname = \"owned\"\nweft-version = \"0.1\"\n",
+    )
+    .unwrap();
+    let owner = serde_json::json!({"ops": [{"op": "create_file", "path": path,
+        "omit_when_empty": ["entries"], "content": content}]});
+    fs::write(tpl.join("patches/owner.json"), owner.to_string()).unwrap();
+    for (name, body) in patches {
+        fs::write(
+            tpl.join("patches").join(format!("{name}.json")),
+            body.to_string(),
+        )
+        .unwrap();
+    }
+    tpl
+}
+
+/// The patch filling slot `entries` of `path` with `lines` under `key`.
+fn fill(path: &str, key: &str, depends_on: &[&str], lines: &[&str]) -> serde_json::Value {
+    serde_json::json!({"depends_on": depends_on, "ops": [{"op": "fill_slot", "path": path,
+        "slot": "entries", "key": key, "lines": lines}]})
+}
+
+fn ops(tpl: &Path, name: &str) -> serde_json::Value {
+    let patch = fs::read_to_string(tpl.join(format!("patches/{name}.json"))).unwrap();
+    serde_json::from_str::<serde_json::Value>(&patch).unwrap()["ops"].clone()
+}
+
+/// Record patch `name` filling the slot of `path`, written as `text` in a
+/// session on every patch so far.
+fn record_fill(tpl: &Path, name: &str, path: &str, text: &str) -> assert_cmd::assert::Assert {
+    weft()
+        .args(["session", "new", name])
+        .arg("--template")
+        .arg(tpl)
+        .assert()
+        .success();
+    fs::write(
+        tpl.join(".weft-sessions")
+            .join(name)
+            .join("worktree")
+            .join(path),
+        text,
+    )
+    .unwrap();
+    weft()
+        .args(["commit", "--session", name, "--name", name])
+        .args(["--depends-on", "owner", "--yes"])
+        .arg("--template")
+        .arg(tpl)
+        .assert()
+}
+
+fn rendered(tpl: &Path, dest: &Path, path: &str) -> String {
+    scaffold(tpl, dest, &[]);
+    fs::read_to_string(dest.join(path)).unwrap()
+}
+
+#[test]
+fn amending_a_filler_next_to_another_records_only_its_own_lines() {
+    let tmp = tempfile::tempdir().unwrap();
+    // `gamma` builds on `alpha`, so its amend shows `alpha`'s lines too.
+    let alpha = fill(".env", "alpha", &["owner"], &["# Alpha", "ALPHA=1"]);
+    let gamma = fill(".env", "gamma", &["alpha"], &["# Gamma", "GAMMA=1"]);
+    let tpl = owned(
+        tmp.path(),
+        ".env",
+        serde_json::json!([{"slot": "entries", "separator": "\n"}]),
+        &[("alpha", alpha), ("gamma", gamma.clone())],
+    );
+    let amend = || {
+        weft()
+            .args(["patch", "amend", "gamma", "--non-interactive"])
+            .arg("--template")
+            .arg(&tpl)
+            .assert()
+            .success();
+        tpl.join(".weft-sessions/gamma/worktree/.env")
+    };
+    let commit = || {
+        weft()
+            .args(["commit", "--session", "gamma", "--yes"])
+            .arg("--template")
+            .arg(&tpl)
+            .assert()
+            .success();
+    };
+    let file = amend();
+    assert_eq!(
+        fs::read_to_string(&file).unwrap(),
+        "# Alpha\nALPHA=1\n\n# Gamma\nGAMMA=1\n"
+    );
+    commit();
+    assert_eq!(ops(&tpl, "gamma"), gamma["ops"], "nothing changed");
+
+    let file = amend();
+    fs::write(&file, "# Alpha\nALPHA=1\n\n# Gamma\nGAMMA=2\n").unwrap();
+    commit();
+    assert_eq!(
+        ops(&tpl, "gamma"),
+        serde_json::json!([{"op": "fill_slot", "path": ".env", "slot": "entries", "key": "gamma",
+            "lines": ["# Gamma", "GAMMA=2"]}])
+    );
+    assert_eq!(
+        rendered(&tpl, &tmp.path().join("app"), ".env"),
+        "# Alpha\nALPHA=1\n\n# Gamma\nGAMMA=2\n"
+    );
+}
+
+#[test]
+fn a_separator_ending_a_line_and_adding_one_records_wherever_the_key_sorts() {
+    let tmp = tempfile::tempdir().unwrap();
+    // `,\n` ends every entry but the last with a comma and an empty line.
+    let tpl = owned(
+        tmp.path(),
+        "settings.json",
+        serde_json::json!(["{", {"slot": "entries", "separator": ",\n"}, "}"]),
+        &[
+            (
+                "alpha",
+                fill("settings.json", "alpha", &["owner"], &["  \"alpha\": 1"]),
+            ),
+            (
+                "gamma",
+                fill("settings.json", "gamma", &["owner"], &["  \"gamma\": 3"]),
+            ),
+        ],
+    );
+    // Between two entries, then after the last, which gains the separator.
+    let between = "{\n  \"alpha\": 1,\n\n  \"beta\": 2,\n\n  \"gamma\": 3\n}\n";
+    record_fill(&tpl, "beta", "settings.json", between).success();
+    let after = "{\n  \"alpha\": 1,\n\n  \"beta\": 2,\n\n  \"gamma\": 3,\n\n  \"zeta\": 4\n}\n";
+    record_fill(&tpl, "zeta", "settings.json", after).success();
+    for (name, line) in [("beta", "  \"beta\": 2"), ("zeta", "  \"zeta\": 4")] {
+        assert_eq!(
+            ops(&tpl, name),
+            serde_json::json!([{"op": "fill_slot", "path": "settings.json", "slot": "entries",
+                "key": name, "lines": [line]}])
+        );
+    }
+    weft().arg("check").arg(&tpl).assert().success();
+    assert_eq!(
+        rendered(&tpl, &tmp.path().join("app"), "settings.json"),
+        after
+    );
+}
+
+#[test]
+fn lines_added_after_the_last_contribution_stay_in_the_slot_before_an_empty_line() {
+    let tmp = tempfile::tempdir().unwrap();
+    // The owner's own section follows the slot after an empty line, the
+    // line the separator adds too.
+    let tpl = owned(
+        tmp.path(),
+        ".env",
+        serde_json::json!([{"slot": "entries", "separator": "\n"}, "", "# Common", "COMMON=1"]),
+        &[(
+            "gamma",
+            fill(".env", "gamma", &["owner"], &["# Gamma", "GAMMA=1"]),
+        )],
+    );
+    let text = "# Gamma\nGAMMA=1\n\n# Zeta\nZETA=1\n\n# Common\nCOMMON=1\n";
+    record_fill(&tpl, "zeta", ".env", text).success();
+    assert_eq!(
+        ops(&tpl, "zeta"),
+        serde_json::json!([{"op": "fill_slot", "path": ".env", "slot": "entries", "key": "zeta",
+            "lines": ["# Zeta", "ZETA=1"]}])
+    );
+    weft().arg("check").arg(&tpl).assert().success();
+    assert_eq!(rendered(&tpl, &tmp.path().join("app"), ".env"), text);
+}
+
+#[test]
+fn a_contribution_that_sorts_last_keeps_the_empty_line_it_ends_with() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tpl = owned(
+        tmp.path(),
+        ".env",
+        serde_json::json!([{"slot": "entries", "separator": "\n"}]),
+        &[(
+            "gamma",
+            fill(".env", "gamma", &["owner"], &["# Gamma", "GAMMA=1"]),
+        )],
+    );
+    // `zeta` sorts after `gamma`, so no separator follows it: the empty line
+    // it ends with is its own.
+    let text = "# Gamma\nGAMMA=1\n\n# Zeta\nZETA=1\n\n";
+    record_fill(&tpl, "zeta", ".env", text).success();
+    let recorded = ops(&tpl, "zeta");
+    assert_eq!(
+        recorded,
+        serde_json::json!([{"op": "fill_slot", "path": ".env", "slot": "entries", "key": "zeta",
+            "lines": ["# Zeta", "ZETA=1", ""]}])
+    );
+    assert_eq!(rendered(&tpl, &tmp.path().join("app"), ".env"), text);
+
+    // Its amend holds it alone in the slot, and records it unchanged.
+    weft()
+        .args(["patch", "amend", "zeta", "--non-interactive"])
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(tpl.join(".weft-sessions/zeta/worktree/.env")).unwrap(),
+        "# Zeta\nZETA=1\n\n"
+    );
+    weft()
+        .args(["commit", "--session", "zeta", "--yes"])
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .success();
+    assert_eq!(ops(&tpl, "zeta"), recorded, "nothing changed");
+}

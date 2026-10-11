@@ -232,9 +232,9 @@ pub fn propose(path: &str, versions: &[Version]) -> Result<Split> {
 /// The split a combined file shows: a cut and separator that reproduce it
 /// exactly, with the patches' lines in key order. Several can, since a
 /// separator may span lines (a `},` that closes one entry reads as part of
-/// it or of the separator): balanced entries win, then a separator on one
-/// line, which later patches' lines are recorded against, then the most
-/// shared lines.
+/// it or of the separator): balanced entries win, then a separator that
+/// stays on one line or only adds blank lines (an empty line between TOML
+/// tables), then the most shared lines.
 pub fn from_example(path: &str, versions: &[Version], example: &str) -> Result<Split> {
     check_versions(path, versions)?;
     let want = normalized(example);

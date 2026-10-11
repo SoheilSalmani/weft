@@ -64,6 +64,11 @@ fn template(root: &Path, patches: &[(&str, &str)]) -> PathBuf {
 
 /// The project's `.mcp.json` under these answers, or `None` without one.
 fn rendered(tpl: &Path, answers: &[&str]) -> Option<String> {
+    rendered_file(tpl, ".mcp.json", answers)
+}
+
+/// The project's `file` under these answers, or `None` without one.
+fn rendered_file(tpl: &Path, file: &str, answers: &[&str]) -> Option<String> {
     let dest = tempfile::tempdir().unwrap();
     let dest = dest.path().join("app");
     let mut cmd = weft();
@@ -75,7 +80,7 @@ fn rendered(tpl: &Path, answers: &[&str]) -> Option<String> {
         cmd.args(["--answer", answer]);
     }
     cmd.assert().success();
-    fs::read_to_string(dest.join(".mcp.json")).ok()
+    fs::read_to_string(dest.join(file)).ok()
 }
 
 fn patch(tpl: &Path, name: &str) -> serde_json::Value {
@@ -201,6 +206,68 @@ fn an_example_decides_the_separator() {
         .assert()
         .success();
     assert_eq!(fs::read_to_string(dest.join("config.toml")).unwrap(), both);
+}
+
+/// `.env` holding one section, as a patch on `base`.
+fn section(title: &str, line: &str) -> String {
+    serde_json::json!({"depends_on": ["base"], "ops": [{"op": "create_file", "path": ".env",
+        "content": [format!("# {title}"), line]}]})
+    .to_string()
+}
+
+#[test]
+fn a_patch_records_next_to_another_when_an_empty_line_separates_them() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tpl = template(
+        tmp.path(),
+        &[
+            ("alpha", &section("Alpha", "ALPHA=1")),
+            ("gamma", &section("Gamma", "GAMMA=1")),
+        ],
+    );
+    let example = tmp.path().join("example.env");
+    fs::write(&example, "# Alpha\nALPHA=1\n\n# Gamma\nGAMMA=1\n").unwrap();
+    weft()
+        .args(["share", ".env", "--name", "env"])
+        .arg(format!("--example=.env={}", example.display()))
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .success();
+    assert_eq!(
+        patch(&tpl, "env")["ops"][0]["content"],
+        serde_json::json!([{"slot": "entries", "separator": "\n"}])
+    );
+    // `beta` sorts before `gamma`, whose lines the session holds.
+    weft()
+        .args(["session", "new", "beta", "--base", "gamma"])
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .success();
+    fs::write(
+        tpl.join(".weft-sessions/beta/worktree/.env"),
+        "# Beta\nBETA=1\n\n# Gamma\nGAMMA=1\n",
+    )
+    .unwrap();
+    weft()
+        .args(["commit", "--session", "beta", "--name", "beta"])
+        .args(["--depends-on", "env", "--yes"])
+        .arg("--template")
+        .arg(&tpl)
+        .assert()
+        .success();
+    assert_eq!(
+        patch(&tpl, "beta")["ops"],
+        serde_json::json!([{"op": "fill_slot", "path": ".env", "slot": "entries", "key": "beta",
+            "lines": ["# Beta", "BETA=1"]}]),
+        "the separator's empty line is no line of `beta`'s"
+    );
+    weft().arg("check").arg(&tpl).assert().success();
+    assert_eq!(
+        rendered_file(&tpl, ".env", &[]).as_deref(),
+        Some("# Alpha\nALPHA=1\n\n# Beta\nBETA=1\n\n# Gamma\nGAMMA=1\n")
+    );
 }
 
 #[test]

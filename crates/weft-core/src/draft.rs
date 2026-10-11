@@ -119,7 +119,8 @@ pub struct SlotFill {
     pub key: String,
     /// The node whose `fill_slot` added it.
     pub node: PatchId,
-    /// How many lines of the file it takes.
+    /// How many lines of the file it takes, counting those the separator
+    /// after it adds (one per newline the separator holds).
     pub lines: usize,
 }
 

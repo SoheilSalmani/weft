@@ -3,6 +3,48 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Fix — recording into a slot whose separator holds a newline
+
+- **Bug**: with a newline in a slot's separator (`weft share --example`
+  writes `"\n"` for an empty line between sections), `weft commit` could
+  not record a contribution next to one already in the slot, nor `weft
+  patch amend` re-record a filler whose session held another (found on the
+  house `nextjs` template's `apps/web/.env`). Rendering appends the
+  separator to a contribution's last line and counts the file lines that
+  makes; `new_fill` stripped it with `strip_suffix` from one file line and
+  compared a rebuilt slot holding `"…\n"` elements against file lines, so
+  no worktree matched.
+- **Fix**: `diff::Separator` reads a separator as file lines: a suffix for
+  the contribution's last line, then one line per newline. `new_fill`
+  rebuilds the slot in that shape and reads each existing contribution as
+  the last one or as followed by another. The new block loses the
+  separator only when it sorts before another contribution; one that sorts
+  last keeps the lines it ends with, so a fill ending in an empty line
+  records and amends as it did, and a separator without a newline still
+  comes off its last line, as it did. A fill holds only its own lines, so
+  existing patches and renders stay byte-identical. Single-line separators
+  and their messages are unchanged; a refusal lists file lines and says
+  what a multi-line separator does (`every one but the last is followed by
+  an empty line`).
+- **Diff alignment**: when the owner follows such a slot with an empty
+  line, lines added after the last contribution diffed past the owner's
+  copy and recorded as an owner hunk. `slide_into_slots` moves an
+  insertion onto a slot's edge when the unchanged lines between are the
+  separator's lines and the slot holds a contribution; a separator without
+  a newline never moves anything. ADR-0003 states the rule.
+- **Checked, unchanged**: amending an owner, `weft check`, `weft graph`, and
+  `weft share`'s proposal and example parsing already work in file lines
+  or joined text. The example tie-break stays; `from_example`'s comment
+  and ADR-0005 now describe it as it is (a separator on one line or adding
+  only blank lines), without the old reason that later recordings need it.
+- Tests: e2e `share.rs` (the reproduction: check passes, one empty line
+  between sections and none at the end) and `slots.rs` (a filler amended
+  unchanged, then edited, with another contribution in its session; `,\n`
+  between and after entries; a contribution after the last one before the
+  owner's empty line; a last contribution ending in an empty line, recorded
+  and amended unchanged), each failing on `b3b2080`; a unit test for a
+  slide onto a slot's start, which the diff rarely produces end to end.
+
 ## Post-MVP — Interactive `weft update`, conflict resolution, and when hooks run
 
 - **The gaps**: answers changed only through flags (`--reconfigure` left with

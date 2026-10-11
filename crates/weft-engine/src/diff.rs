@@ -439,15 +439,91 @@ struct NewFill {
     key_text: String,
     /// 0-based line of the new text where the contribution starts.
     first: usize,
-    /// Its lines, the separator the slot appends taken off the last.
+    /// Its lines, without the separator the slot puts after them.
     lines: Vec<String>,
+}
+
+/// A slot's separator as the lines it makes. It is appended to the last
+/// line of every contribution but the final one: the text before its first
+/// newline ends that line, and each newline starts a line of its own. `,`
+/// ends the line with a comma, `\n` adds an empty line after it, `\n---`
+/// the line `---`.
+struct Separator<'s> {
+    /// What it ends a contribution's last line with.
+    suffix: &'s str,
+    /// The lines it adds after that one.
+    lines: Vec<&'s str>,
+}
+
+impl<'s> Separator<'s> {
+    fn new(text: &'s str) -> Self {
+        let mut parts = text.split('\n');
+        Separator {
+            suffix: parts.next().unwrap_or_default(),
+            lines: parts.collect(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.suffix.is_empty() && self.lines.is_empty()
+    }
+
+    /// Push `own`, one contribution's lines, onto `out` as the slot renders
+    /// them with another contribution after it.
+    fn follow(&self, own: &[String], out: &mut Vec<String>) {
+        let at = out.len();
+        out.extend_from_slice(own);
+        if let Some(last) = out[at..].last_mut() {
+            last.push_str(self.suffix);
+        }
+        out.extend(self.lines.iter().map(|l| (*l).to_owned()));
+    }
+
+    /// The contribution `lines` hold if they end the way the separator ends
+    /// one: its lines taken off the end, and its suffix off the line before
+    /// them.
+    fn strip(&self, lines: &[&str]) -> Option<Vec<String>> {
+        let last = lines.len().checked_sub(self.lines.len() + 1)?;
+        if lines[last + 1..] != self.lines[..] {
+            return None;
+        }
+        let bare = lines[last].strip_suffix(self.suffix)?;
+        let mut own: Vec<String> = lines[..last].iter().map(|l| (*l).to_owned()).collect();
+        own.push(bare.to_owned());
+        Some(own)
+    }
+
+    /// What it does to every contribution but the last, for messages.
+    fn describe(&self) -> String {
+        let mut does = Vec::new();
+        if !self.suffix.is_empty() {
+            does.push(format!("ends with `{}`", self.suffix));
+        }
+        match self.lines.as_slice() {
+            [] => {}
+            lines if lines.iter().all(|l| l.is_empty()) => does.push(match lines.len() {
+                1 => "is followed by an empty line".to_owned(),
+                n => format!("is followed by {n} empty lines"),
+            }),
+            [line] => does.push(format!("is followed by the line `{line}`")),
+            lines => does.push(format!(
+                "is followed by the lines {}",
+                lines
+                    .iter()
+                    .map(|l| format!("`{l}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
+        does.join(" and ")
+    }
 }
 
 /// Where each slot of `path` in the base is in the new text, and the new
 /// contribution, if any, the worktree added to it. A slot owns every line
 /// added between the lines around it; its existing contributions belong to
 /// other patches and may only move, and the new lines must be one block,
-/// placed where the key sorts, the separator ending all but the last.
+/// placed where the key sorts, the separator after all but the last.
 fn plan_slots<'t>(
     path: &Utf8Path,
     old: &[&str],
@@ -458,7 +534,7 @@ fn plan_slots<'t>(
     if spans.is_empty() || spans.last().is_some_and(|s| s.end() > old.len()) {
         return Ok(Vec::new());
     }
-    let ops = TextDiff::from_slices(old, new).ops().to_vec();
+    let ops = slide_into_slots(TextDiff::from_slices(old, new).ops(), spans, new);
     let mut plans: Vec<SlotPlan<'t>> = Vec::with_capacity(spans.len());
     for span in spans {
         let region = slot_region(path, &ops, span, new.len())?;
@@ -547,8 +623,140 @@ fn slot_region(
     }))
 }
 
+/// The diff `ops` of the old text and `new`, with each insertion that stops
+/// short of a slot moved to the slot's edge when the unchanged lines in
+/// between are separator lines. A separator that adds lines (`\n` adds an
+/// empty one) can read like the owner's line next to the slot, and then
+/// lines added after the last contribution, the separator's first, diff as
+/// well after the owner's copy as before it: inserting `""`, `"x"` at the
+/// slot's end reads the same as inserting `"x"`, `""` after the owner's
+/// empty line. Lines added there belong to the slot. An insertion that
+/// could move into two slots stays where it is.
+fn slide_into_slots(ops: &[DiffOp], spans: &[SlotSpan], new: &[&str]) -> Vec<DiffOp> {
+    #[derive(Clone, Copy)]
+    enum Slide {
+        Stay,
+        /// Up onto the end of the slot above, over this many lines.
+        Up(usize),
+        /// Down onto the start of the slot below.
+        Down(usize),
+    }
+    let slide = |i: usize| -> Slide {
+        let DiffOp::Insert {
+            old_index: a,
+            new_index: c,
+            new_len: n,
+        } = ops[i]
+        else {
+            return Slide::Stay;
+        };
+        if spans.iter().any(|s| (s.start..=s.end()).contains(&a)) {
+            return Slide::Stay;
+        }
+        // Only a slot holding a contribution puts separator lines between
+        // it and new lines.
+        let up = spans.iter().rev().find(|s| s.end() < a).filter(|s| {
+            let (k, sep) = (a - s.end(), Separator::new(&s.separator));
+            !s.fills.is_empty()
+                && matches!(i.checked_sub(1).map(|j| ops[j]),
+                    Some(DiffOp::Equal { old_index, .. }) if old_index <= s.end())
+                && k <= sep.lines.len()
+                && new[c - k..c] == sep.lines[..k]
+                && (1..=k).all(|j| new[c - j] == new[c + n - j])
+        });
+        let down = spans.iter().find(|s| s.start > a).filter(|s| {
+            let (k, sep) = (s.start - a, Separator::new(&s.separator));
+            let m = sep.lines.len();
+            !s.fills.is_empty()
+                && matches!(ops.get(i + 1),
+                    Some(&DiffOp::Equal { len, .. }) if a + len >= s.start)
+                && k <= m
+                && new[c + n..c + n + k] == sep.lines[m - k..]
+                && (0..k).all(|j| new[c + j] == new[c + n + j])
+        });
+        match (up, down) {
+            (Some(s), None) => Slide::Up(a - s.end()),
+            (None, Some(s)) => Slide::Down(s.start - a),
+            _ => Slide::Stay,
+        }
+    };
+    let slides: Vec<Slide> = (0..ops.len()).map(slide).collect();
+    let mut out = Vec::with_capacity(ops.len() + 2);
+    for (i, &op) in ops.iter().enumerate() {
+        match (op, slides[i]) {
+            (
+                DiffOp::Insert {
+                    old_index,
+                    new_index,
+                    new_len,
+                },
+                Slide::Up(k),
+            ) => {
+                out.push(DiffOp::Insert {
+                    old_index: old_index - k,
+                    new_index: new_index - k,
+                    new_len,
+                });
+                out.push(DiffOp::Equal {
+                    old_index: old_index - k,
+                    new_index: new_index + new_len - k,
+                    len: k,
+                });
+            }
+            (
+                DiffOp::Insert {
+                    old_index,
+                    new_index,
+                    new_len,
+                },
+                Slide::Down(k),
+            ) => {
+                out.push(DiffOp::Equal {
+                    old_index,
+                    new_index,
+                    len: k,
+                });
+                out.push(DiffOp::Insert {
+                    old_index: old_index + k,
+                    new_index: new_index + k,
+                    new_len,
+                });
+            }
+            (
+                DiffOp::Equal {
+                    old_index,
+                    new_index,
+                    len,
+                },
+                _,
+            ) => {
+                // The lines the insertions next to it moved over.
+                let front = match i.checked_sub(1).map(|j| slides[j]) {
+                    Some(Slide::Down(k)) => k,
+                    _ => 0,
+                };
+                let back = match slides.get(i + 1) {
+                    Some(Slide::Up(k)) => *k,
+                    _ => 0,
+                };
+                if len > front + back {
+                    out.push(DiffOp::Equal {
+                        old_index: old_index + front,
+                        new_index: new_index + front,
+                        len: len - front - back,
+                    });
+                }
+            }
+            (op, _) => out.push(op),
+        }
+    }
+    out
+}
+
 /// Split a slot's lines in the new text into its existing contributions and
 /// the one block the worktree added, which becomes the recorded patch's fill.
+/// Lines are the file's: a separator holding a newline puts lines of its own
+/// between contributions, which belong to none of them.
 fn new_fill(
     path: &Utf8Path,
     span: &SlotSpan,
@@ -557,37 +765,29 @@ fn new_fill(
     region: Range<usize>,
     rec: &Recording<'_>,
 ) -> Result<Option<NewFill>> {
-    let sep = span.separator.as_str();
-    let unseparated = |line: &str| -> Option<String> {
-        (!sep.is_empty())
-            .then(|| line.strip_suffix(sep).map(str::to_owned))
-            .flatten()
-    };
+    let sep = Separator::new(&span.separator);
+    let owned = |lines: &[&str]| -> Vec<String> { lines.iter().map(|l| (*l).to_owned()).collect() };
     // Each contribution's lines as its patch wrote them: the separator the
-    // slot appended taken off.
+    // slot put after it taken off.
     let mut fills: Vec<(String, PatchId, Vec<String>)> = Vec::with_capacity(span.fills.len());
     let mut at = 0;
     for (k, fill) in span.fills.iter().enumerate() {
-        let mut lines: Vec<String> = old[at..at + fill.lines]
-            .iter()
-            .map(|l| (*l).to_owned())
-            .collect();
+        let lines = &old[at..at + fill.lines];
         at += fill.lines;
-        if k + 1 < span.fills.len() {
-            if let Some(last) = lines.last_mut() {
-                *last = unseparated(last).unwrap_or_else(|| last.clone());
-            }
-        }
-        fills.push((fill.key.clone(), fill.node, lines));
+        let own = (k + 1 < span.fills.len())
+            .then(|| sep.strip(lines))
+            .flatten()
+            .unwrap_or_else(|| owned(lines));
+        fills.push((fill.key.clone(), fill.node, own));
     }
+    // The slot's lines with these contributions in it, in this order.
     let rendered = |fills: &[(String, PatchId, Vec<String>)]| -> Vec<String> {
         let mut out = Vec::new();
         for (k, (_, _, lines)) in fills.iter().enumerate() {
-            out.extend(lines.iter().cloned());
             if k + 1 < fills.len() {
-                if let Some(last) = out.last_mut() {
-                    last.push_str(sep);
-                }
+                sep.follow(lines, &mut out);
+            } else {
+                out.extend_from_slice(lines);
             }
         }
         out
@@ -607,28 +807,68 @@ fn new_fill(
         );
     }
     // The existing contributions keep their order: find the one gap where
-    // new lines sit between them.
-    let fits = |at: usize, lines: &[String]| -> bool {
-        at + lines.len() <= inside.len()
-            && lines.iter().enumerate().all(|(j, l)| {
-                inside[at + j] == l
-                    || (j + 1 == lines.len() && unseparated(inside[at + j]).as_deref() == Some(l))
-            })
+    // new lines sit between them. A contribution reads as the last one, or
+    // as followed by another, the separator after it; both readings are
+    // tried, the one its place calls for first, and the render below says
+    // whether the layout holds.
+    let separated: Vec<Vec<String>> = fills
+        .iter()
+        .map(|(_, _, lines)| {
+            let mut out = Vec::new();
+            sep.follow(lines, &mut out);
+            out
+        })
+        .collect();
+    let reads = |reading: &[String], at: usize| -> bool {
+        inside
+            .get(at..at + reading.len())
+            .is_some_and(|got| got == reading)
+    };
+    // Contribution `i` read as the last one and as followed by another,
+    // the latter first when it is `followed`.
+    let readings = |i: usize, followed: bool| -> [&[String]; 2] {
+        let (last, then) = (fills[i].2.as_slice(), separated[i].as_slice());
+        if followed {
+            [then, last]
+        } else {
+            [last, then]
+        }
+    };
+    // How many lines contribution `i` takes from `at` on.
+    let take = |i: usize, at: usize, followed: bool| -> Option<usize> {
+        readings(i, followed)
+            .into_iter()
+            .find(|r| reads(r, at))
+            .map(<[String]>::len)
+    };
+    // The same for the lines that end at `end`.
+    let take_back = |i: usize, end: usize, followed: bool| -> Option<usize> {
+        readings(i, followed)
+            .into_iter()
+            .find(|r| r.len() <= end && reads(r, end - r.len()))
+            .map(<[String]>::len)
     };
     let mut gaps: Vec<(usize, Range<usize>)> = Vec::new();
     for g in 0..=fills.len() {
         let mut p = 0;
-        let before_fit = fills[..g].iter().all(|(_, _, lines)| {
-            let ok = fits(p, lines);
-            p += lines.len();
-            ok
+        let before_fit = (0..g).all(|i| match take(i, p, true) {
+            Some(n) => {
+                p += n;
+                true
+            }
+            None => false,
         });
         let mut q = inside.len();
-        let after_fit = fills[g..].iter().rev().all(|(_, _, lines)| {
-            let ok = q >= lines.len() && fits(q - lines.len(), lines);
-            q = q.saturating_sub(lines.len());
-            ok
-        });
+        let after_fit =
+            (g..fills.len())
+                .rev()
+                .all(|i| match take_back(i, q, i + 1 < fills.len()) {
+                    Some(n) => {
+                        q -= n;
+                        true
+                    }
+                    None => false,
+                });
         if before_fit && after_fit && p < q {
             gaps.push((g, p..q));
         }
@@ -656,15 +896,17 @@ fn new_fill(
             }
         );
     };
-    let mut lines: Vec<String> = inside[added.clone()]
-        .iter()
-        .map(|l| (*l).to_owned())
-        .collect();
-    if let Some(last) = lines.last_mut() {
-        if let Some(bare) = unseparated(last) {
-            *last = bare;
-        }
-    }
+    let block = &inside[added.clone()];
+    // Only a block that sorts before another contribution ends with the
+    // separator; one that sorts last keeps the lines it ends with, so a fill
+    // whose own lines end in an empty line records, and amends, as written.
+    // A separator without a newline still comes off its last line, so the
+    // render below refuses a last contribution ending in its own `,`, which
+    // would double once another follows.
+    let lines = (sorted_at < fills.len() || sep.lines.is_empty())
+        .then(|| sep.strip(block))
+        .flatten()
+        .unwrap_or_else(|| owned(block));
     let mut all = fills.clone();
     all.push((
         key_text.clone(),
@@ -690,7 +932,7 @@ fn new_fill(
             if sep.is_empty() {
                 String::new()
             } else {
-                format!(", and every one but the last ends with `{sep}`")
+                format!(", and every one but the last {}", sep.describe())
             }
         );
     }
@@ -1376,6 +1618,50 @@ mod tests {
             ("servers", &Line::literal("lightdash"))
         );
         assert_eq!(fill, &lines(&["    \"lightdash\": {}"]));
+    }
+
+    #[test]
+    fn lines_a_diff_puts_past_a_separator_line_next_to_a_slot_go_in_the_slot() {
+        // `.env`: the owner's `# Head` and an empty line, then slot
+        // `entries` holding `gamma`'s two lines. `beta`'s lines, with the
+        // empty line the separator adds after them, read the same before
+        // the owner's empty line as after it, and this diff puts them before.
+        let new = ["# Head", "", "# Beta", "BETA=1", "", "# Gamma", "GAMMA=1"];
+        let before_the_owners = [
+            DiffOp::Equal {
+                old_index: 0,
+                new_index: 0,
+                len: 1,
+            },
+            DiffOp::Insert {
+                old_index: 1,
+                new_index: 1,
+                new_len: 3,
+            },
+            DiffOp::Equal {
+                old_index: 1,
+                new_index: 4,
+                len: 3,
+            },
+        ];
+        let region = |separator: &str| {
+            let span = SlotSpan {
+                name: "entries".into(),
+                separator: separator.into(),
+                declared_by: PatchId::from_canonical_bytes(b"env"),
+                start: 2,
+                fills: vec![weft_core::SlotFill {
+                    key: "gamma".into(),
+                    node: PatchId::from_canonical_bytes(b"gamma"),
+                    lines: 2,
+                }],
+            };
+            let ops = slide_into_slots(&before_the_owners, std::slice::from_ref(&span), &new);
+            slot_region(Utf8Path::new(".env"), &ops, &span, new.len()).unwrap()
+        };
+        assert_eq!(region("\n"), 2..7);
+        // A separator that adds no line leaves them to the owner.
+        assert_eq!(region(","), 5..7);
     }
 
     // ---- selectable hunks (`weft add -p`) -------------------------------
