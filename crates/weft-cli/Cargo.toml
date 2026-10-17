@@ -17,9 +17,16 @@ path = "src/main.rs"
 weft-core.workspace = true
 weft-engine.workspace = true
 anyhow.workspace = true
+cliclack.workspace = true
+comfy-table.workspace = true
+console.workspace = true
+indicatif.workspace = true
+miette.workspace = true
+shell-words.workspace = true
+tempfile.workspace = true
 rmcp = { version = "2", features = ["server", "transport-io", "macros"] }
 schemars = "1"
-crossterm = "0.28"
+crossterm = "0.29"
 ureq = "3"
 tar = "0.4"
 flate2 = "1"

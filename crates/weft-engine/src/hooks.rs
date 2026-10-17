@@ -328,9 +328,9 @@ pub fn run_command(
     // Never echo an interpolated command — it may contain a resolved
     // secret. Literal commands are safe to show in full.
     if action.is_literal() {
-        eprintln!("{label}: {command}");
+        crate::report::step(format_args!("{label}: {command}"));
     } else {
-        eprintln!("{label}");
+        crate::report::step(label);
     }
     let status = std::process::Command::new("sh")
         .arg("-c")

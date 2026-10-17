@@ -4,11 +4,14 @@
 //! and PUTs it. The registry URL comes from `--registry` or `WEFT_HUB_URL`.
 //! Include resolution (lockfile + cache) lives in [`crate::source`].
 
-use std::io::Write;
+use std::io::{Read, Write};
 
 use anyhow::{bail, Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use sha2::{Digest, Sha256};
+use weft_engine::report;
+
+use crate::ui::{self, palette, Out};
 
 /// A parsed `hub:owner/name[@version]` ref.
 #[derive(Debug, Clone, PartialEq)]
@@ -85,15 +88,43 @@ struct IndexVersion {
     yanked: bool,
 }
 
-fn get(url: &str) -> Result<Vec<u8>> {
-    let mut response = ureq::get(url)
+fn call(url: &str) -> Result<ureq::http::Response<ureq::Body>> {
+    ureq::get(url)
         .call()
-        .map_err(|e| anyhow::anyhow!("GET {url}: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("GET {url}: {e}"))
+}
+
+/// GET a registry document, under a spinner saying what it is for.
+fn get(url: &str, label: String) -> Result<Vec<u8>> {
+    let _task = ui::Task::spinner(label);
+    let mut response = call(url)?;
     let mut bytes = Vec::new();
-    std::io::copy(
-        &mut response.body_mut().as_reader(),
-        &mut std::io::Cursor::new(&mut bytes).get_mut(),
-    )?;
+    response.body_mut().as_reader().read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// GET a template archive, counting its bytes against `Content-Length`.
+fn download(url: &str, label: String) -> Result<Vec<u8>> {
+    /// Bytes read between bar updates.
+    const CHUNK: u64 = 64 * 1024;
+    /// Most a declared length may preallocate; the header is the server's word.
+    const MAX_PREALLOC: u64 = 64 * 1024 * 1024;
+    let mut response = {
+        let _task = ui::Task::spinner(label.clone());
+        call(url)?
+    };
+    let total = response.body().content_length();
+    let task = ui::Task::bytes(label, total);
+    let capacity = total.map_or(0, |n| n.min(MAX_PREALLOC));
+    let mut bytes = Vec::with_capacity(usize::try_from(capacity).unwrap_or(0));
+    let mut reader = response.body_mut().as_reader();
+    loop {
+        let n = reader.by_ref().take(CHUNK).read_to_end(&mut bytes)?;
+        if n == 0 {
+            break;
+        }
+        task.inc(n as u64);
+    }
     Ok(bytes)
 }
 
@@ -105,7 +136,8 @@ pub fn resolve_req(
     req: &semver::VersionReq,
 ) -> Result<(String, String)> {
     let url = format!("{registry}/api/v1/index/{owner}/{name}");
-    let bytes = get(&url).with_context(|| format!("resolving hub:{owner}/{name}"))?;
+    let bytes = get(&url, format!("resolving hub:{owner}/{name}"))
+        .with_context(|| format!("resolving hub:{owner}/{name}"))?;
     let index: IndexDoc = serde_json::from_slice(&bytes).context("parsing registry index")?;
     let mut best: Option<(semver::Version, &IndexVersion)> = None;
     for entry in &index.versions {
@@ -127,7 +159,8 @@ pub fn resolve_req(
 /// Resolve a ref against the registry index → (version, sha256).
 pub fn resolve(registry: &str, r: &HubRef) -> Result<(String, String)> {
     let url = format!("{registry}/api/v1/index/{}/{}", r.owner, r.name);
-    let bytes = get(&url).with_context(|| format!("resolving {r}"))?;
+    let bytes = get(&url, format!("resolving hub:{}/{}", r.owner, r.name))
+        .with_context(|| format!("resolving {r}"))?;
     let index: IndexDoc = serde_json::from_slice(&bytes).context("parsing registry index")?;
     let entry = match &r.version {
         Some(v) => index
@@ -161,7 +194,11 @@ pub fn ensure_cached(
         "{registry}/api/v1/templates/{}/{}/{version}/download",
         r.owner, r.name
     );
-    let bytes = get(&url).with_context(|| format!("downloading {r}@{version}"))?;
+    let bytes = download(
+        &url,
+        format!("downloading hub:{}/{}@{version}", r.owner, r.name),
+    )
+    .with_context(|| format!("downloading {r}@{version}"))?;
     let actual = hex(&Sha256::digest(&bytes));
     if actual != sha256 {
         bail!(
@@ -189,12 +226,12 @@ pub fn ensure_cached(
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.parent().expect("cache path has parent"))?;
     std::fs::rename(&staging, &dir).context("moving download into the cache")?;
-    eprintln!(
+    report::done(format_args!(
         "downloaded hub:{}/{}@{version} ({} bytes, sha256 verified)",
         r.owner,
         r.name,
         bytes.len()
-    );
+    ));
     Ok(dir)
 }
 
@@ -263,13 +300,19 @@ pub fn publish(
 ) -> Result<()> {
     let body = pack(template_dir)?;
     let url = format!("{registry}/api/v1/templates/{owner}/{name}/{version}");
-    let response = ureq::put(&url)
-        .header("authorization", &format!("Bearer {token}"))
-        .header("content-type", "application/gzip")
-        .send(&body[..]);
+    let response = {
+        let _task = ui::Task::spinner(format!("publishing {owner}/{name}@{version}"));
+        ureq::put(&url)
+            .header("authorization", &format!("Bearer {token}"))
+            .header("content-type", "application/gzip")
+            .send(&body[..])
+    };
     match response {
         Ok(_) => {
-            eprintln!("published {owner}/{name}@{version} ({} bytes)", body.len());
+            report::done(format_args!(
+                "published {owner}/{name}@{version} ({} bytes)",
+                body.len()
+            ));
             Ok(())
         }
         Err(ureq::Error::StatusCode(code)) => {
@@ -281,26 +324,40 @@ pub fn publish(
 
 /// `weft hub search`.
 pub fn search(registry: &str, query: &str) -> Result<()> {
-    let bytes = get(&format!("{registry}/api/v1/search?q={query}"))?;
+    let bytes = get(
+        &format!("{registry}/api/v1/search?q={query}"),
+        format!("searching hub for {query}"),
+    )?;
     let doc: serde_json::Value = serde_json::from_slice(&bytes)?;
     let results = doc["results"].as_array().cloned().unwrap_or_default();
     if results.is_empty() {
-        eprintln!("no templates matched `{query}`");
+        report::info(format_args!("no templates matched `{query}`"));
         return Ok(());
     }
-    for row in results {
-        println!(
-            "{owner}/{name}@{latest}  {desc}",
-            owner = row["owner"].as_str().unwrap_or(""),
-            name = row["name"].as_str().unwrap_or(""),
-            latest = row["latest"].as_str().unwrap_or(""),
-            desc = row["description"]
-                .as_str()
-                .unwrap_or("")
-                .lines()
-                .next()
-                .unwrap_or(""),
-        );
+    let field = |row: &serde_json::Value, key: &str| row[key].as_str().unwrap_or("").to_owned();
+    let rows = results.iter().map(|row| {
+        let desc = field(row, "description");
+        let summary = desc.lines().next().unwrap_or("").to_owned();
+        (
+            format!("{}/{}", field(row, "owner"), field(row, "name")),
+            field(row, "latest"),
+            summary,
+        )
+    });
+    if ui::Table::fits() {
+        let mut table = ui::Table::new(&["TEMPLATE", "LATEST", "DESCRIPTION"]);
+        for (template, latest, desc) in rows {
+            table.row([
+                ui::cell(template).accent(),
+                ui::cell(latest),
+                ui::cell(desc),
+            ]);
+        }
+        table.print();
+    } else {
+        for (template, latest, desc) in rows {
+            ui::outln!("{template}@{latest}  {desc}");
+        }
     }
     Ok(())
 }
@@ -308,20 +365,43 @@ pub fn search(registry: &str, query: &str) -> Result<()> {
 /// `weft hub info`.
 pub fn info(registry: &str, spec: &str) -> Result<()> {
     let (owner, name) = spec.split_once('/').context("expected owner/name")?;
-    let bytes = get(&format!("{registry}/api/v1/index/{owner}/{name}"))?;
+    let bytes = get(
+        &format!("{registry}/api/v1/index/{owner}/{name}"),
+        format!("resolving hub:{owner}/{name}"),
+    )?;
     let doc: serde_json::Value = serde_json::from_slice(&bytes)?;
-    println!("{owner}/{name}");
-    for v in doc["versions"].as_array().cloned().unwrap_or_default() {
-        println!(
-            "  {version:12} {published}  {yanked}",
-            version = v["version"].as_str().unwrap_or(""),
-            published = v["published_at"].as_str().unwrap_or(""),
-            yanked = if v["yanked"].as_bool().unwrap_or(false) {
-                "(yanked)"
-            } else {
-                ""
-            },
-        );
+    let versions = doc["versions"].as_array().cloned().unwrap_or_default();
+    let rows = versions.iter().map(|v| {
+        (
+            v["version"].as_str().unwrap_or(""),
+            v["published_at"].as_str().unwrap_or(""),
+            v["yanked"].as_bool().unwrap_or(false),
+        )
+    });
+    if ui::Table::fits() {
+        let heading = format!("{owner}/{name}");
+        ui::outln!("{}", ui::paint(Out::Stdout, palette::bold(), heading));
+        let any_yanked = rows.clone().any(|(_, _, yanked)| yanked);
+        let headers: &[&str] = if any_yanked {
+            &["VERSION", "PUBLISHED", "STATUS"]
+        } else {
+            &["VERSION", "PUBLISHED"]
+        };
+        let mut table = ui::Table::new(headers);
+        for (version, published, yanked) in rows {
+            let mut cells = vec![ui::cell(version), ui::cell(published).dim()];
+            if any_yanked {
+                cells.push(ui::cell(if yanked { "yanked" } else { "" }).warning());
+            }
+            table.row(cells);
+        }
+        table.print();
+    } else {
+        ui::outln!("{owner}/{name}");
+        for (version, published, yanked) in rows {
+            let yanked = if yanked { "(yanked)" } else { "" };
+            ui::outln!("  {version:12} {published}  {yanked}");
+        }
     }
     Ok(())
 }

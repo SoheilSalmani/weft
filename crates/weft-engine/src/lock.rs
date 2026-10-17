@@ -79,7 +79,9 @@ impl Lock {
         let Ok(src) = std::fs::read_to_string(&path) else {
             return Ok(Self::default());
         };
-        let file: LockFile = toml::from_str(&src).with_context(|| format!("parsing {path}"))?;
+        let file: LockFile = toml::from_str(&src)
+            .map_err(|e| crate::parse_error::ParseError::toml(&path, &src, e))
+            .with_context(|| format!("parsing {path}"))?;
         Ok(Self {
             includes: file.include,
         })

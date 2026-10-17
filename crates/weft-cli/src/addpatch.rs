@@ -13,10 +13,13 @@ use std::io::{IsTerminal, Write};
 
 use anyhow::Result;
 use camino::{Utf8Path, Utf8PathBuf};
+use console::Style as Look;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal;
 use weft_core::{FileData, FileEntry, Tree};
 use weft_engine::diff::{self, HunkLine, SelectableHunk};
+
+use crate::ui::{self, palette, Out};
 
 /// What the author answered for one hunk (or one unhunkable file).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,7 +85,7 @@ impl Default for TerminalDecider {
 impl HunkDecider for TerminalDecider {
     fn decide(&mut self, prompt: &str) -> Result<Decision> {
         loop {
-            eprint!("{prompt}");
+            eprint!("{}", style_prompt(prompt));
             std::io::stderr().flush()?;
             let key = if self.tty {
                 self.read_key()?
@@ -131,6 +134,29 @@ impl TerminalDecider {
     }
 }
 
+/// `stage this hunk [y,n,…]? (1/2 in path) ` with the key list dimmed and
+/// the counter in the accent, when stderr takes colour; as is otherwise.
+fn style_prompt(prompt: &str) -> std::borrow::Cow<'_, str> {
+    let (Some(open), Some(close), Some(count)) =
+        (prompt.find('['), prompt.find(']'), prompt.rfind(" ("))
+    else {
+        return prompt.into();
+    };
+    if !(ui::color(Out::Stderr) && open < close && close < count) {
+        return prompt.into();
+    }
+    let end = prompt.trim_end().len();
+    format!(
+        "{}{}{}{}{}",
+        &prompt[..open],
+        ui::paint(Out::Stderr, palette::dim(), &prompt[open..=close]),
+        &prompt[close + 1..count + 1],
+        ui::paint(Out::Stderr, palette::accent(), &prompt[count + 1..end]),
+        &prompt[end..],
+    )
+    .into()
+}
+
 fn read_line() -> Result<Option<char>> {
     let mut line = String::new();
     if std::io::stdin().read_line(&mut line)? == 0 {
@@ -141,37 +167,33 @@ fn read_line() -> Result<Option<char>> {
 
 // ---- rendering ---------------------------------------------------------
 
-const ACCENT: &str = "\x1b[38;5;141m";
-const DIM: &str = "\x1b[2m";
-const GREEN: &str = "\x1b[32m";
-const RED: &str = "\x1b[31m";
-const BOLD: &str = "\x1b[1m";
-const RESET: &str = "\x1b[0m";
-
-/// ANSI only when the output is a terminal, mirroring `diffcmd`.
+/// Colour only when stdout takes it (`ui::color`), mirroring `diffcmd`.
 pub struct Paint {
     pub color: bool,
 }
 
 impl Paint {
-    fn wrap(&self, code: &str, text: &str) -> String {
-        if self.color {
-            format!("{code}{text}{RESET}")
-        } else {
-            text.to_owned()
+    /// Follows `ui::color(Out::Stdout)`: off on a pipe, `NO_COLOR`,
+    /// `--color never` and `TERM=dumb`.
+    pub(crate) fn stdout() -> Self {
+        Self {
+            color: ui::color(Out::Stdout),
         }
+    }
+    fn wrap(&self, look: Look, text: &str) -> String {
+        look.force_styling(self.color).apply_to(text).to_string()
     }
     fn line(&self, line: &HunkLine) -> String {
         match line {
-            HunkLine::Context(t) => self.wrap(DIM, &format!("  {t}")),
-            HunkLine::Removed(t) => self.wrap(RED, &format!("- {t}")),
-            HunkLine::Added(t) => self.wrap(GREEN, &format!("+ {t}")),
+            HunkLine::Context(t) => self.wrap(palette::dim(), &format!("  {t}")),
+            HunkLine::Removed(t) => self.wrap(palette::error(), &format!("- {t}")),
+            HunkLine::Added(t) => self.wrap(palette::success(), &format!("+ {t}")),
         }
     }
 }
 
 fn render_hunk(out: &mut dyn Write, paint: &Paint, hunk: &SelectableHunk) -> Result<()> {
-    writeln!(out, "{}", paint.wrap(ACCENT, &hunk.header()))?;
+    writeln!(out, "{}", paint.wrap(palette::accent(), &hunk.header()))?;
     for line in &hunk.lines {
         writeln!(out, "  {}", paint.line(line))?;
     }
@@ -241,7 +263,11 @@ fn pick_whole_file(
     path: &Utf8Path,
     what: &str,
 ) -> Result<(bool, bool)> {
-    writeln!(out, "{}", paint.wrap(BOLD, &format!("{what}  {path}")))?;
+    writeln!(
+        out,
+        "{}",
+        paint.wrap(palette::bold(), &format!("{what}  {path}"))
+    )?;
     loop {
         let prompt = format!("stage this change [y,n,q,?]? ({path}) ");
         match decider.decide(&prompt)? {
@@ -274,7 +300,11 @@ pub fn stage_interactively(
             (Some(old), Some(new))
                 if !old.content.is_binary() && !new.content.is_binary() && old.mode == new.mode =>
             {
-                writeln!(out, "{}", paint.wrap(BOLD, &format!("~ modified  {path}")))?;
+                writeln!(
+                    out,
+                    "{}",
+                    paint.wrap(palette::bold(), &format!("~ modified  {path}"))
+                )?;
                 let (old_text, new_text) = (
                     old.content.text().unwrap_or_default(),
                     new.content.text().unwrap_or_default(),
@@ -293,7 +323,11 @@ pub fn stage_interactively(
             }
             // New text file: hunk-by-hunk against an empty staged version.
             (None, Some(new)) if !new.content.is_binary() => {
-                writeln!(out, "{}", paint.wrap(BOLD, &format!("+ created   {path}")))?;
+                writeln!(
+                    out,
+                    "{}",
+                    paint.wrap(palette::bold(), &format!("+ created   {path}"))
+                )?;
                 let new_text = new.content.text().unwrap_or_default();
                 let (text, quit) = pick_hunks(out, paint, decider, path, "", new_text)?;
                 if !text.is_empty() {

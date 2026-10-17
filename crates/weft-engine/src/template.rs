@@ -205,8 +205,9 @@ impl Template {
         let manifest_src = std::fs::read_to_string(&manifest_path).with_context(|| {
             format!("`{manifest_path}` not found: is `{root}` a weft template?")
         })?;
-        let mut manifest: Manifest =
-            toml::from_str(&manifest_src).with_context(|| format!("parsing {manifest_path}"))?;
+        let mut manifest: Manifest = toml::from_str(&manifest_src)
+            .map_err(|e| crate::parse_error::ParseError::toml(&manifest_path, &manifest_src, e))
+            .with_context(|| format!("parsing {manifest_path}"))?;
 
         let composed = manifest.template.extends.is_some() || !manifest.includes.is_empty();
         if composed && depth >= MAX_INCLUDE_DEPTH {
@@ -349,8 +350,9 @@ impl Template {
                 }
                 let src =
                     std::fs::read_to_string(path).with_context(|| format!("reading {path}"))?;
-                let file: PatchFile =
-                    serde_json::from_str(&src).with_context(|| format!("parsing patch {path}"))?;
+                let file: PatchFile = serde_json::from_str(&src)
+                    .map_err(|e| crate::parse_error::ParseError::json(path, &src, e))
+                    .with_context(|| format!("parsing patch {path}"))?;
                 files.insert(stem, file);
             }
         }
@@ -503,7 +505,9 @@ impl Template {
         let path = self.patch_path(name);
         let src = std::fs::read_to_string(&path)
             .with_context(|| format!("no patch `{name}` in this template ({path})"))?;
-        serde_json::from_str(&src).with_context(|| format!("parsing patch {path}"))
+        serde_json::from_str(&src)
+            .map_err(|e| crate::parse_error::ParseError::json(&path, &src, e))
+            .with_context(|| format!("parsing patch {path}"))
     }
 
     /// Write a patch's on-disk file back (must already exist). Callers are

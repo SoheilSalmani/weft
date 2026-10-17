@@ -65,6 +65,6 @@ description = "TODO: what this template scaffolds."
         )
         .with_context(|| format!("writing {ignore_path}"))?;
     }
-    eprintln!("initialized template `{name}` in {dir}");
+    crate::report::done(format_args!("initialized template `{name}` in {dir}"));
     Ok(())
 }

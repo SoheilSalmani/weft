@@ -140,7 +140,9 @@ impl BaseSnapshot {
         let path = dest.join(STATE_DIR).join(BASE_FILE);
         match std::fs::read_to_string(&path) {
             Ok(src) => Ok(Some(
-                serde_json::from_str(&src).with_context(|| format!("parsing {path}"))?,
+                serde_json::from_str(&src)
+                    .map_err(|e| crate::parse_error::ParseError::json(&path, &src, e))
+                    .with_context(|| format!("parsing {path}"))?,
             )),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e).with_context(|| format!("reading {path}")),
@@ -353,7 +355,9 @@ impl State {
         let src = std::fs::read_to_string(&path).with_context(|| {
             format!("`{path}` not found: is `{dest}` a weft-scaffolded project?")
         })?;
-        toml::from_str(&src).with_context(|| format!("parsing {path}"))
+        toml::from_str(&src)
+            .map_err(|e| crate::parse_error::ParseError::toml(&path, &src, e))
+            .with_context(|| format!("parsing {path}"))
     }
 }
 

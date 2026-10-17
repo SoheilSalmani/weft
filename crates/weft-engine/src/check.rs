@@ -928,33 +928,20 @@ fn check_alone(
         nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
     let framed = framed_nodes(nodes);
     let mut broken = BTreeSet::new();
-    for node in nodes.iter().filter(|n| n.patch.foreach.is_none()) {
-        let members: Vec<Framed<'_>> = ancestor_ids(nodes, &by_id, node.id)
-            .iter()
-            .filter_map(|id| by_id.get(id).map(|&idx| framed[idx]))
-            .collect();
-        // An ordering problem is reported by the pairwise check.
-        let Ok(order) = weft_core::render::framed_order(&members) else {
-            continue;
-        };
-        let Err(err) = weft_core::render::render_framed(&order, &eval) else {
-            continue;
-        };
-        if err.patch() != Some(node.id) {
-            continue; // an ancestor's failure, reported for that ancestor
+    let alone: Vec<&GraphNode<'_>> = nodes.iter().filter(|n| n.patch.foreach.is_none()).collect();
+    let progress = crate::report::progress("check: patches", alone.len() as u64);
+    for node in alone {
+        if let Some(err) = fails_alone(nodes, &by_id, &framed, node.id, &eval) {
+            report.issues.push(format!(
+                "patch `{}` does not apply under these answers: {}",
+                node_name(template, nodes, node.id),
+                diagnose(template, nodes, &err)
+            ));
+            broken.insert(node.id);
         }
-        // Once more, traced, to say where the missed lines came from.
-        let err = weft_core::render::render_framed_into(weft_core::Draft::traced(), &order, &eval)
-            .and_then(|(draft, _)| draft.finish())
-            .err()
-            .unwrap_or(err);
-        report.issues.push(format!(
-            "patch `{}` does not apply under these answers: {}",
-            node_name(template, nodes, node.id),
-            diagnose(template, nodes, &err)
-        ));
-        broken.insert(node.id);
+        progress.advance(1);
     }
+    drop(progress);
     nodes
         .iter()
         .map(|n| n.id)
@@ -964,6 +951,34 @@ fn check_alone(
                 .any(|a| broken.contains(a))
         })
         .collect()
+}
+
+/// Why node `id` fails on top of only its own ancestors, from a traced
+/// render; `None` when it applies, when an ancestor is what fails (reported
+/// for that ancestor), or when the ancestors cannot be ordered (reported by
+/// the pairwise check).
+fn fails_alone(
+    nodes: &[GraphNode<'_>],
+    by_id: &BTreeMap<PatchId, usize>,
+    framed: &[Framed<'_>],
+    id: PatchId,
+    eval: &dyn ExprEval,
+) -> Option<RenderError> {
+    let members: Vec<Framed<'_>> = ancestor_ids(nodes, by_id, id)
+        .iter()
+        .filter_map(|id| by_id.get(id).map(|&idx| framed[idx]))
+        .collect();
+    let order = weft_core::render::framed_order(&members).ok()?;
+    let err = weft_core::render::render_framed(&order, eval).err()?;
+    if err.patch() != Some(id) {
+        return None;
+    }
+    // Once more, traced, to say where the missed lines came from.
+    let err = weft_core::render::render_framed_into(weft_core::Draft::traced(), &order, eval)
+        .and_then(|(draft, _)| draft.finish())
+        .err()
+        .unwrap_or(err);
+    Some(err)
 }
 
 /// Why a node failed on top of its ancestors, naming patches rather than ids.
@@ -1182,14 +1197,19 @@ fn check_commutation(
         nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
     let framed = framed_nodes(nodes);
     let touched: Vec<Option<Touches>> = framed.iter().map(|n| touches(n, &eval)).collect();
+    let ancestors: Vec<BTreeSet<PatchId>> = framed
+        .iter()
+        .map(|n| ancestor_ids(nodes, &by_id, n.id))
+        .collect();
 
-    let mut pairs_checked = 0usize;
+    // The cheap tests first, so the pairs that need rendering are counted
+    // before the first render.
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
     let mut by_construction = 0usize;
     for (i, p) in framed.iter().enumerate() {
         if blocked.contains(&p.id) {
             continue;
         }
-        let p_anc = ancestor_ids(nodes, &by_id, p.id);
         for (j, q) in framed.iter().enumerate().skip(i + 1) {
             if !nodes[i].frame.is_empty() && nodes[i].frame == nodes[j].frame {
                 continue; // same child frame: the child's own check proves it
@@ -1197,8 +1217,7 @@ fn check_commutation(
             if blocked.contains(&q.id) {
                 continue;
             }
-            let q_anc = ancestor_ids(nodes, &by_id, q.id);
-            if p_anc.contains(&q.id) || q_anc.contains(&p.id) {
+            if ancestors[i].contains(&q.id) || ancestors[j].contains(&p.id) {
                 continue; // ordered by dependency; nothing to prove
             }
             if let (Some(tp), Some(tq)) = (&touched[i], &touched[j]) {
@@ -1207,64 +1226,74 @@ fn check_commutation(
                     continue;
                 }
             }
-            // Shared prelude: all ancestors of either, minus the pair itself.
-            let prelude_nodes: Vec<Framed<'_>> = p_anc
-                .union(&q_anc)
-                .filter(|id| **id != p.id && **id != q.id)
-                .filter_map(|id| by_id.get(id).map(|&idx| framed[idx]))
-                .collect();
-            let prelude: Vec<&Framed<'_>> = match weft_core::render::framed_order(&prelude_nodes) {
-                Ok(order) => order,
-                Err(e) => {
-                    report
-                        .issues
-                        .push(format!("commutation prelude failed: {e}"));
-                    continue;
-                }
-            };
-            let mut order_pq = prelude.clone();
-            order_pq.push(p);
-            order_pq.push(q);
-            let mut order_qp = prelude;
-            order_qp.push(q);
-            order_qp.push(p);
-
-            let name_p = node_name(template, nodes, p.id);
-            let name_q = node_name(template, nodes, q.id);
-            let render = |order: &[&Framed<'_>]| {
-                weft_core::render::render_framed(order, &eval).map(|(tree, _)| tree)
-            };
-            match (render(&order_pq), render(&order_qp)) {
-                (Ok(t1), Ok(t2)) => {
-                    if t1.hash() != t2.hash() {
-                        report.issues.push(format!(
-                            "independent patches `{name_p}` and `{name_q}` do not commute: \
-                             applying them in either order produces different trees; \
-                             add an explicit dependency between them"
-                        ));
-                    }
-                }
-                (Err(e), _) | (_, Err(e)) => match duplicate_fill(&e) {
-                    Some(dup) => {
-                        duplicates.insert(dup);
-                    }
-                    None => report.issues.push(format!(
-                        "independent patches `{name_p}` and `{name_q}` do not commute: \
-                         one application order fails: {}{}",
-                        named(template, nodes, &e.to_string()),
-                        match &e {
-                            RenderError::CreateExists { path, .. } => format!(
-                                "; if both belong in one project, run `weft share {path} \
-                                 --name NAME` so each adds its lines to one shared file"
-                            ),
-                            _ => String::new(),
-                        }
-                    )),
-                },
-            }
-            pairs_checked += 1;
+            pairs.push((i, j));
         }
     }
+
+    let progress = crate::report::progress("check: commutation", pairs.len() as u64);
+    let mut pairs_checked = 0usize;
+    for &(i, j) in &pairs {
+        let (p, q) = (&framed[i], &framed[j]);
+        // Shared prelude: all ancestors of either, minus the pair itself.
+        let prelude_nodes: Vec<Framed<'_>> = ancestors[i]
+            .union(&ancestors[j])
+            .filter(|id| **id != p.id && **id != q.id)
+            .filter_map(|id| by_id.get(id).map(|&idx| framed[idx]))
+            .collect();
+        let prelude: Vec<&Framed<'_>> = match weft_core::render::framed_order(&prelude_nodes) {
+            Ok(order) => order,
+            Err(e) => {
+                report
+                    .issues
+                    .push(format!("commutation prelude failed: {e}"));
+                progress.advance(1);
+                continue;
+            }
+        };
+        let mut order_pq = prelude.clone();
+        order_pq.push(p);
+        order_pq.push(q);
+        let mut order_qp = prelude;
+        order_qp.push(q);
+        order_qp.push(p);
+
+        let name_p = node_name(template, nodes, p.id);
+        let name_q = node_name(template, nodes, q.id);
+        let render = |order: &[&Framed<'_>]| {
+            weft_core::render::render_framed(order, &eval).map(|(tree, _)| tree)
+        };
+        match (render(&order_pq), render(&order_qp)) {
+            (Ok(t1), Ok(t2)) => {
+                if t1.hash() != t2.hash() {
+                    report.issues.push(format!(
+                        "independent patches `{name_p}` and `{name_q}` do not commute: \
+                         applying them in either order produces different trees; \
+                         add an explicit dependency between them"
+                    ));
+                }
+            }
+            (Err(e), _) | (_, Err(e)) => match duplicate_fill(&e) {
+                Some(dup) => {
+                    duplicates.insert(dup);
+                }
+                None => report.issues.push(format!(
+                    "independent patches `{name_p}` and `{name_q}` do not commute: \
+                     one application order fails: {}{}",
+                    named(template, nodes, &e.to_string()),
+                    match &e {
+                        RenderError::CreateExists { path, .. } => format!(
+                            "; if both belong in one project, run `weft share {path} \
+                             --name NAME` so each adds its lines to one shared file"
+                        ),
+                        _ => String::new(),
+                    }
+                )),
+            },
+        }
+        pairs_checked += 1;
+        progress.advance(1);
+    }
+    drop(progress);
     let mut note = format!("commutation ok for {pairs_checked} independent pair(s)");
     if by_construction > 0 {
         note.push_str(&format!(
@@ -1356,14 +1385,17 @@ fn resolve_check_answers(
 /// CLI-facing: print the report, fail if any issues were found.
 pub fn finish(template_name: &str, report: &CheckReport) -> Result<()> {
     for note in &report.notes {
-        eprintln!("check: {note}");
+        crate::report::note(format_args!("check: {note}"));
     }
     if report.issues.is_empty() {
-        println!("ok: template `{template_name}` passed all checks");
+        crate::report::result(
+            crate::report::Tone::Done,
+            format_args!("ok: template `{template_name}` passed all checks"),
+        );
         Ok(())
     } else {
         for issue in &report.issues {
-            eprintln!("error: {issue}");
+            crate::report::problem(format_args!("error: {issue}"));
         }
         bail!("check failed with {} issue(s)", report.issues.len())
     }

@@ -590,12 +590,12 @@ fn edit(shared: &Shared, interaction: &mut dyn Interaction) -> Result<Split> {
         .map(|v| format!("`{}`", v.name))
         .collect();
     names.sort();
-    eprintln!(
+    crate::report::info(format_args!(
         "{}: weft opens it in your editor as a project with {} on gets it. Fix it if it is \
          wrong, then save and close.",
         shared.path,
         names.join(" and ")
-    );
+    ));
     let extension = Utf8Path::new(&shared.path)
         .extension()
         .map(|e| format!(".{e}"))
@@ -609,7 +609,7 @@ fn edit(shared: &Shared, interaction: &mut dyn Interaction) -> Result<Split> {
         match from_example(&shared.path, &shared.versions, &edited) {
             Ok(split) => return Ok(split),
             Err(e) => {
-                eprintln!("error: {e:#}");
+                crate::report::problem(format_args!("error: {e:#}"));
                 if !interaction.confirm("open it again?", true)? {
                     bail!("aborted: nothing was shared");
                 }

@@ -207,7 +207,9 @@ fn heal(
     updated.session.worktree = Some(discover::absolute(&actual));
     updated.session.adopted = sess.session.adopted;
     updated.save(template, name)?;
-    eprintln!("note: session `{name}` moved to `{actual}`; updated its record");
+    weft_engine::report::note(format_args!(
+        "note: session `{name}` moved to `{actual}`; updated its record"
+    ));
     Ok(actual)
 }
 

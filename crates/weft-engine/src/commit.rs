@@ -14,7 +14,7 @@ use crate::interact::Interaction;
 use crate::session::{self, Session, SessionMeta};
 use crate::start::base_leaves;
 use crate::template::Template;
-use crate::{diff, fsio, secrets};
+use crate::{diff, fsio, report, secrets};
 
 pub struct CommitOptions {
     pub template: Utf8PathBuf,
@@ -210,9 +210,9 @@ pub fn run(
     // output — resync re-runs the command only, so those edits won't survive.
     if let Some(pending) = &sess.generator {
         if work_tree.hash() != pending.tree_hash_after_exec {
-            eprintln!(
+            report::warning(
                 "warning: the worktree was edited after the generator command ran; \
-                 those edits will be lost on `weft patch resync`"
+                 those edits will be lost on `weft patch resync`",
             );
         }
     }
@@ -391,10 +391,10 @@ pub fn run(
         }
     }
     if !inferred.is_empty() {
-        eprintln!(
+        report::info(format_args!(
             "edits under an include's mount: depending on {}",
             inferred.join(", ")
-        );
+        ));
     }
     let gate_open = match &when {
         None => true,
@@ -555,13 +555,13 @@ pub fn run(
             crate::stage::clear(&opts.template, &opts.session)?;
             sess.end(&opts.template, &opts.session)?;
             for line in crate::share::report(&plan) {
-                eprintln!("{line}");
+                report::done(line);
             }
-            eprintln!(
+            report::done(format_args!(
                 "committed patch `{name}`: adds its lines to {}, depends on `{}`",
                 paths.join(", "),
                 plan.owner.name
-            );
+            ));
             return Ok(());
         }
     }
@@ -575,12 +575,12 @@ pub fn run(
         // The whole worktree is committed: end the session (the classic
         // one-shot flow, and what the existing tests expect).
         sess.end(&opts.template, &opts.session)?;
-        eprintln!(
+        report::done(format_args!(
             "committed patch `{name}` with {} op(s) to `{noun}`",
             ops.len()
-        );
+        ));
         for note in &notes {
-            eprintln!("{note}");
+            report::note(note);
         }
         return Ok(());
     }
@@ -631,26 +631,26 @@ pub fn run(
                 amend: None,
             }
             .save(&opts.template, &opts.session)?;
-            eprintln!(
+            report::done(format_args!(
                 "committed patch `{name}` to `{noun}`, building on it. \
                  {} file(s) still uncommitted",
                 remaining.len()
-            );
+            ));
         }
         CommitLink::Sibling => {
             // Keep the base where it is and peel this patch's content out of the
             // worktree, so the next patch is diffed against the same base and
             // commutes with this one.
             session::revert_worktree_paths(&worktree_root, &base_tree, &committed)?;
-            eprintln!(
+            report::done(format_args!(
                 "committed patch `{name}` to `{noun}` as an independent sibling. \
                  {} file(s) still uncommitted",
                 remaining.len()
-            );
+            ));
         }
     }
     for note in &notes {
-        eprintln!("{note}");
+        report::note(note);
     }
     Ok(())
 }

@@ -50,8 +50,11 @@ struct ConstraintForm {
 impl PresetSpec {
     /// Parse one preset file's TOML source.
     pub fn parse(name: &str, src: &str) -> Result<Self> {
-        let table: toml::Table =
-            toml::from_str(src).with_context(|| format!("parsing preset `{name}`"))?;
+        let table: toml::Table = toml::from_str(src)
+            .map_err(|e| {
+                crate::parse_error::ParseError::toml(format_args!("preset `{name}`"), src, e)
+            })
+            .with_context(|| format!("parsing preset `{name}`"))?;
         let mut entries = BTreeMap::new();
         let mut sources = BTreeMap::new();
         for (key, value) in table {

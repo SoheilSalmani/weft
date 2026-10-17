@@ -11,8 +11,8 @@ use anyhow::{bail, Context, Result};
 use camino::Utf8Path;
 use weft_core::{Hook, HookEffect, HookId, HookInput, HookPhase, StarlarkExpr};
 
-use crate::hooks;
 use crate::template::Template;
+use crate::{hooks, report};
 
 pub struct HookAddOptions {
     pub patch: String,
@@ -110,7 +110,7 @@ pub fn hook_add(
         &weft_lang::StarlarkEval,
     );
     if !action.is_literal() {
-        eprintln!("action interpolates: {}", action.source());
+        report::info(format_args!("action interpolates: {}", action.source()));
     }
     let hook = Hook {
         id: HookId(opts.id.clone()),
@@ -137,10 +137,10 @@ pub fn hook_add(
         file.hooks.push(hook);
         Ok(())
     })?;
-    eprintln!(
+    report::done(format_args!(
         "added hook `{}` to patch `{}` (runs: {runs})",
         opts.id, opts.patch
-    );
+    ));
     Ok(())
 }
 
@@ -159,18 +159,37 @@ pub fn hook_rm(
         }
         Ok(())
     })?;
-    eprintln!("removed hook `{id}` from patch `{patch}`");
+    report::done(format_args!("removed hook `{id}` from patch `{patch}`"));
     Ok(())
 }
 
+/// One declared hook, as `weft hook ls` lists it.
+pub struct HookRow {
+    /// `pre` | `post`
+    pub phase: &'static str,
+    /// `check` | `setup` | `deploy`
+    pub effect: &'static str,
+    pub id: String,
+    /// The name of the patch that declares the hook.
+    pub patch: String,
+    pub label: String,
+    /// The hook's `when` gate, if it has one.
+    pub when: Option<String>,
+    /// When the hook runs (`create + every update`, `create only`, …).
+    pub runs: String,
+}
+
 /// `weft hook ls`: every hook across the template, in execution order.
-pub fn hook_ls(root: &Utf8Path, resolver: &mut dyn crate::template::IncludeResolver) -> Result<()> {
+pub fn hook_ls(
+    root: &Utf8Path,
+    resolver: &mut dyn crate::template::IncludeResolver,
+) -> Result<Vec<HookRow>> {
     let template = Template::load_with(root, resolver)?;
-    let mut count = 0;
+    let mut rows = Vec::new();
     for phase in [HookPhase::Pre, HookPhase::Post] {
         for patch in &template.patches {
             for hook in patch.meta.hooks.iter().filter(|h| h.phase == phase) {
-                let phase_s = match phase {
+                let phase = match phase {
                     HookPhase::Pre => "pre",
                     HookPhase::Post => "post",
                 };
@@ -179,26 +198,19 @@ pub fn hook_ls(root: &Utf8Path, resolver: &mut dyn crate::template::IncludeResol
                     HookEffect::Setup => "setup",
                     HookEffect::Deploy => "deploy",
                 };
-                let gate = hook
-                    .when
-                    .as_ref()
-                    .map(|w| format!(" when={}", w.as_str()))
-                    .unwrap_or_default();
-                println!(
-                    "{phase_s:4} {effect:6} {id:20} [{patch}] {label}{gate} (runs: {runs})",
-                    id = hook.id.0,
-                    patch = template.id_to_name[&patch.id],
-                    label = hook.label,
-                    runs = hook.runs(),
-                );
-                count += 1;
+                rows.push(HookRow {
+                    phase,
+                    effect,
+                    id: hook.id.0.clone(),
+                    patch: template.id_to_name[&patch.id].clone(),
+                    label: hook.label.clone(),
+                    when: hook.when.as_ref().map(|w| w.as_str().to_owned()),
+                    runs: hook.runs(),
+                });
             }
         }
     }
-    if count == 0 {
-        eprintln!("no hooks declared in this template");
-    }
-    Ok(())
+    Ok(rows)
 }
 
 pub struct PatchSetOptions {
@@ -235,21 +247,34 @@ pub fn patch_set(
         }
         Ok(())
     })?;
-    eprintln!("updated metadata of patch `{}`", opts.name);
+    report::done(format_args!("updated metadata of patch `{}`", opts.name));
     Ok(())
 }
 
-/// `weft patch ls`: one line per root-frame patch, in dependency order.
+/// One root-frame patch, as `weft patch ls` lists it.
+pub struct PatchRow {
+    pub name: String,
+    /// How many ops the patch records.
+    pub ops: usize,
+    /// How many hooks the patch declares.
+    pub hooks: usize,
+    /// `inherited`, `when=…`, `foreach=…`, in that order, each when it applies.
+    pub flags: Vec<String>,
+    /// The patch's title, or empty.
+    pub title: String,
+}
+
+/// `weft patch ls`: one row per root-frame patch, in dependency order.
 /// Include nodes are not listed (they are the child template's patches —
 /// `weft graph` shows the composed graph).
 pub fn patch_ls(
     root: &Utf8Path,
     resolver: &mut dyn crate::template::IncludeResolver,
-) -> Result<()> {
+) -> Result<Vec<PatchRow>> {
     let template = Template::load_with(root, resolver)?;
+    let mut rows = Vec::with_capacity(template.patches.len());
     for patch in &template.patches {
         let name = &template.id_to_name[&patch.id];
-        let title = patch.meta.title.as_deref().unwrap_or("");
         let mut flags = Vec::new();
         if template.is_inherited(name) {
             flags.push("inherited".to_owned());
@@ -260,18 +285,15 @@ pub fn patch_ls(
         if let Some(f) = &patch.foreach {
             flags.push(format!("foreach={f}"));
         }
-        let flags = if flags.is_empty() {
-            String::new()
-        } else {
-            format!(" [{}]", flags.join(", "))
-        };
-        println!(
-            "{name:20} {ops} op(s), {hooks} hook(s){flags}  {title}",
-            ops = patch.ops.len(),
-            hooks = patch.meta.hooks.len(),
-        );
+        rows.push(PatchRow {
+            name: name.clone(),
+            ops: patch.ops.len(),
+            hooks: patch.meta.hooks.len(),
+            flags,
+            title: patch.meta.title.clone().unwrap_or_default(),
+        });
     }
-    Ok(())
+    Ok(rows)
 }
 
 /// Locate a patch by name and confirm it carries generator metadata (was
@@ -317,7 +339,7 @@ pub fn set_generator_command(
         &weft_lang::StarlarkEval,
     );
     if !parsed.is_literal() {
-        eprintln!("command interpolates: {}", parsed.source());
+        report::info(format_args!("command interpolates: {}", parsed.source()));
     }
     edit_patch_file(root, resolver, name, move |file| {
         let generator = file
@@ -327,10 +349,10 @@ pub fn set_generator_command(
         generator.command = parsed;
         Ok(())
     })?;
-    eprintln!(
+    report::done(format_args!(
         "updated the generator command of patch `{name}` — \
          run `weft patch resync {name}` to regenerate"
-    );
+    ));
     Ok(())
 }
 
@@ -348,9 +370,9 @@ pub fn detach_generator(
         file.generator = None;
         Ok(())
     })?;
-    eprintln!(
+    report::done(format_args!(
         "detached patch `{name}` from its generator; it is now a plain patch \
          (resync no longer applies — edit it with `weft patch amend {name}`)"
-    );
+    ));
     Ok(())
 }

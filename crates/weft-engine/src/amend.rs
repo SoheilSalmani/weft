@@ -26,7 +26,7 @@ use weft_lang::StarlarkEval;
 use crate::interact::Interaction;
 use crate::session::{self, Session, SessionMeta};
 use crate::template::Template;
-use crate::{answers, fsio};
+use crate::{answers, fsio, report};
 
 pub struct AmendOptions {
     pub template: Utf8PathBuf,
@@ -111,12 +111,12 @@ pub fn start(
     // (a full render surfaces any that break); warn up front.
     let dependents = direct_dependents(&template, id);
     if !dependents.is_empty() {
-        eprintln!(
+        report::note(format_args!(
             "note: `{}` has dependents ({}); if your edit moves the content they anchor \
              on, `weft commit` will report which one to re-record.",
             opts.name,
             dependents.join(", ")
-        );
+        ));
     }
 
     let layered = answers::layered_with_json_full(
@@ -206,7 +206,7 @@ pub fn start(
         .map(|n| format!("`{n}`"))
         .collect();
     if !shown.is_empty() {
-        eprintln!(
+        report::note(format_args!(
             "note: `{}` has slots; the worktree shows the lines {} add to them. Edit the lines \
              around them; the patches' own lines stay as they are.",
             opts.name,
@@ -215,7 +215,7 @@ pub fn start(
             } else {
                 fillers.join(", ")
             }
-        );
+        ));
     }
     let base_tree = base.finish().context("rendering the patch's ancestors")?;
     let seed = seed
@@ -358,7 +358,9 @@ pub(crate) fn finish(
     }
     template.save_patch_file(target, &file)?;
     session.end(template_root, session_name)?;
-    eprintln!("amended patch `{target}` ({op_count} op(s)); its content id changed");
+    report::done(format_args!(
+        "amended patch `{target}` ({op_count} op(s)); its content id changed"
+    ));
 
     // Rebase check: if anything depends on the amended patch, its
     // context-anchored hunks may have moved with the new content. A full
@@ -393,7 +395,7 @@ pub(crate) fn finish(
                  finish the rebase."
             );
         }
-        eprintln!("dependents still apply — no rebase conflicts");
+        report::done("dependents still apply — no rebase conflicts");
     }
     Ok(())
 }

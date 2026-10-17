@@ -241,13 +241,13 @@ pub fn squash(
     apply().inspect_err(|_| restore())?;
     match Template::load_with(root, resolver) {
         Ok(_) => {
-            eprintln!(
+            crate::report::done(format_args!(
                 "squashed {} into `{}` ({} op(s)); run `weft check` with representative \
                  answers to re-verify",
                 opts.names.join(", "),
                 opts.into,
                 combined.ops.len()
-            );
+            ));
             Ok(())
         }
         Err(e) => {

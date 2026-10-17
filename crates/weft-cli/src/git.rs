@@ -15,7 +15,10 @@ use std::process::Command;
 use anyhow::{bail, Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use sha2::{Digest, Sha256};
+use weft_engine::report;
 use weft_engine::source::GitRef;
+
+use crate::ui;
 
 pub fn cache_root() -> Result<Utf8PathBuf> {
     let home = std::env::var("HOME").context("HOME is not set")?;
@@ -127,13 +130,16 @@ fn ensure_db(r: &GitRef) -> Result<(Utf8PathBuf, bool)> {
     // A directory without HEAD is a leftover nobody can be using.
     let _ = std::fs::remove_dir_all(&db);
     let staging = staging_for(&db)?;
-    git(
-        &["clone", "--mirror", "--quiet", &r.url, staging.as_str()],
-        None,
-    )
-    .with_context(|| format!("cloning {}", r.repo))?;
+    {
+        let _task = ui::Task::status(format!("cloning {}", r.repo));
+        git(
+            &["clone", "--mirror", "--quiet", &r.url, staging.as_str()],
+            None,
+        )
+        .with_context(|| format!("cloning {}", r.repo))?;
+    }
     if install(&staging, &db, is_db)? {
-        eprintln!("cloned {}", r.repo);
+        report::done(format_args!("cloned {}", r.repo));
     }
     Ok((db, true))
 }
@@ -142,10 +148,17 @@ fn ensure_db(r: &GitRef) -> Result<(Utf8PathBuf, bool)> {
 pub fn fetch(r: &GitRef) -> Result<Utf8PathBuf> {
     let (db, fresh) = ensure_db(r)?;
     if !fresh {
-        git(&["fetch", "--quiet", "--prune", "origin"], Some(&db))
-            .with_context(|| format!("fetching {}", r.repo))?;
+        fetch_db(r, &db)?;
     }
     Ok(db)
+}
+
+/// `git fetch` into the mirror `db` of `r`.
+fn fetch_db(r: &GitRef, db: &Utf8Path) -> Result<()> {
+    let _task = ui::Task::status(format!("fetching {}", r.repo));
+    git(&["fetch", "--quiet", "--prune", "origin"], Some(db))
+        .with_context(|| format!("fetching {}", r.repo))?;
+    Ok(())
 }
 
 /// Resolve a tag, branch, or commit (`None` = the default branch) against
@@ -205,8 +218,7 @@ pub fn export(r: &GitRef, sha: &str, offline: bool) -> Result<Utf8PathBuf> {
         Ok(bytes) => bytes,
         Err(_) if !offline => {
             // The mirror may predate the commit (a lock pinned upstream).
-            git(&["fetch", "--quiet", "--prune", "origin"], Some(&db))
-                .with_context(|| format!("fetching {}", r.repo))?;
+            fetch_db(r, &db)?;
             git(&["archive", "--format=tar", sha], Some(&db))
                 .with_context(|| format!("commit {} not found in {}", short(sha), r.repo))?
         }

@@ -180,11 +180,11 @@ pub fn run(
         crate::update::run_post_hooks(&post, &opts.dest, &mut state, &eval)?;
     }
 
-    eprintln!(
+    crate::report::done(format_args!(
         "scaffolded `{}` into {} ({} files)",
         template.manifest.template.name,
         opts.dest,
         tree.len()
-    );
+    ));
     Ok(entered)
 }

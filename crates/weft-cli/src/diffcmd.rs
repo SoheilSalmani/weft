@@ -1,64 +1,52 @@
 //! `weft diff`: the pre-commit view of a recording session. Two layers,
 //! never mixed on one line: the diff body shows the concrete text the
-//! author wrote, with abstraction-candidate spans highlighted (ANSI when a
-//! TTY, `⟨…⟩` markers when piped); the legend footer maps highlights to
+//! author wrote, with abstraction-candidate spans highlighted (colour when
+//! stdout takes it, `⟨…⟩` markers when piped); the legend footer maps highlights to
 //! answers. `--abstracted` flips the body to the stored form
 //! (`{answer}` placeholders).
 
 use std::collections::BTreeMap;
-use std::io::IsTerminal;
 
 use anyhow::Result;
 use camino::Utf8PathBuf;
+use console::Style as Look;
 use weft_engine::commit::{Preview, PreviewFile};
+use weft_engine::report;
 
-const ACCENT: &str = "\x1b[38;5;141m"; // soft indigo
-const UNDER: &str = "\x1b[4m";
-const DIM: &str = "\x1b[2m";
-const GREEN: &str = "\x1b[32m";
-const RED: &str = "\x1b[31m";
-const BOLD: &str = "\x1b[1m";
-const RESET: &str = "\x1b[0m";
+use crate::ui::{self, palette, Out};
 
+/// Colour on stdout → painted segments; off → the `⟨…⟩` markers piped
+/// output has always used. Every segment is painted on its own, so no
+/// colour carries over from one segment to the next.
 struct Style {
-    tty: bool,
+    color: bool,
 }
 
 impl Style {
+    fn paint(&self, look: Look, text: &str) -> String {
+        if text.is_empty() {
+            return String::new();
+        }
+        ui::paint(Out::Stdout, look, text).to_string()
+    }
     fn span(&self, text: &str) -> String {
-        if self.tty {
-            format!("{ACCENT}{UNDER}{text}{RESET}{GREEN}")
+        if self.color {
+            self.paint(palette::accent().underlined(), text)
         } else {
             format!("⟨{text}⟩")
         }
     }
-    fn added(&self, text: &str) -> String {
-        if self.tty {
-            format!("{GREEN}+ {text}{RESET}")
-        } else {
-            format!("+ {text}")
-        }
+    fn green(&self, text: &str) -> String {
+        self.paint(palette::success(), text)
     }
     fn removed(&self, text: &str) -> String {
-        if self.tty {
-            format!("{RED}- {text}{RESET}")
-        } else {
-            format!("- {text}")
-        }
+        self.paint(palette::error(), &format!("- {text}"))
     }
     fn dim(&self, text: &str) -> String {
-        if self.tty {
-            format!("{DIM}{text}{RESET}")
-        } else {
-            text.to_owned()
-        }
+        self.paint(palette::dim(), text)
     }
     fn bold(&self, text: &str) -> String {
-        if self.tty {
-            format!("{BOLD}{text}{RESET}")
-        } else {
-            text.to_owned()
-        }
+        self.paint(palette::bold(), text)
     }
 }
 
@@ -80,8 +68,8 @@ fn span_map(preview: &Preview) -> SpanMap {
     map
 }
 
-/// Render one added line with its candidate spans highlighted (or, in
-/// abstracted mode, replaced by `{answer}` placeholders).
+/// Render one added line (`+ ` prefix included) with its candidate spans
+/// highlighted (or, in abstracted mode, replaced by `{answer}` placeholders).
 fn render_added(
     style: &Style,
     text: &str,
@@ -89,15 +77,17 @@ fn render_added(
     abstracted: bool,
 ) -> String {
     let Some(spans) = spans else {
-        return text.to_owned();
+        return style.green(&format!("+ {text}"));
     };
-    let mut out = String::new();
+    let mut out = style.green("+ ");
     let mut cursor = 0usize;
     for (col, len, id) in spans {
         if *col < cursor {
             continue; // overlap safety
         }
-        out.push_str(&text[cursor..*col]);
+        if cursor < *col {
+            out.push_str(&style.green(&text[cursor..*col]));
+        }
         if abstracted {
             out.push_str(&style.span(&format!("{{{id}}}")));
         } else {
@@ -105,7 +95,9 @@ fn render_added(
         }
         cursor = col + len;
     }
-    out.push_str(&text[cursor..]);
+    if cursor < text.len() {
+        out.push_str(&style.green(&text[cursor..]));
+    }
     out
 }
 
@@ -115,15 +107,15 @@ fn print_file(style: &Style, file: &PreviewFile, spans: &SpanMap, abstracted: bo
         "deleted" => style.bold(&format!("- deleted   {}", file.path)),
         _ => style.bold(&format!("~ modified  {}", file.path)),
     };
-    println!("{marker}");
+    ui::outln!("{marker}");
     for note in &file.notes {
-        println!("  {}", style.dim(&format!("note: {note}")));
+        ui::outln!("  {}", style.dim(&format!("note: {note}")));
     }
 
     // Binary content is opaque — one summary line instead of a body.
     if file.binary {
-        println!("  {}", style.dim("(binary file)"));
-        println!();
+        ui::outln!("  {}", style.dim("(binary file)"));
+        ui::outln!();
         return;
     }
     match file.change {
@@ -135,12 +127,12 @@ fn print_file(style: &Style, file: &PreviewFile, spans: &SpanMap, abstracted: bo
                     spans.get(&(file.path.clone(), i + 1)),
                     abstracted,
                 );
-                println!("  {}", style.added(&rendered));
+                ui::outln!("  {rendered}");
             }
         }
         "deleted" => {
             for line in file.before.lines() {
-                println!("  {}", style.removed(line));
+                ui::outln!("  {}", style.removed(line));
             }
         }
         _ => {
@@ -153,14 +145,14 @@ fn print_file(style: &Style, file: &PreviewFile, spans: &SpanMap, abstracted: bo
                     match op {
                         similar::DiffOp::Equal { old_index, len, .. } => {
                             for line in &old[old_index..old_index + len] {
-                                println!("  {}", style.dim(&format!("  {line}")));
+                                ui::outln!("  {}", style.dim(&format!("  {line}")));
                             }
                         }
                         similar::DiffOp::Delete {
                             old_index, old_len, ..
                         } => {
                             for line in &old[old_index..old_index + old_len] {
-                                println!("  {}", style.removed(line));
+                                ui::outln!("  {}", style.removed(line));
                             }
                         }
                         similar::DiffOp::Insert {
@@ -174,7 +166,7 @@ fn print_file(style: &Style, file: &PreviewFile, spans: &SpanMap, abstracted: bo
                             } = op
                             {
                                 for line in &old[old_index..old_index + old_len] {
-                                    println!("  {}", style.removed(line));
+                                    ui::outln!("  {}", style.removed(line));
                                 }
                             }
                             for (k, line) in new[new_index..new_index + new_len].iter().enumerate()
@@ -185,24 +177,24 @@ fn print_file(style: &Style, file: &PreviewFile, spans: &SpanMap, abstracted: bo
                                     spans.get(&(file.path.clone(), new_index + k + 1)),
                                     abstracted,
                                 );
-                                println!("  {}", style.added(&rendered));
+                                ui::outln!("  {rendered}");
                             }
                         }
                     }
                 }
-                println!("  {}", style.dim("⋮"));
+                ui::outln!("  {}", style.dim("⋮"));
             }
         }
     }
-    println!();
+    ui::outln!();
 }
 
 pub fn print(preview: &Preview, abstracted: bool) -> Result<()> {
     let style = Style {
-        tty: std::io::stdout().is_terminal(),
+        color: ui::color(Out::Stdout),
     };
     if preview.files.is_empty() {
-        eprintln!("the worktree matches the base — nothing to commit yet");
+        report::info("the worktree matches the base — nothing to commit yet");
         return Ok(());
     }
     let spans = span_map(preview);
@@ -211,7 +203,7 @@ pub fn print(preview: &Preview, abstracted: bool) -> Result<()> {
     }
 
     if !preview.candidates.is_empty() {
-        println!("{}", style.bold("abstraction candidates"));
+        ui::outln!("{}", style.bold("abstraction candidates"));
         for c in &preview.candidates {
             let value = if c.mandatory {
                 "(secret)".to_owned()
@@ -223,7 +215,7 @@ pub fn print(preview: &Preview, abstracted: bool) -> Result<()> {
             } else {
                 ""
             };
-            println!(
+            ui::outln!(
                 "  {} = {}   {} occurrence(s){}",
                 style.span(&c.id.to_string()),
                 value,
@@ -231,9 +223,11 @@ pub fn print(preview: &Preview, abstracted: bool) -> Result<()> {
                 style.dim(lock),
             );
         }
-        println!(
+        ui::outln!(
             "{}",
-            style.dim(
+            ui::highlight(
+                Out::Stdout,
+                Some(palette::dim()),
                 "\nhighlighted spans become {answer} references at commit. \
                  `weft commit` confirms; keep one literal with \
                  --keep-literal ANSWER@PATH:LINE[:NTH] or the `select` prompt.",

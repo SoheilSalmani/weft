@@ -91,8 +91,9 @@ fn layered_user(
     if let Some(path) = answers_file {
         let src = std::fs::read_to_string(path)
             .with_context(|| format!("reading answers file {path}"))?;
-        let set: AnswerSet =
-            toml::from_str(&src).with_context(|| format!("parsing answers file {path}"))?;
+        let set: AnswerSet = toml::from_str(&src)
+            .map_err(|e| crate::parse_error::ParseError::toml(path, &src, e))
+            .with_context(|| format!("parsing answers file {path}"))?;
         layers.push(set);
     }
     if !answer_args.is_empty() {
@@ -609,7 +610,9 @@ pub fn layered_with_json_full(
             s => s.to_owned(),
         };
         // Template-aware parse: keys may be namespaced (`<include>.<id>`).
+        let origin = json_spec.strip_prefix('@').unwrap_or("--answers-json");
         let object: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&json)
+            .map_err(|e| crate::parse_error::ParseError::json(origin, &json, e))
             .context("answers JSON must be an object of question id -> value")?;
         let mut set = AnswerSet::new();
         for (key, raw) in &object {
@@ -692,6 +695,7 @@ pub fn json_to_value(kind: &AnswerKind, key: &str, raw: &serde_json::Value) -> R
 /// into a typed answer set, validating keys against the declared questions.
 pub fn answers_from_json(questions: &[Question], json: &str) -> Result<AnswerSet> {
     let object: serde_json::Map<String, serde_json::Value> = serde_json::from_str(json)
+        .map_err(|e| crate::parse_error::ParseError::json("--answers-json", json, e))
         .context("answers JSON must be an object of question id -> value")?;
     let mut set = AnswerSet::new();
     for (key, raw) in &object {

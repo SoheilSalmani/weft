@@ -44,7 +44,11 @@ pub fn weft_path() -> PathBuf {
     .clone()
 }
 
-/// An `assert_cmd` command for the `weft` binary.
+/// An `assert_cmd` command for the `weft` binary. Its streams are pipes,
+/// so weft prints plain text; the variables that force colour through a
+/// pipe are cleared, so a developer's shell cannot change what tests read.
 pub fn weft() -> assert_cmd::Command {
-    assert_cmd::Command::new(weft_path())
+    let mut cmd = assert_cmd::Command::new(weft_path());
+    cmd.env_remove("FORCE_COLOR").env_remove("CLICOLOR_FORCE");
+    cmd
 }

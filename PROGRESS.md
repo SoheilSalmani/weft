@@ -3,6 +3,76 @@
 Running notes per milestone, as required by PLAN.md. Records decisions and
 deviations from the plan.
 
+## Post-MVP — weft in a terminal: prompts, colour, tables, progress, errors
+
+- **The gaps**: output was ~160 bare `println!`/`eprintln!` calls across the
+  engine and the CLI. `weft --help` listed commands with 300-character lines;
+  prompts were dialoguer's defaults, never showing a question's `description`;
+  colour existed only in `weft diff`/`add -p` (hand-written ANSI, ignoring
+  `NO_COLOR`, with a green leak after a highlighted span); `weft check` on the
+  house `nextjs` template (144 patches, 13,264 pairs) ran 220 s in a debug
+  build silent until the end; parse errors printed TOML's caret block
+  uncoloured under `Caused by:`; `weft … | head -1` on a large output panicked
+  (exit 101); prompts were gated on stdin alone, so `weft new … 2>log` in a
+  terminal failed with `IO error: not a terminal` instead of naming `--answer`
+  (now it gets the non-interactive message).
+- **Decided: style for a terminal, never for a pipe.** Off a terminal every
+  byte is as before: 35 scripted scenarios (new, answers, listings, check,
+  three parse errors, graph, describe, a session through commit, update,
+  hooks, init, lock, schema) were run against a master build and compared
+  byte for byte on stdout, stderr and exit status, all identical. The one
+  addition is a `weft check` heartbeat (`check: commutation 178/293`) every
+  5 s off a terminal, so a log or an agent sees a long check is alive.
+- **Engine**: `weft_engine::report` is the only way the engine (and the CLI)
+  narrates: a `Tone` (done, step, note, warning, problem, hint, info), the
+  exact words, and a stream. The binary installs one `Sink`; without one the
+  text prints plain, so engine tests and library callers see what they always
+  did. `report::progress` counts long work; `check_commutation` now collects
+  the pairs to render before rendering (same skips, order, counts and notes)
+  and `check_alone` counts nodes. `hook_ls`, `patch_ls` and `instance::list`
+  return rows; the CLI prints them. `parse_error::ParseError` keeps the text
+  and byte span of a TOML or JSON file that does not parse (`weft.toml`,
+  patches, presets, answers, lock, state, session records) and displays as
+  the parser's own error. dialoguer and the terminal prompts left the engine.
+- **CLI**: `crates/weft-cli/src/ui/` holds everything that styles: the colour
+  policy (`--color`, then `NO_COLOR`, then `FORCE_COLOR`/`CLICOLOR_FORCE`,
+  then `CLICOLOR=0`/`TERM=dumb`, then the stream; decided per stream), one
+  palette (weft's accent is ANSI 256 colour 141), the prompt rail, tables,
+  progress and the error report. `prompt.rs` draws the engine's questions
+  with cliclack on stderr, only when stdin and stderr are terminals; Esc or
+  Ctrl-C exits 130. The clap definitions moved from `main.rs` to `cli.rs`,
+  with styled help, `wrap_help`, and a one-line summary per command.
+- **Crates, as proposed and as chosen**: cliclack for prompts (kept: it draws
+  on stderr, which `cd $(weft session new)` needs, and its rail suits a
+  scaffolder); clap (already there; styled and wrapped); indicatif (kept, for
+  spinners, the download byte count and check's bars — but not a bar over the
+  questionnaire: `when` gates make the number of questions unknowable until
+  they are answered, and a total that moves misleads; the rail already shows
+  what is answered); comfy-table (kept, for listings on a terminal only,
+  borderless, empty columns dropped; pipes keep one record per line);
+  miette (kept narrowly: weft's own errors carry no spans, so it draws only
+  `ParseError`s, whose spans are real; source spans for Starlark expressions
+  inside `weft.toml` need span plumbing and are not done); owo-colors
+  (declined: cliclack and indicatif style through `console`, so weft's
+  palette is `console::Style` too, forced per stream — one styling API and
+  one switch instead of three).
+- **Not done (by decision)**: examples in `--help`, network timeouts, a
+  line-based prompt fallback for `TERM=dumb`, and capturing hook output under
+  a spinner (hooks may prompt and their live output matters; they print past
+  the rail).
+- Tests: unit tests for the colour precedence, that highlighting and tone
+  styling never change a word, the prefix split, and a JSON error's span;
+  the e2e harness now clears `FORCE_COLOR`/`CLICOLOR_FORCE`. Smoke in a pty
+  (pyte): help, `weft new` through the rail and its outro, Esc and Ctrl-C
+  (130, nothing written), every table, status/diff/graph colours, the three
+  parse errors drawn on their lines, `NO_COLOR`, `--color always` through a
+  pipe, `add -p`, an interactive `weft update`, `weft share` and the commit
+  clash question, `cd $(weft session new)` (prompts on the terminal, the
+  capture only the path), a throttled stub registry (spinner, then the byte
+  bar), a `file://` git source, `check` bars on the house `base` template
+  (293 pairs, 10.6 s against master's 11.9 s), and `graph --json | head -c
+  20` (master: panic, 101; now: 0).
+
 ## Fix — recording into a slot whose separator holds a newline
 
 - **Bug**: with a newline in a slot's separator (`weft share --example`

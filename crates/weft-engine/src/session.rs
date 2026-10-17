@@ -158,7 +158,9 @@ impl Session {
         let src = std::fs::read_to_string(&path).with_context(|| {
             format!("no session `{name}` in `{template_root}`; run `weft session new {name}` first")
         })?;
-        toml::from_str(&src).with_context(|| format!("parsing {path}"))
+        toml::from_str(&src)
+            .map_err(|e| crate::parse_error::ParseError::toml(&path, &src, e))
+            .with_context(|| format!("parsing {path}"))
     }
 
     pub fn exists(template_root: &Utf8Path, name: &str) -> bool {
@@ -208,7 +210,9 @@ impl Session {
             match Self::load(template_root, &name) {
                 Ok(sess) => out.push((name, sess)),
                 // A half-written session shouldn't break `weft session list`.
-                Err(e) => eprintln!("warning: skipping session `{name}`: {e:#}"),
+                Err(e) => crate::report::warning(format_args!(
+                    "warning: skipping session `{name}`: {e:#}"
+                )),
             }
         }
         out.sort_by(|a, b| a.0.cmp(&b.0));
@@ -251,7 +255,9 @@ pub fn migrate_legacy(template_root: &Utf8Path) -> Result<()> {
     }
     std::fs::create_dir_all(sessions_dir(template_root))?;
     std::fs::rename(&legacy, &dest).with_context(|| format!("migrating {legacy} to {dest}"))?;
-    eprintln!("migrated the recording session in `{legacy}` to `{dest}`");
+    crate::report::done(format_args!(
+        "migrated the recording session in `{legacy}` to `{dest}`"
+    ));
     Ok(())
 }
 

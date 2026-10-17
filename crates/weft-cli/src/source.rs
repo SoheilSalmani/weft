@@ -134,11 +134,11 @@ fn hub_newer_note(r: &hub::HubRef) {
     };
     if let Ok((latest, _)) = hub::resolve(&registry, &unpinned) {
         if *pinned != latest {
-            eprintln!(
+            weft_engine::report::note(format_args!(
                 "note: hub:{}/{} has {latest} on the registry (project pins {pinned}); \
                  `weft update --to {latest}` moves to it",
                 r.owner, r.name
-            );
+            ));
         }
     }
 }
@@ -203,7 +203,7 @@ impl RemoteResolver {
         for (root, (lock, changed)) in &self.locks {
             if *changed {
                 lock.save(root)?;
-                eprintln!("updated {}/weft.lock", root);
+                weft_engine::report::done(format_args!("updated {}/weft.lock", root));
             }
         }
         Ok(())

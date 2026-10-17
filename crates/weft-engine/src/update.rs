@@ -455,9 +455,9 @@ pub fn run(
     let old_render = compose::render_composed(&base_patches, &old_answers, &old_parts, &eval)
         .context("re-rendering pinned inputs")?;
     if snapshot.is_some() && old_render.hash() != state.state.tree_hash {
-        eprintln!(
+        crate::report::warning(
             "warning: `.weft/base.json` no longer matches the recorded tree hash; it may \
-             have been edited"
+             have been edited",
         );
     }
     let new_render = compose::render_composed(&template.patches, &new_answers, &new_parts, &eval)
@@ -567,32 +567,37 @@ pub fn run(
 
     if opts.dry_run {
         if actions.is_empty() {
-            eprintln!("dry run: tree already up to date");
+            crate::report::info("dry run: tree already up to date");
         }
         for (path, action) in &actions {
             match action {
-                Action::Note(msg) => eprintln!("dry run: note: {path}: {msg}"),
-                _ => eprintln!("dry run: {} {path}", action.verb()),
+                Action::Note(msg) => {
+                    crate::report::note(format_args!("dry run: note: {path}: {msg}"))
+                }
+                _ => crate::report::step(format_args!("dry run: {} {path}", action.verb())),
             }
         }
         if !dirty.is_empty() {
-            eprintln!("dry run: the update would stop — {}", dirty_message(&dirty));
+            crate::report::warning(format_args!(
+                "dry run: the update would stop — {}",
+                dirty_message(&dirty)
+            ));
         }
         for hook in &plan.pre {
-            eprintln!(
+            crate::report::step(format_args!(
                 "dry run: would run pre-hook `{}` ({}){}",
                 hook.hook.id,
                 hook.hook.label,
                 frame_suffix(hook)
-            );
+            ));
         }
         for hook in &post_plan {
-            eprintln!(
+            crate::report::step(format_args!(
                 "dry run: would run post-hook `{}` ({}){}",
                 hook.hook.id,
                 hook.hook.label,
                 frame_suffix(hook)
-            );
+            ));
         }
         if opts.diff {
             for (path, action) in &actions {
@@ -1030,7 +1035,7 @@ fn print_answer_report(report: &UpdateReport) {
         .max()
         .unwrap_or(0);
     if !report.answer_changes.is_empty() {
-        eprintln!("answers:");
+        crate::report::info("answers:");
         for c in &report.answer_changes {
             let tag = match c.origin {
                 Origin::Given => "",
@@ -1038,24 +1043,24 @@ fn print_answer_report(report: &UpdateReport) {
                 Origin::Bind => "  (bind)",
                 Origin::Removed => "  (no longer asked)",
             };
-            eprintln!(
+            crate::report::info(format_args!(
                 "  {:width$}  {} → {}{tag}",
                 c.id,
                 show_opt(c.old.as_ref()),
                 show_opt(c.new.as_ref())
-            );
+            ));
         }
     }
     if !report.kept.is_empty() {
-        eprintln!("kept as given:");
+        crate::report::info("kept as given:");
         for k in &report.kept {
-            eprintln!(
+            crate::report::info(format_args!(
                 "  {:width$}  {} — its default is now {} (`--unset {}` to follow it)",
                 k.id,
                 show_value(&k.value),
                 show_value(&k.would_be),
                 k.id
-            );
+            ));
         }
     }
 }
@@ -1131,7 +1136,9 @@ fn resolve_conflicts(
             Chunk::Conflict(conflict) => conflict,
         };
         seen += 1;
-        eprintln!("{path}: conflict {seen} of {total}, at line {line}");
+        crate::report::step(format_args!(
+            "{path}: conflict {seen} of {total}, at line {line}"
+        ));
         show_lines("it was", &conflict.base);
         show_lines("you have", &conflict.ours);
         show_lines("the template now has", &conflict.theirs);
@@ -1148,7 +1155,9 @@ fn resolve_conflicts(
                 let block = weft_core::segment::join_lines(&conflict.marked());
                 let edited = interaction.edit(&block, &extension)?;
                 if weft_core::merge::has_conflict_markers(&edited) {
-                    eprintln!("{path}: the edit still has conflict markers; they stay in the file");
+                    crate::report::warning(format_args!(
+                        "{path}: the edit still has conflict markers; they stay in the file"
+                    ));
                     left += 1;
                 }
                 edited.lines().map(str::to_owned).collect()
@@ -1167,12 +1176,12 @@ fn resolve_conflicts(
 
 /// One side of a conflict, indented under its label.
 fn show_lines(label: &str, lines: &[String]) {
-    eprintln!("  {label}:");
+    crate::report::info(format_args!("  {label}:"));
     if lines.is_empty() {
-        eprintln!("    (nothing)");
+        crate::report::info("    (nothing)");
     }
     for line in lines {
-        eprintln!("    {line}");
+        crate::report::info(format_args!("    {line}"));
     }
 }
 
@@ -1204,7 +1213,10 @@ fn print_diff(path: &Utf8Path, ours: Option<&FileEntry>, action: &Action) {
     };
     let before = ours.map(|e| e.content.text());
     if matches!(before, Some(None)) || matches!(after, Some(None)) {
-        println!("Binary file {path} changes");
+        crate::report::result(
+            crate::report::Tone::Info,
+            format_args!("Binary file {path} changes"),
+        );
         return;
     }
     let a = match ours {
@@ -1219,7 +1231,7 @@ fn print_diff(path: &Utf8Path, ours: Option<&FileEntry>, action: &Action) {
         before.flatten().unwrap_or(""),
         after.flatten().unwrap_or(""),
     );
-    print!("{}", diff.unified_diff().header(&a, &b));
+    crate::report::diff(&diff.unified_diff().header(&a, &b).to_string());
 }
 
 /// Replace nested parts' patches with the bodies the snapshot stored for
@@ -1459,10 +1471,13 @@ fn collect_secret_specs(
 /// process exits nonzero.
 pub fn finish(report: &UpdateReport) -> Result<()> {
     for note in &report.notes {
-        eprintln!("{note}");
+        crate::report::info(note);
     }
     if report.conflicts.is_empty() {
-        eprintln!("update complete ({} file(s) written)", report.written);
+        crate::report::done(format_args!(
+            "update complete ({} file(s) written)",
+            report.written
+        ));
         Ok(())
     } else {
         bail!(

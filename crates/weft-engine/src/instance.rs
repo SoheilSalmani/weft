@@ -129,10 +129,10 @@ pub fn add(
             let _ = std::fs::write(&state_file, &original);
         }
     })?;
-    eprintln!(
+    crate::report::done(format_args!(
         "added instance `{}` of include `{}`",
         opts.key, opts.include
-    );
+    ));
     Ok(report)
 }
 
@@ -166,25 +166,34 @@ pub fn remove(
         resolver,
         interaction,
     )?;
-    eprintln!("removed instance `{key}` of include `{include}`");
+    crate::report::done(format_args!(
+        "removed instance `{key}` of include `{include}`"
+    ));
     Ok(report)
 }
 
-/// Print the project's instances (include, key, mount).
-pub fn list(dest: &Utf8PathBuf) -> Result<()> {
+/// One include instance pinned in a project, as `weft instance list` lists it.
+pub struct InstanceRow {
+    /// The `[[include]]` name in the parent template.
+    pub include: String,
+    pub key: String,
+    /// The mount prefix the instance renders under.
+    pub mount: String,
+    /// How many child patches the instance's base pins.
+    pub pinned: usize,
+}
+
+/// The project's instances (include, key, mount), in state order.
+pub fn list(dest: &Utf8PathBuf) -> Result<Vec<InstanceRow>> {
     let state = State::load(dest)?;
-    if state.instances.is_empty() {
-        eprintln!("no include instances");
-        return Ok(());
-    }
-    for inst in &state.instances {
-        println!(
-            "{}={} @ {} ({} patch(es) pinned)",
-            inst.include,
-            inst.key,
-            inst.mount,
-            inst.base.len()
-        );
-    }
-    Ok(())
+    Ok(state
+        .instances
+        .into_iter()
+        .map(|inst| InstanceRow {
+            pinned: inst.base.len(),
+            include: inst.include,
+            key: inst.key,
+            mount: inst.mount,
+        })
+        .collect())
 }

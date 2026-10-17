@@ -209,7 +209,7 @@ pub fn run(
                 &eval,
             );
             if !command.is_literal() {
-                eprintln!("generator interpolates: {}", command.source());
+                crate::report::info(format_args!("generator interpolates: {}", command.source()));
             }
             if let Err(e) =
                 crate::hooks::run_command(&command, "generator", &worktree, &resolved, &eval)

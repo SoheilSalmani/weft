@@ -50,7 +50,9 @@ impl WorktreeLink {
     pub fn load(worktree: &Utf8Path) -> Result<Self> {
         let path = link_path(worktree);
         let src = std::fs::read_to_string(&path).with_context(|| format!("reading {path}"))?;
-        toml::from_str(&src).with_context(|| format!("parsing {path}"))
+        toml::from_str(&src)
+            .map_err(|e| crate::parse_error::ParseError::toml(&path, &src, e))
+            .with_context(|| format!("parsing {path}"))
     }
 
     /// Remove the pointer (unlinking a worktree without deleting it).

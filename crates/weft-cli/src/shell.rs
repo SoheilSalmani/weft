@@ -16,7 +16,10 @@ use std::process::Command;
 
 use camino::Utf8Path;
 use weft_engine::discover;
+use weft_engine::report;
 use weft_engine::session::Session;
+
+use crate::ui;
 
 /// Names the session in the shell [`enter`] opens, so a prompt can show it.
 /// A command started with `--` does not get it: [`stands_in`] and the
@@ -28,29 +31,29 @@ const SESSION_ENV: &str = "WEFT_SESSION";
 /// Print a new session's worktree on stdout, so `cd $(weft session new)`
 /// lands in it, and what to do next on stderr.
 pub fn announce_new(template: &Utf8Path, name: &str, worktree: &Utf8Path, opening_shell: bool) {
-    println!("{worktree}");
+    ui::outln!("{worktree}");
     if opening_shell {
-        eprintln!(
+        report::done(format_args!(
             "session `{name}` started — edit the worktree above, then `weft add` and \
              `weft commit`"
-        );
+        ));
     } else {
-        eprintln!(
+        report::done(format_args!(
             "session `{name}` started — `cd` into the worktree above or run `{}`, \
              edit, then `weft add` and `weft commit`",
             command_for(template, name)
-        );
+        ));
     }
 }
 
 /// Print an amend session's worktree on stdout and what to do next on stderr.
 pub fn announce_amend(template: &Utf8Path, name: &str, worktree: &Utf8Path) {
-    println!("{worktree}");
-    eprintln!(
+    ui::outln!("{worktree}");
+    report::done(format_args!(
         "amending `{name}`: the worktree above is the patch applied on its base — \
          edit it (`{}` opens a shell there), then run `weft commit`",
         command_for(template, name)
-    );
+    ));
 }
 
 /// `weft session shell NAME`, plus `--template DIR` when the directory this
@@ -100,15 +103,15 @@ pub fn enter(worktree: &Utf8Path, session: &str, command: &[String]) -> ! {
         None => {
             let shell = user_shell();
             if let Some(outer) = std::env::var_os(SESSION_ENV) {
-                eprintln!(
+                report::note(format_args!(
                     "note: already in session `{}`'s shell; this one nests inside it",
                     outer.to_string_lossy()
-                );
+                ));
             }
-            eprintln!(
+            report::step(format_args!(
                 "opening {} in session `{session}` — `exit` returns here",
                 shell.to_string_lossy()
-            );
+            ));
             let mut child = Command::new(shell);
             child.env(SESSION_ENV, session);
             child
@@ -123,10 +126,10 @@ pub fn enter(worktree: &Utf8Path, session: &str, command: &[String]) -> ! {
     // `exec` discards Rust's stdout buffer along with the rest of the process.
     let _ = std::io::stdout().flush();
     let err = replace_with(child);
-    eprintln!(
+    report::problem(format_args!(
         "Error: cannot run `{}` in `{worktree}`: {err}",
         program.to_string_lossy()
-    );
+    ));
     std::process::exit(if err.kind() == std::io::ErrorKind::NotFound {
         127
     } else {
@@ -175,7 +178,9 @@ pub fn stands_in(sess: &Session, template: &Utf8Path, name: &str) -> bool {
 
 /// Printed once a session ended from under its own shell ([`stands_in`]).
 pub fn exit_hint() {
-    eprintln!("its worktree is gone from under this shell — `exit` returns to where you opened it");
+    report::hint(
+        "its worktree is gone from under this shell — `exit` returns to where you opened it",
+    );
 }
 
 /// Is a person at a terminal on both ends? A shell reads stdin and draws on
