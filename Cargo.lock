@@ -3606,7 +3606,7 @@ dependencies = [
 
 [[package]]
 name = "weft-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "camino",
@@ -3638,7 +3638,7 @@ dependencies = [
 
 [[package]]
 name = "weft-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "blake3",
@@ -3654,7 +3654,7 @@ dependencies = [
 
 [[package]]
 name = "weft-e2e"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3670,7 +3670,7 @@ dependencies = [
 
 [[package]]
 name = "weft-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -3693,7 +3693,7 @@ dependencies = [
 
 [[package]]
 name = "weft-lang"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "insta",
  "starlark",
