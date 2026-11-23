@@ -24,7 +24,7 @@ Run in this order. Earlier passes are cheaper and their findings often explain t
 1. **Wrong object.** Something with no end state filed as a project. A checklist filed as sub-issues. A curated grouping that should be a view. An issue that is really technical execution detail.
 2. **Titles.** Vague, unbounded, prefixed, dated, or restating a property.
 3. **Stale content.** Descriptions describing a plan that changed, answered open questions still listed, acceptance criteria for scope that was dropped, dead links, invalidated assumptions left in place.
-4. **Misplaced detail.** Implementation detail in Linear that belongs in a pull request, a GitHub issue, or an ADR. Decisions in comment threads that should be an ADR or a decision note.
+4. **Misplaced detail.** Implementation detail in Linear that belongs in a pull request, a repository issue, or an ADR. Decisions in comment threads that should be an ADR or a decision note.
 5. **Structure.** Empty headings, sections added by template, a first sentence that restates the title, a project description carrying status.
 6. **Labels.** Duplicates, synonyms, labels applied to nothing, labels restating a property, prefixes that should be groups.
 7. **Milestones.** Names that describe teams, disciplines, or phase numbers rather than states.

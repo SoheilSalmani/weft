@@ -20,8 +20,8 @@ Every statement is one of these, and the writing should make clear which.
 | --- | --- | --- |
 | Known | Read from a system, or stated by a person | Plain assertion: "The API returns 400 for accounts with two providers." |
 | Inferred | Worked out from evidence, and the evidence is shown | "The two failing tenants both have two providers configured, so the trigger is probably the ambiguous binding." |
-| Proposed | A recommendation awaiting a decision | "Proposed: drop private components from the first release." |
-| Unknown | Not established | "Unknown: whether authors need private components. Nobody has asked." |
+| Proposed | A recommendation awaiting a decision | "Proposed: drop private replies from the first release." |
+| Unknown | Not established | "Unknown: whether teams need private replies. Nobody has asked." |
 
 Never promote a statement up this table to make a sentence read better. An inference written as a fact is the most common way a tracker becomes untrustworthy, because the evidence that would let a reader check it is gone.
 

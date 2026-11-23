@@ -24,16 +24,19 @@ All sources last checked **2026-08-13**.
 | Triage is the intake queue, with accept, decline, duplicate, snooze, and merge | `linear.app/docs/triage` |
 | Initiatives are for curated sets tied to an objective; views are for filter-based collection | `linear.app/docs/initiatives`, `linear.app/docs/custom-views` |
 | Naming an entry point and stating non-goals is correct for a delegated issue | `linear.app/docs/coding-sessions` |
-| Pull request diffs, checks, and reviews can be read against the issue in Linear | `linear.app/docs/diffs` |
+| Pull request diffs, checks, and reviews can be read against the issue in Linear, documented for the GitHub integration only | `linear.app/docs/diffs`, checked 2026-10-20 |
+| Linear links GitLab merge requests by branch name, title, or a magic word in the description, not by comments or commit messages; the closing and non-closing magic words | `linear.app/docs/gitlab`, checked 2026-10-20 |
 | Linear's own example agent prompts show the proposed objects before creating anything, and tell the agent not to invent structure the source material does not support. This is Linear recommending a prompt pattern, not the platform enforcing one. Our preview gate is stricter, and is ours | `linear.app/docs/mcp` |
 | Workspace, team, and personal guidance shape the in-Linear agent | `linear.app/docs/linear-agent` |
 | Customer requests attach to issues and projects and carry customer attributes | `linear.app/docs/customer-requests` |
 
-## Platform behaviour (GitHub and Claude Code)
+## Platform behaviour (GitHub, GitLab and Claude Code)
 
 | Convention it supports | Source |
 | --- | --- |
 | Closing keywords, cross-repository syntax, default-branch constraint | `docs.github.com`, "Linking a pull request to an issue" |
+| GitLab closing patterns close issues on merge into, or a push to, the default branch | `docs.gitlab.com/user/project/issues/managing_issues/`, "Closing issues automatically", checked 2026-10-20 |
+| GitLab cross-project reference `namespace/project#123` | `docs.gitlab.com/user/markdown/`, checked 2026-10-20 |
 | Skill layout, frontmatter fields, invocation control, content lifecycle | `code.claude.com/docs/en/skills` |
 | SKILL.md under 500 lines, references one level deep, table of contents above 100 lines, third-person descriptions, evaluation-first development | `platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices` |
 | `evals/evals.json` format and the with-skill against without-skill comparison | `agentskills.io/skill-creation/evaluating-skills` |

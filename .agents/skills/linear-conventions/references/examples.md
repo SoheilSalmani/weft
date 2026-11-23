@@ -91,9 +91,9 @@ Observed, expected, where it was seen, and one line of evidence. The full trace 
 >
 > Turning on "Include archived" still hides issues that belong to archived projects, so people cannot find work they know exists. Search should honour the toggle for archived projects as well as archived issues, without changing ranking, pagination, or project search.
 >
-> Technical work and the migration plan: [GitHub #412](https://github.com/…)
+> Technical work and the migration plan: [#412](<issue URL>)
 
-Everything removed was relocated, not deleted. The SQL, the file references, the test plan, and the alternatives moved to the GitHub issue, and the one alternative that had product consequences moved to a comment. What is left is what a person who cannot read the codebase needs in order to agree the work is worth doing, plus the constraint that matters.
+Everything removed was relocated, not deleted. The SQL, the file references, the test plan, and the alternatives moved to the repository issue, and the one alternative that had product consequences moved to a comment. What is left is what a person who cannot read the codebase needs in order to agree the work is worth doing, plus the constraint that matters.
 
 ## An issue where implementation detail is correct
 
@@ -109,25 +109,25 @@ This issue is being handed to an agent, and the named flag and the explicit non-
 
 **Weak summary**
 
-> AI-powered web application for building templates interactively.
+> AI-powered platform for smarter customer conversations.
 
-on a project named `Build a registry of UI components`.
+on a project named `Build a library of approved support replies`.
 
 **Better summary**
 
-> Give template authors a searchable registry of shared UI components so they stop copying markup between templates.
+> Give support agents a searchable library of approved replies so they stop copying answers between tickets.
 
 The weak summary describes a different project from the one it sits on, which is worse than an empty summary, because a reader believes it. A summary is one sentence naming the change and who it is for, and it is what appears in every list and every tool result.
 
 **Better description**
 
-> Template authors copy the same markup between templates, so a fix to one is a fix to none. A registry gives them one place to find a component and one place to change it.
+> Support agents copy answers out of old tickets, so a correction to one answer reaches none of the others. A library gives them one place to find an approved reply and one place to fix it.
 >
-> Success: an author can find a component by name or by what it does, and use it without copying markup. Measured by the number of templates that consume a registry component rather than an inline copy.
+> Success: an agent can find a reply by topic or by the customer's question, and send it without copying from an old ticket. Measured by the share of tickets answered with a library reply rather than a pasted one.
 >
-> Not in scope: visual design tooling, versioning of individual components, and anything that requires changing the template format.
+> Not in scope: automatic reply suggestions, translations of individual replies, and anything that requires changing the helpdesk.
 >
-> Open: do authors need private components, or is the registry shared? Nobody has asked for private ones yet.
+> Open: do teams need private replies, or is the library shared? Nobody has asked for private ones yet.
 
 Why, what success means, what is out, and what is uncertain. No status, because status lives in the update and in milestone progress. No headings, because it is under 150 words.
 
@@ -135,10 +135,10 @@ Why, what success means, what is out, and what is uncertain. No status, because 
 
 | Weak | Better |
 | --- | --- |
-| `Backend` | `Registry serves components over the API` |
-| `Frontend` | `Authors can browse the registry` |
-| `Phase 2` | `First template migrated off inline markup` |
-| `Migration` | `All existing templates migrated` |
+| `Backend` | `Library serves replies over the API` |
+| `Frontend` | `Agents can search the library` |
+| `Phase 2` | `First team stopped pasting replies` |
+| `Migration` | `All support teams moved to the library` |
 
 Each better version is a sentence that becomes true on a particular day, and its progress bar means something. `Backend` is never true, and its progress measures nothing anyone would report.
 
@@ -146,17 +146,17 @@ Each better version is a sentence that becomes true on a particular day, and its
 
 **Weak**
 
-> This week the team continued to make great progress on the registry project. We completed 7 of 12 issues (58%). The registry is an important initiative that will help template authors share components. Next week we will continue working on the remaining issues.
+> This week the team continued to make great progress on the replies library project. We completed 7 of 12 issues (58%). The library is an important initiative that will help support agents share answers. Next week we will continue working on the remaining issues.
 
 **Better**
 
 > **At risk.**
 >
-> The API now serves components, so `Registry serves components over the API` is done. Browse is blocked: the search index needs a schema change we have not scoped.
+> The API now serves replies, so `Library serves replies over the API` is done. Search is blocked: the search index needs a schema change we have not scoped.
 >
 > Target date moves from 2026-09-12 to 2026-09-26 unless the schema work turns out to be a day. I will know after the spike on 2026-08-18.
 >
-> Decision: private components are out of scope for the first release, taken 2026-08-12.
+> Decision: private replies are out of scope for the first release, taken 2026-08-12.
 
 The weak version restates the project, reports a percentage that Linear already attaches to the update, and says nothing about the date. The better version tells you the one thing you could not have worked out yourself: the date is moving, and here is when that becomes certain.
 

@@ -1,6 +1,6 @@
 ---
 name: linear-conventions
-description: House conventions for Linear, the issue tracker. Covers which Linear object to use, how to name and write it, what belongs in a GitHub issue, a pull request, or an ADR instead, and what an agent may never invent. Use when reading, writing, naming, restructuring, or judging anything in a Linear workspace.
+description: House conventions for Linear, the issue tracker. Covers which Linear object to use, how to name and write it, what belongs in a repository issue, a pull request, or an ADR instead, and what an agent may never invent. Use when reading, writing, naming, restructuring, or judging anything in a Linear workspace. Not for GitHub or GitLab issues or merge requests, which the repository issue and pull request skills own.
 ---
 
 # Linear conventions
@@ -59,7 +59,7 @@ Read the one file that answers the question in front of you. Do not read them al
 | Which object should this be? | `references/objects.md` |
 | Is this title any good, and what should it be? | `references/naming.md` |
 | How much structure, and in what voice? | `references/writing.md` |
-| Does this belong in Linear, GitHub, a pull request, or an ADR? | `references/boundary.md` |
+| Does this belong in Linear, a repository issue, a pull request, or an ADR? | `references/boundary.md` |
 | Should this label exist? | `references/labels.md` |
 | What does good look like? | `references/examples.md` |
 

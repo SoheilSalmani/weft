@@ -53,7 +53,7 @@
 | Multi-month strategic objective | Initiative, only if it holds at least two projects | |
 | Multi-team effort | One project shared across teams. Issues stay owned by one team each | |
 | Project phase | A milestone if it names a state. If it names a stage of process, question whether it should exist | |
-| Implementation task | Usually the pull request. See `boundary.md` for when a GitHub issue earns its place | |
+| Implementation task | Usually the pull request. See `boundary.md` for when a repository issue earns its place | |
 
 ## Splitting and merging
 

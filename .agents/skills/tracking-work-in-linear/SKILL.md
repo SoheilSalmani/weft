@@ -1,6 +1,6 @@
 ---
 name: tracking-work-in-linear
-description: Creates or restructures work in Linear, the issue tracker. Covers issues, projects, milestones, initiatives, sub-issues, comments, and documents, and decides whether something belongs in Linear at all, or in a GitHub issue, a pull request, or an ADR. Use when asked to file, plan, split, rewrite, or move a specific piece of work. For a bulk audit of existing Linear content, use reviewing-linear instead.
+description: Creates or restructures work in Linear, the issue tracker. Covers issues, projects, milestones, initiatives, sub-issues, comments, documents, and the words that link a Linear issue from a pull request or merge request so merging completes it, and decides whether something belongs in Linear at all, or in a repository issue, a pull request, or an ADR. Use when asked to file, plan, split, rewrite, or move a specific piece of work. For a bulk audit of existing Linear content, use reviewing-linear instead. Not for GitHub or GitLab issues, which writing-repository-issues owns.
 ---
 
 # Tracking work in Linear
@@ -44,7 +44,7 @@ The Linear MCP server is configured as `linear-server`, and its tools appear as 
 - A recurring question with a computable answer is a **view**, not an object.
 - Something with no end state is not a project, whatever it is called.
 
-If the work turns out to be technical execution detail rather than an outcome, route it. `.agents/skills/linear-conventions/references/boundary.md` decides between a GitHub issue, the pull request, and an ADR. Say where you routed it and why, rather than filing it in Linear anyway.
+If the work turns out to be technical execution detail rather than an outcome, route it. `.agents/skills/linear-conventions/references/boundary.md` decides between a repository issue, the pull request, and an ADR. Say where you routed it and why, rather than filing it in Linear anyway.
 
 If the work is too large for one issue, propose a parent and a small set of children. The same holds for any structure you would create in one go, such as a project with milestones or an initiative with projects: show the whole shape first, and create none of it until it is approved.
 
@@ -67,7 +67,7 @@ Set only the properties you were given or can read from the system. Leave the re
 1. **Read the current state**, including comments and linked objects, before proposing a single change.
 2. **Understand why it says what it says.** A sentence that reads oddly is often the one fact someone needed.
 3. **Preserve every useful fact.** Anything you cannot show to be obsolete stays.
-4. **Relocate rather than delete.** Implementation detail moves to the pull request or a GitHub issue, evidence moves to a comment, decisions move to an ADR. Say in your response what moved where.
+4. **Relocate rather than delete.** Implementation detail moves to the pull request or a repository issue, evidence moves to a comment, decisions move to an ADR. Say in your response what moved where.
 5. **Do not rewrite for style alone.** Rewriting is justified by information that is wrong, missing, stale, or in the wrong place. "I would have phrased it differently" is not a justification.
 
 **Leaving it alone is a result.** When an object is accurate, current, and readable, say so and change nothing. A rewriting skill that always rewrites is worse than no skill: it burns attention, churns history, and teaches people to stop reading the diffs.
@@ -80,7 +80,7 @@ When an assumption has been invalidated, remove it from the description and leav
 
 ## Linking a Linear issue to a pull request
 
-Linear links through the branch name, the pull request title or body, or a commit message. **The verb decides what happens on merge**, because Linear's pull request automations are configured per team and the documented defaults move the issue to In Progress when a pull request opens and to Done when it merges.
+On GitHub, Linear links through the branch name, the pull request title or body, or a commit message; on GitLab, through the branch name, the merge request title or its description, never a comment or commit message. **The verb decides what happens on merge**, because Linear's pull request automations are configured per team and the documented defaults move the issue to In Progress when a pull request opens and to Done when it merges.
 
 | Intent | Words |
 | --- | --- |
@@ -88,6 +88,8 @@ Linear links through the branch name, the pull request title or body, or a commi
 | Merging contributes to it | `ref`, `refs`, `references`, `part of`, `contributes to`, `toward`, `towards` |
 | Merely related | `relates to`, `related to` |
 | Do not link at all | `skip` or `ignore` before the identifier |
+
+GitHub: the words above, from Linear's GitHub documentation; GitLab: Linear documents the same closing words, adds `updates` to the contributing ones, counts `related to` as contributing, and does not document `refs`, `toward`, `relates to`, `skip` or `ignore`.
 
 Use a closing word only when merging genuinely finishes the work. **Check the team's configured automations and its workflow states before assuming**: a team whose states stop at Done has nowhere to move afterwards, so a closing word there makes merge equal completion. A team with a Released or Deployed state can afford one earlier.
 

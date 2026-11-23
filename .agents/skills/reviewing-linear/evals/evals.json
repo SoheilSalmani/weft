@@ -4,10 +4,11 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "/reviewing-linear the labels on the Engineering team",
+      "rationale": "Without the skill, agents answer a messy label set by designing a new taxonomy instead of subtracting. This case fails if the synonyms are not merged, unused labels are not proposed for archiving or deletion, or a replacement scheme is proposed.",
+      "prompt": "/reviewing-linear the labels on the Engineering team [Fixture: the team's labels with issue counts: Bug 64, defect 9, Feature 31, Frontend 22, Backend 27, Customer 12, needs-repro 0, cleanup-2025 0. Saved views: 'Open bugs' filters on Bug, 'Customer-reported' on Customer, and the triage rules route on Frontend and Backend. Nothing consumes defect, Feature, needs-repro or cleanup-2025.]",
       "expected_output": "A ranked findings list identifying duplicate and unused labels, proposing merges, deletions, and archives, without proposing a replacement taxonomy.",
       "assertions": [
-        "Duplicate pairs such as Bug and type:bug are identified as duplicates and a merge is proposed",
+        "Duplicate pairs such as Bug and defect are identified as duplicates and a merge is proposed",
         "Labels applied to no issues are identified, with a proposal to delete or archive",
         "The response distinguishes archiving from deleting and says when each applies",
         "It does not propose a new label scheme to replace the existing one",
@@ -17,12 +18,13 @@
     },
     {
       "id": 2,
-      "prompt": "/reviewing-linear the Billing platform foundations project. The plan changed a few weeks ago and I don't think the issues reflect it.",
+      "rationale": "Agents tend to list every finding flat and to fill thin descriptions with content of their own. This case fails if findings are unranked, removed detail has no destination, a thin description is filled in, or a clean pass goes unreported.",
+      "prompt": "/reviewing-linear the Billing platform foundations project. The plan changed a few weeks ago and I don't think the issues reflect it. [Fixture: six issues. BIL-12 and BIL-15 still describe one shared invoice service, though a project comment dated 2026-10-28 records the switch to one service per region. BIL-17's description holds a SQL migration and a test plan. BIL-19's description is the single line 'Handle refunds'. BIL-20, 'Monitor invoice volumes', is ongoing work with no end state. BIL-21 opens with an empty Context heading, and BIL-12 and BIL-15 have Title Case titles. The project's two milestones and its latest update, dated 2026-11-17, are in order.]",
       "expected_output": "Findings covering stale descriptions, misplaced implementation detail, and structural noise, ranked by consequence, each with a concrete fix and a destination for anything removed.",
       "assertions": [
         "Findings are ranked, with wrong-object and stale findings above cosmetic ones",
         "Each finding names the object by identifier and states a concrete fix",
-        "Implementation detail identified for removal is given a destination such as a pull request, GitHub issue, ADR, or comment",
+        "Implementation detail identified for removal is given a destination such as a pull request, repository issue, ADR, or comment",
         "Where a description is thin, the finding says what is missing rather than supplying invented content",
         "Trivial findings of the same kind are grouped rather than listed one by one",
         "Passes that found nothing are reported as clean",
@@ -31,7 +33,8 @@
     },
     {
       "id": 3,
-      "prompt": "/reviewing-linear check whether our milestones are any good",
+      "rationale": "Without the skill, agents rename every milestone, good ones included, or invent outcomes for names that carry none. This case fails if a milestone that already names a state is rewritten, or a name that encodes no outcome is given one.",
+      "prompt": "/reviewing-linear check whether our milestones are any good [Fixture: milestones on the Seller payouts project: 'API layer', 'Sprint 3', 'Payouts reach every connected bank', 'Hardening', 'Sellers can download monthly statements']",
       "expected_output": "A verdict per milestone using the can-this-be-true test, with renames proposed for those that name teams, layers, or phases, and confirmation of the ones that already name states.",
       "assertions": [
         "Each milestone is judged by whether its name can become true",

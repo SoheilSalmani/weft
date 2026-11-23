@@ -1,22 +1,25 @@
-# Operating system
-.DS_Store
-Thumbs.db
-
-# Editors
-.idea/
-*.swp
-.tmp/
-
-# Environment files
+# Environment variables
 .env
 .env.*
 !.env.example
 
-# Personal toolchain overrides (mise)
+# Project local settings (Claude Code)
+.claude/settings.local.json
+
+# Thumbnail cache (File Explorer)
+Thumbs.db
+
+# Project settings (IntelliJ IDEA)
+.idea/
+
+# Folder metadata (macOS)
+.DS_Store
+
+# Personal overrides (mise)
 mise.local.toml
 
-# Personal settings (Claude Code)
-.claude/settings.local.json
+# Swap files (Vim)
+*.swp
 
 # Rust build output
 /target

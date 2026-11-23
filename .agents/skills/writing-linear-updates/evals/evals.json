@@ -4,7 +4,8 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "Write this week's update for the registry project. Since last Wednesday we finished the API work so that milestone is done, but browse is blocked because the search index needs a schema change nobody has scoped. Target is 12 September.",
+      "rationale": "Without the skill, agents describe the project and report percentages instead of what changed and what it means for the date. This case fails if health is onTrack despite the unscoped blocker, the target date goes unaddressed, a percentage or count appears, or a date stays relative.",
+      "prompt": "Write this week's update for the offline mode project. Since last Wednesday we finished local caching so that milestone is done, but sync is blocked because conflict resolution needs a server API change nobody has scoped. Target is 4 December.",
       "expected_output": "A five to eight line update opening with a health value, stating what changed with dates, saying what it means for the target date, naming the blocker, and giving the next checkpoint.",
       "assertions": [
         "Health is atRisk or offTrack, not onTrack, because an unscoped blocker exists",
@@ -18,7 +19,8 @@
     },
     {
       "id": 2,
-      "prompt": "Can you post the weekly update for Billing platform foundations? I don't think much happened this week.",
+      "rationale": "Agents asked for a quiet week's update tend to manufacture progress or repeat old completions. This case fails if the update claims progress, lists earlier work, reports onTrack beside a blocker, or rests on the user's impression without reading the workspace.",
+      "prompt": "Can you post the weekly update for Billing platform foundations? I don't think much happened this week. [Fixture: the last update, on 2026-11-12, was atRisk and named the unsigned contract with the tax provider as the blocker. The contract is still unsigned, no issue has changed status since, and three issues were completed before 2026-11-12.]",
       "expected_output": "Either a recommendation to post nothing, or a two-line update naming the blocker and its age, with a health value that does not claim health.",
       "assertions": [
         "The response does not manufacture progress",
@@ -30,7 +32,8 @@
     },
     {
       "id": 3,
-      "prompt": "Give me an initiative update for the enterprise sign-in initiative. The two projects under it both posted updates this week.",
+      "rationale": "Without the skill, agents write an initiative update by stitching the project updates together. This case fails if the response concatenates or summarises them instead of giving a cross-project judgement or declining to post.",
+      "prompt": "Give me an initiative update for the self-serve checkout initiative. The two projects under it both posted updates this week. [Card payments: onTrack, 3-D Secure challenge flow shipped on 2026-11-19. Invoicing: atRisk, waiting since 2026-11-10 on a legal review of invoice wording, which also gates the card payments launch.]",
       "expected_output": "Either a cross-project judgement, or a statement that no initiative update is warranted because it would concatenate the project updates.",
       "assertions": [
         "The response either supplies a cross-project judgement such as sequencing or reallocation, or explains that an initiative update is not warranted",

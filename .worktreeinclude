@@ -1,0 +1,9 @@
+# Environment variables
+.env
+.env.*
+
+# Project local settings (Claude Code)
+.claude/settings.local.json
+
+# Personal overrides (mise)
+mise.local.toml

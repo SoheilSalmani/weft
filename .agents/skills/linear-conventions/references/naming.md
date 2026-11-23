@@ -39,7 +39,7 @@ That gives two requirements that pull against each other. A title must stand alo
 | View | The question, stated as a condition | `Blocked, no owner` | `View 1` |
 | Label group | Singular noun naming the dimension | `Source` | `Types` |
 | Label | Singular noun naming one value | `Source/Customer` | `type:customer-reported-bug` |
-| Status | Two words at most, naming a present state | `In review` | `Waiting on Soheil` |
+| Status | Two words at most, naming a present state | `In review` | `Waiting on Marta` |
 | Template | The situation it serves | `Bug report` | `Standard issue template v2` |
 
 A bug title is declarative rather than imperative because the fix is not known when the title is written. `Fix the token refresh race` presumes a cause. If the cause turns out to be something else, the title is now a lie that survives in search forever.
@@ -82,7 +82,7 @@ The rule is that the title names the outcome at the object's altitude. When the 
 - `Add schema validation to skill generation`
 - `Split the run orchestrator into planning and execution`
 - `Move the schema source of truth to Drizzle`
-- `Publish the dbt template`
+- `Publish the Python client library`
 
 Each names one reviewable result, and no product-level rewrite would be more honest. Do not translate technical investment into invented user benefit. `Improve reliability for users` is worse than `Split the run orchestrator into planning and execution`, because it claims an effect that has not been measured.
 
